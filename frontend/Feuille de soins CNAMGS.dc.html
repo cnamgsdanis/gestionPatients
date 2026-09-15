@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  body { margin:0; background:#eef3ee; font-family: Arial, Helvetica, sans-serif; }
+  input, textarea, select { font-family: Arial, Helvetica, sans-serif; }
+  input:focus, textarea:focus, select:focus { outline:2px solid #2f7d45; outline-offset:0; }
+  a { color:#14479c; } a:hover { color:#cc0000; }
+  @media print { body { background:#fff; } }
+</style>
+<script src="./image-slot.js"></script>
+</helmet>
+
+<div style="width:100%;max-width:1660px;margin:0 auto;background:#ffffff;color:#1a1a1a;font-size:11px">
+
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding:10px 14px 14px 14px;background:#ffffff">
+    <div style="width:230px;flex:none">
+      <image-slot id="cnamgs-logo" style="width:210px;height:62px" shape="rect" radius="0" fit="contain" placeholder="Logo CNAMGS"></image-slot>
+    </div>
+    <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px;align-items:center;min-width:420px">
+      <div style="color:#14479c;font-weight:bold;font-size:12px">Feuille de soins N° :</div>
+      <input type="text" placeholder="0000000" style="width:170px;padding:2px 5px;border:1px solid #9fc9a8;background:#fff;color:#cc0000;font-weight:bold;font-size:12px" />
+      <div style="color:#14479c;font-weight:bold;font-size:12px">Date de réception :</div>
+      <input type="text" placeholder="JJ/MM/AAAA" style="width:170px;padding:2px 5px;border:1px solid #9fc9a8;background:#fff;color:#cc0000;font-weight:bold;font-size:12px" />
+      <div style="color:#14479c;font-weight:bold;font-size:12px">Fonds :</div>
+      <select style="width:230px;padding:2px 4px;border:1px solid #9fc9a8;background:#fff;color:#cc0000;font-weight:bold;font-size:12px">
+        <option value=""></option>
+        <option>Fonds Secteur Privé</option>
+        <option>Fonds Secteur Public</option>
+        <option>Fonds Garantie Sociale</option>
+      </select>
+    </div>
+    <div style="width:110px;flex:none;display:flex;flex-direction:column;align-items:center;gap:3px">
+      <div id="qr-zone" style="width:84px;height:84px;border:1px dashed #6aa877;background:#f7fbf7;display:flex;align-items:center;justify-content:center;text-align:center;color:#4d9e63;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:8px;line-height:1.3">CODE QR<br />(généré)</div>
+      <div style="color:#6b7a6e;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:7.5px">zone QR 84×84</div>
+    </div>
+  </div>
+
+  <div style="background:#4d9e63;color:#fff;font-weight:bold;font-size:11.5px;padding:3px 8px">Patient <span style="font-weight:bold">(Le dossier du patient est valide)</span></div>
+  <div style="background:#abdfb7;padding:8px 8px 14px 8px;display:flex;gap:16px">
+    <div style="flex:1;min-width:0">
+      <div style="font-weight:bold;margin-bottom:2px">Nom et prénom du patient</div>
+      <input type="text" style="width:100%;box-sizing:border-box;padding:3px 6px;border:1px solid #7fbf8c;background:#fff;font-size:11px" />
+
+      <div style="display:flex;gap:26px;margin-top:8px">
+        <div style="flex:none;width:560px;max-width:50%">
+          <div style="font-weight:bold;margin-bottom:2px">Date de naissance (JJ/MM/AAAA)</div>
+          <div style="display:flex;align-items:center;gap:3px">
+            <input maxlength="1" inputmode="numeric" style="width:16px;height:16px;text-align:center;padding:1px;border:1px solid #7fbf8c;background:#fff;font-size:11px" />
+            <input maxlength="1" inputmode="numeric" style="width:16px;height:16px;text-align:center;padding:1px;border:1px solid #7fbf8c;background:#fff;font-size:11px" />
+            <span style="font-weight:bold">/</span>
+            <input maxlength="1" inputmode="numeric" style="width:16px;height:16px;text-align:center;padding:1px;border:1px solid #7fbf8c;background:#fff;font-size:11px" />
+            <input maxlength="1" inputmode="numeric" style="width:16px;height:16px;text-align:center;padding:1px;border:1px solid #7fbf8c;background:#fff;font-size:11px" />
+            <span style="font-weight:bold">/</span>
+            <input maxlength="1" inputmode="numeric" style="width:16px;height:16px;text-align:center;padding:1px;border:1px solid #7fbf8c;background:#fff;font-size:11px" />
+            <input maxlength="1" inputmode="numeric" style="width:16px;height:16px;text-align:center;padding:1px;border:1px solid #7fbf8c;background:#fff;font-size:11px" />
+            <input maxlength="1" inputmode="numeric" style="width:16px;height:16px;text-align:center;padding:1px;border:1px solid #7fbf8c;background:#fff;font-size:11px" />
+            <input maxlength="1" inputmode="numeric" style="width:16px;height:16px;text-align:center;padding:1px;border:1px solid #7fbf8c;background:#fff;font-size:11px" />
+          </div>
+          <div style="font-weight:bold;margin-top:9px">Nom et prénom de l'assuré</div>
+          <div style="color:#2c4a33;font-size:8px;margin-bottom:2px">(Si le patient n'est pas l'assuré)</div>
+          <input type="text" style="width:100%;box-sizing:border-box;padding:3px 6px;border:1px solid #7fbf8c;background:#fff;font-size:11px" />
+        </div>
+
+        <div style="flex:none;padding-top:24px">
+          <div style="font-weight:bold;margin-bottom:3px">Numéro d'immatriculation du patient</div>
+          <div style="display:flex;gap:3px">
+            <sc-for list="{{ cells10 }}" as="c" hint-placeholder-count="10">
+              <input maxlength="1" inputmode="numeric" style="width:16px;height:16px;text-align:center;padding:1px;border:1px solid #7fbf8c;background:#fff;font-size:11px" />
+            </sc-for>
+          </div>
+          <div style="margin-top:10px"><span style="font-weight:bold">Numéro d'immatriculation de l'assuré</span> <span style="font-size:8px;color:#2c4a33">(Si le patient n'est pas l'assuré)</span></div>
+          <div style="display:flex;gap:3px;margin-top:3px">
+            <sc-for list="{{ cells10b }}" as="c" hint-placeholder-count="10">
+              <input maxlength="1" inputmode="numeric" style="width:16px;height:16px;text-align:center;padding:1px;border:1px solid #7fbf8c;background:#fff;font-size:11px" />
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="flex:none;width:280px">
+      <div style="font-weight:bold;margin-bottom:4px">Situation du patient</div>
+      <div style="display:flex;gap:26px;align-items:center">
+        <label style="display:flex;gap:5px;align-items:center"><input type="checkbox" style="margin:0" /> Assuré</label>
+        <label style="display:flex;gap:5px;align-items:center"><input type="checkbox" style="margin:0" /> Ayant Droit</label>
+      </div>
+      <div style="font-weight:bold;margin:10px 0 3px 0">Signature Praticien (obligatoire)</div>
+      <textarea style="width:100%;box-sizing:border-box;height:62px;border:1px solid #7fbf8c;background:#fff;resize:vertical;font-size:11px"></textarea>
+    </div>
+  </div>
+
+  <div style="background:#4d9e63;color:#fff;font-weight:bold;font-size:11.5px;padding:3px 8px">Praticien</div>
+  <div style="background:#abdfb7;padding:8px;display:flex;gap:16px;align-items:flex-start">
+    <div style="flex:1.1;min-width:0">
+      <div style="font-weight:bold;margin-bottom:2px">Nom et prénom du praticien</div>
+      <input type="text" style="width:100%;max-width:560px;box-sizing:border-box;padding:3px 6px;border:1px solid #7fbf8c;background:#fff;font-size:11px" />
+      <div style="font-weight:bold;margin:9px 0 2px 0">Nom de l'établissement</div>
+      <input type="text" style="width:100%;max-width:560px;box-sizing:border-box;padding:3px 6px;border:1px solid #7fbf8c;background:#fff;font-size:11px" />
+    </div>
+    <div style="flex:1.1;min-width:0">
+      <div style="font-weight:bold;margin-bottom:2px">Code du praticien</div>
+      <input type="text" style="width:100%;max-width:520px;box-sizing:border-box;padding:3px 6px;border:1px solid #7fbf8c;background:#fff;font-size:11px" />
+      <div style="font-weight:bold;margin:9px 0 2px 0">Code de l'établissement</div>
+      <input type="text" style="width:100%;box-sizing:border-box;padding:3px 6px;border:1px solid #7fbf8c;background:#fff;font-size:11px" />
+    </div>
+    <div style="flex:none;width:90px;display:flex;flex-direction:column;gap:5px;align-items:flex-end">
+      <label style="display:flex;gap:5px;align-items:center;font-weight:normal">Généraliste <input type="checkbox" style="margin:0" /></label>
+      <label style="display:flex;gap:5px;align-items:center">Spécialiste <input type="checkbox" style="margin:0" /></label>
+      <label style="display:flex;gap:5px;align-items:center">Autre <input type="checkbox" style="margin:0" /></label>
+    </div>
+    <div style="flex:none;width:300px">
+      <div style="font-weight:bold;margin-bottom:3px">Signature Praticien (obligatoire)</div>
+      <textarea style="width:100%;box-sizing:border-box;height:62px;border:1px solid #7fbf8c;background:#fff;resize:vertical;font-size:11px"></textarea>
+    </div>
+  </div>
+
+  <div style="background:#4d9e63;color:#fff;font-weight:bold;font-size:11.5px;padding:3px 8px">Condition de prise en charge</div>
+  <div style="background:#abdfb7;padding:12px 8px;display:flex;align-items:center;gap:40px">
+    <div style="display:flex;align-items:center;gap:10px;flex:none;width:190px">
+      <div style="font-weight:bold;line-height:1.1">Ticket<br />modérateur</div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <label style="display:flex;gap:5px;align-items:center"><input type="checkbox" style="margin:0" /> Plein</label>
+        <label style="display:flex;gap:5px;align-items:center"><input type="checkbox" style="margin:0" /> Plein (ALD)</label>
+        <label style="display:flex;gap:5px;align-items:center"><input type="checkbox" style="margin:0" /> Exonéré</label>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;flex:1;justify-content:center">
+      <div style="font-weight:bold">Accident causé par un tiers</div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <label style="display:flex;gap:5px;align-items:center"><input type="radio" name="tiers" style="margin:0" /> Oui</label>
+        <label style="display:flex;gap:5px;align-items:center"><input type="radio" name="tiers" style="margin:0" /> Non</label>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:4px;flex:none;width:300px">
+      <div style="font-weight:bold">Soins liés à la grossesse</div>
+      <label style="display:flex;gap:5px;align-items:center"><input type="radio" name="grossesse" style="margin:0" /> Oui</label>
+      <label style="display:flex;gap:5px;align-items:center"><input type="radio" name="grossesse" style="margin:0" /> Non</label>
+    </div>
+  </div>
+
+  <div style="background:#4d9e63;color:#fff;font-weight:bold;font-size:11.5px;padding:3px 8px">Prestations</div>
+  <div style="background:#abdfb7;padding:8px 8px 16px 8px">
+
+    <div style="display:flex;align-items:center;gap:30px;margin-bottom:10px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-weight:bold">Date et heure de la prestation</span>
+        <input type="text" placeholder="JJ/MM/AAAA" style="width:100px;padding:3px 6px;border:1px solid #7fbf8c;background:#fff;font-size:11px" />
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;flex:1;justify-content:center">
+        <span style="font-weight:bold">Visite à domicile</span>
+        <label style="display:flex;gap:5px;align-items:center"><input type="radio" name="domicile" style="margin:0" /> Oui</label>
+        <label style="display:flex;gap:5px;align-items:center"><input type="radio" name="domicile" style="margin:0" /> Non</label>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-weight:bold">Code affection</span>
+        <input type="text" style="width:80px;padding:3px 6px;border:1px solid #7fbf8c;background:#fff;font-size:11px" />
+      </div>
+    </div>
+
+    <div style="border:1px solid #4d9e63;background:#fff">
+      <div style="display:flex;background:#4d9e63;color:#fff;font-weight:bold;text-align:center">
+        <div style="flex:0 0 22%;padding:4px;border-right:1px solid #fff">Désignation</div>
+        <div style="flex:0 0 8.5%;padding:4px;border-right:1px solid #fff">Quantité</div>
+        <div style="flex:0 0 8.5%;padding:4px;border-right:1px solid #fff">Montant</div>
+        <div style="flex:0 0 16.5%;padding:4px;border-right:1px solid #fff">Ticket modérateur</div>
+        <div style="flex:0 0 21.5%;padding:4px;border-right:1px solid #fff">Part CNAMGS (Réclamé)</div>
+        <div style="flex:1;padding:4px">Montant validé (Docteur)</div>
+      </div>
+      <sc-for list="{{ rows }}" as="row" hint-placeholder-count="1">
+        <div style="display:flex;border-top:1px solid #7fbf8c">
+          <input type="text" value="{{ row.designation }}" onInput="{{ row.onDesignation }}" style="flex:0 0 22%;min-width:0;padding:3px 6px;border:none;border-right:1px solid #7fbf8c;background:#fff;color:#2f7d45;font-size:11px" />
+          <input type="text" inputmode="numeric" value="{{ row.qte }}" onInput="{{ row.onQte }}" style="flex:0 0 8.5%;min-width:0;padding:3px 6px;border:none;border-right:1px solid #7fbf8c;background:#fff;text-align:right;font-size:11px" />
+          <input type="text" inputmode="numeric" value="{{ row.montant }}" onInput="{{ row.onMontant }}" style="flex:0 0 8.5%;min-width:0;padding:3px 6px;border:none;border-right:1px solid #7fbf8c;background:#fff;text-align:right;font-size:11px" />
+          <input type="text" inputmode="numeric" value="{{ row.tm }}" onInput="{{ row.onTm }}" style="flex:0 0 16.5%;min-width:0;padding:3px 6px;border:none;border-right:1px solid #7fbf8c;background:#fff;text-align:right;font-size:11px" />
+          <input type="text" inputmode="numeric" value="{{ row.part }}" onInput="{{ row.onPart }}" style="flex:0 0 21.5%;min-width:0;padding:3px 6px;border:none;border-right:1px solid #7fbf8c;background:#fff;text-align:right;font-size:11px" />
+          <input type="text" inputmode="numeric" value="{{ row.valide }}" onInput="{{ row.onValide }}" style="flex:1;min-width:0;padding:3px 6px;border:none;background:#fff;text-align:right;font-size:11px" />
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:6px">
+      <button type="button" onClick="{{ addRow }}" style="padding:3px 10px;border:1px solid #4d9e63;background:#fff;color:#2f7d45;font-size:10.5px;cursor:pointer" style-hover="background:#e8f6eb">+ Ajouter une ligne</button>
+      <button type="button" onClick="{{ removeRow }}" style="padding:3px 10px;border:1px solid #4d9e63;background:#fff;color:#2f7d45;font-size:10.5px;cursor:pointer" style-hover="background:#e8f6eb">− Supprimer la dernière</button>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;margin-top:14px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-weight:bold">Total montant</span>
+        <input type="text" readonly="readonly" value="{{ totalMontant }}" style="width:132px;padding:3px 6px;border:1px solid #7fbf8c;background:#fff;text-align:right;font-size:11px" />
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-weight:bold">Total ticket modérateur</span>
+        <input type="text" readonly="readonly" value="{{ totalTm }}" style="width:132px;padding:3px 6px;border:1px solid #7fbf8c;background:#fff;text-align:right;font-size:11px" />
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-weight:bold">Total à payer par la CNAMGS</span>
+        <input type="text" readonly="readonly" value="{{ totalPart }}" style="width:132px;padding:3px 6px;border:1px solid #7fbf8c;background:#fff;text-align:right;font-size:11px" />
+      </div>
+    </div>
+
+    <div style="display:flex;gap:16px;margin-top:16px">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:bold;margin-bottom:3px">Total Général</div>
+        <input type="text" readonly="readonly" value="{{ totalMontant }}" style="width:100%;box-sizing:border-box;padding:3px 6px;border:1px solid #7fbf8c;background:#fff;text-align:right;font-size:11px" />
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:bold;margin-bottom:3px">Total Ticket Modérateur</div>
+        <input type="text" readonly="readonly" value="{{ totalTm }}" style="width:100%;box-sizing:border-box;padding:3px 6px;border:1px solid #7fbf8c;background:#fff;text-align:right;font-size:11px" />
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:bold;margin-bottom:3px">Total Montant CNAMGS</div>
+        <input type="text" readonly="readonly" value="{{ totalPart }}" style="width:100%;box-sizing:border-box;padding:3px 6px;border:1px solid #7fbf8c;background:#fff;text-align:right;font-size:11px" />
+      </div>
+    </div>
+
+    <div style="display:flex;gap:14px;justify-content:center;margin-top:18px">
+      <div style="background:#fff;border:1px solid #cfd8d0;border-radius:2px;padding:5px 14px;font-weight:bold">Coût réclamé : <span style="color:#4d9e63">{{ totalPart }}</span></div>
+      <div style="background:#fff;border:1px solid #cfd8d0;border-radius:2px;padding:5px 14px;font-weight:bold">Après contrôle : <span style="color:#4d9e63">{{ totalValide }}</span></div>
+    </div>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1660,&quot;height&quot;:960}}">
+const EMPTY = () => ({ designation:'', qte:'', montant:'', tm:'', part:'', valide:'' });
+
+class Component extends DCLogic {
+  state = { rows: [EMPTY()] };
+
+  num(v) {
+    const n = parseFloat(String(v || '').replace(/[^0-9.,-]/g, '').replace(/\s/g, '').replace(',', '.'));
+    return isNaN(n) ? 0 : n;
+  }
+  fmt(n) {
+    if (!n) return '0';
+    return Math.round(n).toLocaleString('fr-FR').replace(/\u202f|\u00a0/g, ' ');
+  }
+  set(i, key, v) {
+    this.setState(s => {
+      const rows = s.rows.map((r, j) => j === i ? Object.assign({}, r, { [key]: v }) : r);
+      return { rows };
+    });
+  }
+
+  renderVals() {
+    const rows = this.state.rows;
+    const sum = k => rows.reduce((a, r) => a + this.num(r[k]), 0);
+    return {
+      cells10: [0,1,2,3,4,5,6,7,8,9],
+      cells10b: [0,1,2,3,4,5,6,7,8,9],
+      rows: rows.map((r, i) => Object.assign({}, r, {
+        onDesignation: e => this.set(i, 'designation', e.target.value),
+        onQte: e => this.set(i, 'qte', e.target.value),
+        onMontant: e => this.set(i, 'montant', e.target.value),
+        onTm: e => this.set(i, 'tm', e.target.value),
+        onPart: e => this.set(i, 'part', e.target.value),
+        onValide: e => this.set(i, 'valide', e.target.value)
+      })),
+      addRow: () => this.setState(s => ({ rows: s.rows.concat([EMPTY()]) })),
+      removeRow: () => this.setState(s => ({ rows: s.rows.length > 1 ? s.rows.slice(0, -1) : s.rows })),
+      totalMontant: this.fmt(sum('montant')),
+      totalTm: this.fmt(sum('tm')),
+      totalPart: this.fmt(sum('part')),
+      totalValide: this.fmt(sum('valide'))
+    };
+  }
+}
+
+</script>
+</body>
+</html>

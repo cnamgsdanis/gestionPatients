@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PEC — Gestion du circuit de l'assuré</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ======================= ÉCRAN DE CONNEXION ======================= -->
+<div id="view-login" class="login-screen">
+  <div class="login-overlay"></div>
+  <div class="login-aurora"></div>
+  <div class="particles-layer" id="loginParticles"></div>
+  <div class="login-dna-scene"><div class="login-dna-helix" id="loginDnaHelix"></div></div>
+
+  <svg class="login-ekg-line" viewBox="0 0 800 80" preserveAspectRatio="none">
+    <path class="ekg-base" d="M0,40 L40,40 L55,15 L70,65 L85,10 L100,40 L230,40 L245,15 L260,65 L275,10 L290,40 L420,40 L435,15 L450,65 L465,10 L480,40 L610,40 L625,15 L640,65 L655,10 L670,40 L800,40" />
+    <path class="ekg-pulse" pathLength="100" d="M0,40 L40,40 L55,15 L70,65 L85,10 L100,40 L230,40 L245,15 L260,65 L275,10 L290,40 L420,40 L435,15 L450,65 L465,10 L480,40 L610,40 L625,15 L640,65 L655,10 L670,40 L800,40" />
+  </svg>
+
+  <div class="login-center">
+    <div class="welcome-inner centered">
+      <h1>Bienvenue</h1>
+      <p class="welcome-sub">Heureux de vous revoir</p>
+      <p class="welcome-text">Accédez à votre espace personnel et retrouvez tous vos services au même endroit.</p>
+    </div>
+
+    <div class="login-panel-zone">
+      <div class="login-card-glow"></div>
+      <form class="login-card" id="loginForm" novalidate autocomplete="off">
+      <div class="login-card-head">
+        <h2><span class="pulse-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M3 12h4l2-7 4 14 2-7h6"/></svg></span>Se connecter</h2>
+        <p class="subtitle">Connectez-vous à votre compte pour continuer.</p>
+      </div>
+
+      <div class="field">
+        <label for="loginEmail">Adresse e-mail</label>
+        <input type="email" id="loginEmail" name="email" placeholder="Entrez votre adresse e-mail" required autocomplete="username" aria-describedby="loginEmailError" />
+        <p class="field-error" id="loginEmailError" role="alert" hidden></p>
+      </div>
+
+      <div class="field">
+        <label for="loginPass">Mot de passe</label>
+        <div class="password-wrap">
+          <input type="password" id="loginPass" name="password" placeholder="Entrez votre mot de passe" required autocomplete="current-password" aria-describedby="loginPassError" />
+          <button type="button" class="toggle-pass" id="togglePass" aria-label="Afficher le mot de passe" aria-pressed="false">
+            <svg class="eye-on" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+            <svg class="eye-off" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" hidden><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-7-11-7a21.6 21.6 0 0 1 5.06-6.06M9.9 4.24A10.4 10.4 0 0 1 12 4c7 0 11 7 11 7a21.6 21.6 0 0 1-3.22 4.44"/><path d="M9.5 9.5a3 3 0 0 0 4.24 4.24"/><path d="M1 1l22 22"/></svg>
+          </button>
+        </div>
+        <p class="field-error" id="loginPassError" role="alert" hidden></p>
+      </div>
+
+      <div class="login-row">
+        <label><input type="checkbox" id="rememberMe" /> Se souvenir de moi</label>
+        <button type="button" class="link-btn" id="forgotPassBtn">Mot de passe oublié ?</button>
+      </div>
+
+      <button type="submit" class="btn-login" id="loginSubmitBtn"><span class="btn-label">Se connecter</span></button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= MODAL D'INFORMATION (liens de connexion) ======================= -->
+<div class="modal-overlay" id="infoModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="infoModalTitle">Titre</h3>
+      <button class="close-x" id="closeInfoModal">&times;</button>
+    </div>
+    <div class="modal-body" id="infoModalBody"></div>
+    <div class="modal-foot">
+      <button type="button" class="btn-secondary" id="closeInfoModalBtn">Fermer</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= APPLICATION ======================= -->
+<div class="app-shell" id="appShell" hidden>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-top">
+      <div class="sidebar-brand">
+        <div class="mark logo-mark"><img src="CNAMGS.png" alt="CNAMGS" /></div>
+        <div class="txt">
+          <strong>CNAMGS</strong>
+          <span>Circuit de l'assuré</span>
+        </div>
+      </div>
+      <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" title="Réduire le menu" data-tip="Étendre le menu">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-label">Navigation</div>
+      <button class="nav-item active" data-view="dashboard" data-tip="Tableau de bord">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>
+        <span class="nav-txt">Tableau de bord</span>
+      </button>
+      <button class="nav-item" data-view="nouvelle-pec" data-tip="Nouvelle prise en charge">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h6"/><path d="M7 13h8"/><path d="M7 17h5"/></svg>
+        <span class="nav-txt">Nouvelle prise en charge</span>
+      </button>
+      <button class="nav-item" data-view="medecin" data-tip="Espace Médecin">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v6a4 4 0 0 0 8 0V3"/><path d="M10 15v2a4 4 0 0 0 8 0v-2"/><circle cx="19" cy="8" r="1.6"/></svg>
+        <span class="nav-txt">Espace Médecin</span>
+        <span class="nav-badge" id="medecinNavBadge" hidden>0</span>
+      </button>
+      <button class="nav-item" data-view="historique" data-tip="Historique PEC">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+        <span class="nav-txt">Historique PEC</span>
+      </button>
+      <button class="nav-item" data-view="users" data-tip="Gestion des utilisateurs">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><circle cx="18" cy="8.5" r="2.4"/><path d="M16 14.3c2.8.4 4.7 2.4 4.7 5.7"/></svg>
+        <span class="nav-txt">Gestion des utilisateurs</span>
+      </button>
+    </div>
+
+    <div class="sidebar-spacer"></div>
+
+    <button class="btn-logout" id="logoutBtn" data-tip="Déconnexion">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+      <span class="nav-txt">Déconnexion</span>
+    </button>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div>
+        <h2 id="topbarTitle">Tableau de bord</h2>
+        <div class="crumb" id="topbarCrumb">Accueil</div>
+      </div>
+      <div class="topbar-clock" id="topbarClock"></div>
+      <div class="user-pill">
+        <div class="avatar">AN</div>
+        <div>
+          <div class="name">Alice NDONG</div>
+          <div class="role">Agent de guichet</div>
+        </div>
+      </div>
+    </header>
+
+    <div class="content">
+
+      <!-- ---------------- DASHBOARD ---------------- -->
+      <section class="view" id="view-dashboard">
+        <div class="hero-banner">
+          <img src="CNAMGS.png" alt="Logo CNAMGS" class="hero-logo" />
+          <div>
+            <h1>Bienvenue sur l'espace CNAMGS</h1>
+            <p>Gestion du circuit de l'assuré — pilotez vos prises en charge en temps réel.</p>
+          </div>
+          <button type="button" class="btn-primary hero-cta" id="heroCtaBtn">+ Nouvelle prise en charge</button>
+        </div>
+
+        <div class="stat-row">
+          <div class="stat-card"><div class="num" id="statToday">0</div><div class="lbl">Prises en charge aujourd'hui</div></div>
+          <button type="button" class="stat-card clickable" id="statPendingCard"><div class="num pending" id="statPending">0</div><div class="lbl">En attente de validation médecin</div></button>
+          <div class="stat-card"><div class="num" id="statConsult">0</div><div class="lbl">Consultations enregistrées</div></div>
+          <div class="stat-card"><div class="num" id="statExam">0</div><div class="lbl">Examens enregistrés</div></div>
+        </div>
+
+        <div class="dash-grid">
+          <div class="card dash-chart-card">
+            <div class="card-head"><h3>Répartition des prises en charge</h3></div>
+            <div class="card-body">
+              <div class="donut-wrap">
+                <div class="donut empty" id="donutChart" style="--p:0">
+                  <div class="donut-hole"><span id="donutTotal">0</span><small>Total</small></div>
+                </div>
+                <div class="donut-legend">
+                  <div><span class="dot consultation"></span>Consultations <b id="legendConsult">0</b></div>
+                  <div><span class="dot examen"></span>Examens <b id="legendExam">0</b></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card dash-activity-card">
+            <div class="card-head">
+              <h3>Activité récente</h3>
+              <button type="button" class="btn-secondary btn-sm" id="recentViewAllBtn">Voir tout</button>
+            </div>
+            <div class="card-body" style="padding:0">
+              <table class="data-table">
+                <thead><tr><th>N° feuille</th><th>Date</th><th>Patient</th><th>Type</th></tr></thead>
+                <tbody id="recentBody"></tbody>
+              </table>
+              <div class="empty-state" id="recentEmpty">Aucune activité pour le moment.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------------- NOUVELLE PRISE EN CHARGE ---------------- -->
+      <section class="view" id="view-nouvelle-pec" hidden>
+        <div class="card">
+          <div class="card-head">
+            <h3>Nouvelle prise en charge</h3>
+          </div>
+          <div class="card-body">
+            <div class="search-row">
+              <div class="field">
+                <label for="matriculeInput">Matricule de l'assuré</label>
+                <input type="text" id="matriculeInput" placeholder="Saisir les 10 chiffres du matricule" maxlength="10" inputmode="numeric" />
+              </div>
+              <button type="button" class="btn-primary" id="searchBtn">Rechercher</button>
+            </div>
+            <div class="hint">
+              Matricules de test : <code>1234567890</code>, <code>2345678901</code>, <code>3456789012</code>, <code>4567890123</code>, <code>5678901234</code>
+            </div>
+
+            <div id="notFoundMsg" class="hint" style="color:var(--red)" hidden>Aucun assuré trouvé pour ce matricule.</div>
+
+            <div class="assure-found" id="assureFound" hidden>
+              <div class="row1">
+                <div class="idname" id="af-nom">—</div>
+                <div style="display:flex;align-items:center;gap:10px">
+                  <span class="badge" id="af-situation">Assuré</span>
+                  <button type="button" class="link-btn" id="changeAssureBtn">Changer d'assuré</button>
+                </div>
+              </div>
+              <div class="assure-meta">
+                <div><b id="af-matricule">—</b>Matricule</div>
+                <div><b id="af-naissance">—</b>Date de naissance</div>
+                <div><b id="af-fonds">—</b>Fonds</div>
+                <div><b id="af-employeur">—</b>Employeur</div>
+              </div>
+
+              <div class="patient-picker">
+                <label for="patientSelect">Qui est le patient ?</label>
+                <select id="patientSelect"></select>
+              </div>
+
+              <div class="choice-group">
+                <label>Ticket modérateur</label>
+                <div class="chip-row" id="tmChoices">
+                  <button type="button" class="chip" data-tm="Plein">Plein</button>
+                  <button type="button" class="chip" data-tm="Plein (ALD)">Plein (ALD)</button>
+                  <button type="button" class="chip" data-tm="Exonéré">Exonéré</button>
+                </div>
+              </div>
+
+              <div class="choice-group">
+                <label for="medecinSelect">Médecin</label>
+                <select id="medecinSelect"></select>
+              </div>
+
+              <div class="hint" id="readyHint">Sélectionnez un patient, un ticket modérateur et un médecin pour continuer.</div>
+
+              <div class="type-buttons">
+                <button type="button" class="type-btn" id="btnConsultation" disabled>
+                  <span class="ic">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v6a4 4 0 0 0 8 0V3"/><path d="M10 15v2a4 4 0 0 0 8 0v-2"/><circle cx="19" cy="8" r="1.6"/></svg>
+                  </span>
+                  <span>
+                    <span class="tt">Consultation</span>
+                    <span class="ds">Ouvrir la feuille de soins</span>
+                  </span>
+                </button>
+                <button type="button" class="type-btn" id="btnExamen" disabled>
+                  <span class="ic">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 2h6"/><path d="M10 2v6.5L4.5 18a2 2 0 0 0 1.8 3h11.4a2 2 0 0 0 1.8-3L14 8.5V2"/><path d="M7.5 14h9"/></svg>
+                  </span>
+                  <span>
+                    <span class="tt">Examen</span>
+                    <span class="ds">Ouvrir le bon d'examen</span>
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------------- ESPACE MÉDECIN (file d'attente de validation) ---------------- -->
+      <section class="view" id="view-medecin" hidden>
+        <div class="card">
+          <div class="card-head">
+            <h3>Feuilles de soins à valider</h3>
+          </div>
+          <div class="card-body" style="padding:0">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>N° feuille</th>
+                  <th>Date</th>
+                  <th>Patient</th>
+                  <th>Matricule</th>
+                  <th>Type</th>
+                  <th>Médecin</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="medecinQueueBody"></tbody>
+            </table>
+            <div class="empty-state" id="medecinQueueEmpty">Aucune feuille de soins en attente de validation.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------------- FEUILLE DE SOINS (consultation / examen) ---------------- -->
+      <section class="view" id="view-soins" hidden>
+        <div class="soins-wrap">
+          <div class="soins-top">
+            <div class="soins-logo"><img src="CNAMGS.png" alt="Logo CNAMGS" /></div>
+
+            <div class="soins-admin-col">
+              <div class="soins-type-badge" id="soinsBadge">Consultation</div>
+              <div class="soins-admin">
+                <div class="lbl">Feuille de soins N° :</div>
+                <input type="text" id="soinsNum" readonly />
+                <div class="lbl">Date de réception :</div>
+                <input type="text" id="soinsDate" readonly />
+                <div class="lbl">Fonds :</div>
+                <select id="soinsFonds">
+                  <option>Fonds Secteur Privé</option>
+                  <option>Fonds Secteur Public</option>
+                  <option>Fonds Garantie Sociale</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="soins-qr-col">
+              <canvas id="qrCanvas" width="96" height="96"></canvas>
+              <div class="qr-caption">Code QR généré</div>
+            </div>
+          </div>
+
+          <div class="section-head">Patient <span style="font-weight:400">(données de l'assuré — non modifiables)</span></div>
+          <div class="section-body locked">
+            <div class="grid2">
+              <div>
+                <div class="f-field">
+                  <div class="f-label">Nom et prénom du patient</div>
+                  <input type="text" id="p-patientNom" disabled />
+                </div>
+                <div class="f-field">
+                  <div class="f-label">Date de naissance</div>
+                  <input type="text" id="p-dateNaissance" disabled />
+                </div>
+                <div class="f-field">
+                  <div class="f-label">Nom et prénom de l'assuré <span style="font-weight:400;font-size:10.5px">(si le patient n'est pas l'assuré)</span></div>
+                  <input type="text" id="p-assureNom" disabled />
+                </div>
+              </div>
+              <div>
+                <div class="f-field">
+                  <div class="f-label">Matricule du patient</div>
+                  <input type="text" id="p-matriculePatient" disabled />
+                </div>
+                <div class="f-field">
+                  <div class="f-label">Matricule de l'assuré <span style="font-weight:400;font-size:10.5px">(si le patient n'est pas l'assuré)</span></div>
+                  <input type="text" id="p-matriculeAssure" disabled />
+                </div>
+                <div class="f-field">
+                  <div class="f-label">Situation du patient</div>
+                  <div class="checks">
+                    <label id="chk-assure-wrap"><input type="checkbox" id="chk-assure" disabled /> Assuré</label>
+                    <label id="chk-ayant-wrap"><input type="checkbox" id="chk-ayant" disabled /> Ayant droit</label>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="section-head">Praticien <span class="lock-note">Pré-rempli via le médecin sélectionné — non modifiable</span></div>
+          <div class="section-body locked">
+            <div class="grid2">
+              <div>
+                <div class="f-field">
+                  <div class="f-label">Nom et prénom du praticien</div>
+                  <input type="text" id="pr-nom" disabled />
+                </div>
+                <div class="f-field">
+                  <div class="f-label">Nom de l'établissement</div>
+                  <input type="text" id="pr-etab" disabled />
+                </div>
+                <div class="f-field">
+                  <div class="f-label">Type de praticien</div>
+                  <div class="checks">
+                    <label id="pr-type-generaliste-wrap"><input type="checkbox" id="pr-type-generaliste" disabled /> Généraliste</label>
+                    <label id="pr-type-specialiste-wrap"><input type="checkbox" id="pr-type-specialiste" disabled /> Spécialiste</label>
+                    <label id="pr-type-autre-wrap"><input type="checkbox" id="pr-type-autre" disabled /> Autre</label>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div class="f-field">
+                  <div class="f-label">Code du praticien</div>
+                  <input type="text" id="pr-code" disabled />
+                </div>
+                <div class="f-field">
+                  <div class="f-label">Signature (obligatoire)</div>
+                  <textarea id="pr-signature" rows="2" placeholder="Signature du praticien"></textarea>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="section-head">Condition de prise en charge</div>
+          <div class="section-body">
+            <div class="cond-row">
+              <div class="cond-group">
+                <div class="t">Ticket modérateur <span class="lock-note-inline">verrouillé</span></div>
+                <label id="tm-plein-wrap"><input type="checkbox" id="tm-plein" disabled /> Plein</label>
+                <label id="tm-ald-wrap"><input type="checkbox" id="tm-ald" disabled /> Plein (ALD)</label>
+                <label id="tm-exonere-wrap"><input type="checkbox" id="tm-exonere" disabled /> Exonéré</label>
+              </div>
+              <div class="cond-group">
+                <div class="t">Accident causé par un tiers</div>
+                <label><input type="radio" name="tiers" id="tiers-oui" value="Oui" /> Oui</label>
+                <label><input type="radio" name="tiers" id="tiers-non" value="Non" /> Non</label>
+              </div>
+              <div class="cond-group">
+                <div class="t">Soins liés à la grossesse</div>
+                <label><input type="radio" name="grossesse" id="grossesse-oui" value="Oui" /> Oui</label>
+                <label><input type="radio" name="grossesse" id="grossesse-non" value="Non" /> Non</label>
+              </div>
+            </div>
+          </div>
+
+          <div id="prestationsSection">
+            <div class="section-head">Prestations <span class="lock-note" id="prestationsHint">À compléter par le médecin</span></div>
+            <div class="section-body">
+              <div class="presta-top">
+                <div class="grp">Date et heure <input type="text" id="presta-date" placeholder="JJ/MM/AAAA" /></div>
+                <div class="grp">Visite à domicile
+                  <label style="font-weight:400"><input type="radio" name="domicile" id="presta-domicile-oui" value="Oui" /> Oui</label>
+                  <label style="font-weight:400"><input type="radio" name="domicile" id="presta-domicile-non" value="Non" /> Non</label>
+                </div>
+                <div class="grp">Code affection <input type="text" id="presta-code" /></div>
+              </div>
+
+              <table class="presta">
+                <thead>
+                  <tr>
+                    <th style="width:24%">Désignation</th>
+                    <th style="width:10%">Quantité</th>
+                    <th style="width:12%">Montant</th>
+                    <th style="width:18%">Ticket modérateur</th>
+                    <th style="width:18%">Part CNAMGS (réclamé)</th>
+                    <th>Montant validé</th>
+                  </tr>
+                </thead>
+                <tbody id="prestaBody"></tbody>
+              </table>
+
+              <div class="row-btns">
+                <button type="button" id="addRowBtn">+ Ajouter une ligne</button>
+                <button type="button" id="removeRowBtn">− Supprimer la dernière</button>
+              </div>
+
+              <div class="totals">
+                <div class="t-row"><span>Total montant</span><input type="text" id="totalMontant" readonly value="0" /></div>
+                <div class="t-row"><span>Total ticket modérateur</span><input type="text" id="totalTm" readonly value="0" /></div>
+                <div class="t-row"><span>Total à payer par la CNAMGS</span><input type="text" id="totalPart" readonly value="0" /></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="soins-actions">
+            <button type="button" class="btn-secondary" id="cancelSoinsBtn">Annuler</button>
+            <button type="button" class="btn-primary" id="saveSoinsBtn">Envoyer au médecin</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------------- HISTORIQUE ---------------- -->
+      <section class="view" id="view-historique" hidden>
+        <div class="card">
+          <div class="card-head"><h3>Historique des prises en charge</h3></div>
+          <div class="card-body" style="padding-bottom:4px">
+            <div class="filters-row">
+              <div class="field">
+                <label for="filterSearch">Recherche</label>
+                <input type="text" id="filterSearch" placeholder="Nom du patient ou matricule" />
+              </div>
+              <div class="field">
+                <label for="filterType">Type</label>
+                <select id="filterType">
+                  <option value="">Tous les types</option>
+                  <option value="Consultation">Consultation</option>
+                  <option value="Examen">Examen</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="filterStatut">Statut</label>
+                <select id="filterStatut">
+                  <option value="">Tous les statuts</option>
+                  <option value="En attente">En attente</option>
+                  <option value="Validée">Validée</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="filterFrom">Du</label>
+                <input type="date" id="filterFrom" />
+              </div>
+              <div class="field">
+                <label for="filterTo">Au</label>
+                <input type="date" id="filterTo" />
+              </div>
+              <button type="button" class="btn-secondary" id="filterResetBtn">Réinitialiser</button>
+            </div>
+          </div>
+          <div class="card-body" style="padding:0">
+            <table class="data-table" id="historiqueTable">
+              <thead>
+                <tr>
+                  <th>N° feuille</th>
+                  <th>Date</th>
+                  <th>Patient</th>
+                  <th>Matricule</th>
+                  <th>Type</th>
+                  <th>Statut</th>
+                  <th>Montant total</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="historiqueBody"></tbody>
+            </table>
+            <div class="empty-state" id="historiqueEmpty">Aucune prise en charge ne correspond à ces critères.</div>
+          </div>
+          <div class="pagination-row" id="historiquePagination"></div>
+        </div>
+      </section>
+
+      <!-- ---------------- GESTION DES UTILISATEURS ---------------- -->
+      <section class="view" id="view-users" hidden>
+        <div class="card">
+          <div class="card-head">
+            <h3>Gestion des utilisateurs</h3>
+            <button type="button" class="btn-primary" id="addUserBtn">+ Ajouter un utilisateur</button>
+          </div>
+          <div class="card-body" style="padding:0">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Nom</th>
+                  <th>Email</th>
+                  <th>Rôle</th>
+                  <th>Statut</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="usersBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <footer class="app-footer">
+      <div>© 2026 CNAMGS — Plateforme de gestion du circuit de l'assuré</div>
+      <div>Prototype front-end · v1.0</div>
+    </footer>
+  </div>
+</div>
+
+<!-- ======================= MODAL APERÇU FEUILLE DE SOINS ======================= -->
+<div class="modal-overlay" id="previewModal" hidden>
+  <div class="modal modal-lg">
+    <div class="modal-head">
+      <h3>Aperçu de la feuille de soins</h3>
+      <button class="close-x" id="closePreviewModal">&times;</button>
+    </div>
+    <div class="modal-body" id="previewBody"></div>
+    <div class="modal-foot">
+      <button type="button" class="btn-secondary" id="closePreviewBtn">Fermer</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= MODAL AJOUT UTILISATEUR ======================= -->
+<div class="modal-overlay" id="userModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Ajouter un utilisateur</h3>
+      <button class="close-x" id="closeUserModal">&times;</button>
+    </div>
+    <form class="modal-body" id="userForm">
+      <div class="field">
+        <label>Nom et prénom</label>
+        <input type="text" id="u-nom" required />
+      </div>
+      <div class="field">
+        <label>Email</label>
+        <input type="email" id="u-email" required />
+      </div>
+      <div class="field">
+        <label>Rôle</label>
+        <select id="u-role">
+          <option>Administrateur</option>
+          <option>Agent de guichet</option>
+          <option>Médecin-conseil</option>
+          <option>Contrôleur</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Mot de passe temporaire</label>
+        <input type="password" id="u-pass" placeholder="••••••••" />
+      </div>
+    </form>
+    <div class="modal-foot">
+      <button type="button" class="btn-secondary" id="cancelUserModal">Annuler</button>
+      <button type="submit" form="userForm" class="btn-primary">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
