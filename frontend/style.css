@@ -630,38 +630,157 @@ a { color: var(--blue); }
 }
 .hero-cta { flex: none; margin-left: auto; white-space: nowrap; }
 
-/* Tableau de bord : graphique + activité récente */
-.dash-grid {
-  display: grid;
-  grid-template-columns: 320px 1fr;
-  gap: 18px;
-  align-items: start;
+/* Tableau de bord : sélecteur de période */
+.period-card { margin-bottom: 18px; }
+.period-card .card-head { border-bottom: none; }
+.period-card .chip-row { margin: 0; }
+
+/* Tableau de bord : évolution + camembert + carnet de rendez-vous, côte à côte */
+.evolution-row { display: flex; gap: 18px; flex-wrap: wrap; }
+.evolution-row .evolution-card { flex: 1 1 400px; }
+.evolution-row .dash-chart-card { flex: 0 0 280px; }
+.evolution-row .rdv-card { flex: 1 1 260px; }
+
+/* Tableau de bord : courbes d'évolution */
+.evolution-card { margin-bottom: 18px; max-width: 560px; }
+.evolution-card .card-body { padding: 12px 18px; }
+.evolution-legend { display: flex; gap: 20px; font-size: 12.5px; color: var(--ink); }
+.ev-legend-item { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.ev-legend-line-consultation { stroke: var(--green); stroke-width: 2.5; }
+.ev-legend-line-examen { stroke: var(--blue); stroke-width: 2.5; stroke-dasharray: 4 3; }
+.ev-legend-marker { stroke-width: 2; fill: var(--white); }
+.ev-legend-marker-consultation { stroke: var(--green); }
+.ev-legend-marker-examen { stroke: var(--blue); }
+
+.evolution-chart-outer { position: relative; }
+.evolution-chart-wrap { width: 100%; position: relative; }
+.evolution-svg { width: 100%; height: 130px; display: block; }
+
+@media (max-width: 640px) {
+  .evolution-card { max-width: none; }
 }
+
+.ev-grid { stroke: var(--border); stroke-width: 1; }
+.ev-axis-label { font-size: 10px; fill: var(--muted); font-family: inherit; }
+.ev-line { fill: none; stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.ev-line-consultation { stroke: var(--green); }
+.ev-line-examen { stroke: var(--blue); stroke-dasharray: 6 4; }
+.ev-area { stroke: none; opacity: .12; }
+.ev-area-consultation { fill: var(--green); }
+.ev-area-examen { fill: var(--blue); }
+
+/* Marqueurs de points : éléments HTML superposés (positionnés en %) pour
+   rester des cercles/losanges parfaits malgré le preserveAspectRatio="none"
+   du SVG, qui étire les axes x/y de façon indépendante. */
+.ev-markers { position: absolute; inset: 0; pointer-events: none; }
+.ev-marker {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  background: var(--white);
+  border: 2px solid;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.ev-marker-consultation {
+  border-radius: 50%;
+  border-color: var(--green);
+  transform: translate(-50%, -50%);
+}
+.ev-marker-examen {
+  border-radius: 2px;
+  border-color: var(--blue);
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+.ev-marker-consultation:hover { transform: translate(-50%, -50%) scale(1.35); box-shadow: 0 2px 6px rgba(20, 40, 25, .3); }
+.ev-marker-examen:hover { transform: translate(-50%, -50%) rotate(45deg) scale(1.35); box-shadow: 0 2px 6px rgba(20, 40, 25, .3); }
+
+.ev-tooltip {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  margin-top: -10px;
+  background: var(--ink);
+  color: var(--white);
+  font-size: 11.5px;
+  line-height: 1.5;
+  padding: 7px 10px;
+  border-radius: 7px;
+  box-shadow: var(--shadow);
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 5;
+}
+.ev-tooltip b { font-weight: 700; }
+.ev-tooltip-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  margin-right: 5px;
+}
+
+/* Tableau de bord : camembert */
 .btn-sm { padding: 6px 12px; font-size: 11.5px; }
 
 .donut-wrap { display: flex; flex-direction: column; align-items: center; gap: 18px; }
-.donut {
-  width: 150px; height: 150px; border-radius: 50%;
-  background: conic-gradient(var(--green) calc(var(--p) * 1%), var(--blue) 0);
-  display: flex; align-items: center; justify-content: center;
-  transition: background .4s ease;
+.donut-outer { position: relative; width: 152px; height: 152px; }
+.donut-svg-wrap { width: 100%; height: 100%; }
+.donut-svg { width: 100%; height: 100%; display: block; }
+.donut-seg {
+  fill: none;
+  transition: stroke-width .15s ease, filter .15s ease;
+  cursor: pointer;
 }
-.donut.empty { background: #e7ede8; }
-.donut-hole {
-  width: 104px; height: 104px; border-radius: 50%; background: #fff;
+.donut-seg-consultation { stroke: var(--green); }
+.donut-seg-examen { stroke: var(--blue); }
+.donut-seg-empty { stroke: #e7ede8; }
+.donut-seg:hover { filter: drop-shadow(0 3px 6px rgba(20, 40, 25, .3)); }
+
+.donut-center {
+  position: absolute; inset: 0;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
+  pointer-events: none;
 }
-.donut-hole span { font-size: 22px; font-weight: 800; color: var(--ink); }
-.donut-hole small { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
-.donut-legend { display: flex; gap: 22px; font-size: 12px; color: var(--muted); }
-.donut-legend div { display: flex; align-items: center; gap: 7px; }
+.donut-center span { font-size: 22px; font-weight: 800; color: var(--ink); }
+.donut-center small { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+
+.donut-legend { display: flex; flex-direction: column; gap: 10px; font-size: 12.5px; color: var(--ink); width: 100%; }
+.donut-legend div { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 600; }
 .donut-legend b { color: var(--ink); }
-.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.legend-pct { color: var(--green-dark); font-weight: 700; margin-left: auto; }
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
 .dot.consultation { background: var(--green); }
 .dot.examen { background: var(--blue); }
 
-@media (max-width: 900px) {
-  .dash-grid { grid-template-columns: 1fr; }
+/* Tableau de bord : carnet de rendez-vous */
+.rdv-list { list-style: none; margin: 0; padding: 0; }
+.rdv-item {
+  display: flex;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  transition: background .12s ease;
+}
+.rdv-item:last-child { border-bottom: none; }
+.rdv-item:hover { background: var(--green-bg); }
+.rdv-time {
+  flex: none;
+  width: 52px;
+  text-align: center;
+  line-height: 1.35;
+}
+.rdv-time .rdv-day { display: block; font-size: 10px; color: var(--muted); font-weight: 600; }
+.rdv-time .rdv-hour { display: block; font-size: 12.5px; color: var(--green-dark); font-weight: 800; }
+.rdv-info { flex: 1; min-width: 0; }
+.rdv-patient { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.rdv-meta {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Choix Ticket modérateur / Médecin (Nouvelle prise en charge) */
@@ -780,6 +899,8 @@ a { color: var(--blue); }
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 .card-head h3 { margin: 0; font-size: 14.5px; }
 .card-body { padding: 18px; }
@@ -1126,11 +1247,17 @@ table.presta td {
   border-top: 1px solid #7fbf8c; border-right: 1px solid #7fbf8c; padding: 0;
 }
 table.presta td:last-child { border-right: none; }
-table.presta input {
+table.presta input, table.presta select {
   width: 100%; box-sizing: border-box; border: none; padding: 6px 8px; font-size: 12px; background: transparent;
 }
 table.presta input.num { text-align: right; }
-table.presta input:focus { outline: 2px solid var(--green); outline-offset: -2px; }
+table.presta input:focus, table.presta select:focus { outline: 2px solid var(--green); outline-offset: -2px; }
+table.presta select:disabled { color: var(--muted); }
+
+/* Espace Pharmacien : ligne d'un médicament déjà servi ailleurs — visible,
+   non modifiable (motif du champ verrouillé), jamais masquée. */
+.rx-row-done { opacity: .6; }
+.rx-served-note { font-size: 11px; color: var(--muted); }
 
 .row-btns { display: flex; gap: 8px; margin-top: 8px; }
 .row-btns button {

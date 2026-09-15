@@ -7,26 +7,26 @@
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-
+ 
 <!-- ======================= ÉCRAN DE CONNEXION ======================= -->
 <div id="view-login" class="login-screen">
   <div class="login-overlay"></div>
   <div class="login-aurora"></div>
   <div class="particles-layer" id="loginParticles"></div>
   <div class="login-dna-scene"><div class="login-dna-helix" id="loginDnaHelix"></div></div>
-
+ 
   <svg class="login-ekg-line" viewBox="0 0 800 80" preserveAspectRatio="none">
     <path class="ekg-base" d="M0,40 L40,40 L55,15 L70,65 L85,10 L100,40 L230,40 L245,15 L260,65 L275,10 L290,40 L420,40 L435,15 L450,65 L465,10 L480,40 L610,40 L625,15 L640,65 L655,10 L670,40 L800,40" />
     <path class="ekg-pulse" pathLength="100" d="M0,40 L40,40 L55,15 L70,65 L85,10 L100,40 L230,40 L245,15 L260,65 L275,10 L290,40 L420,40 L435,15 L450,65 L465,10 L480,40 L610,40 L625,15 L640,65 L655,10 L670,40 L800,40" />
   </svg>
-
+ 
   <div class="login-center">
     <div class="welcome-inner centered">
       <h1>Bienvenue</h1>
       <p class="welcome-sub">Heureux de vous revoir</p>
       <p class="welcome-text">Accédez à votre espace personnel et retrouvez tous vos services au même endroit.</p>
     </div>
-
+ 
     <div class="login-panel-zone">
       <div class="login-card-glow"></div>
       <form class="login-card" id="loginForm" novalidate autocomplete="off">
@@ -34,13 +34,13 @@
         <h2><span class="pulse-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M3 12h4l2-7 4 14 2-7h6"/></svg></span>Se connecter</h2>
         <p class="subtitle">Connectez-vous à votre compte pour continuer.</p>
       </div>
-
+ 
       <div class="field">
         <label for="loginEmail">Adresse e-mail</label>
         <input type="email" id="loginEmail" name="email" placeholder="Entrez votre adresse e-mail" required autocomplete="username" aria-describedby="loginEmailError" />
         <p class="field-error" id="loginEmailError" role="alert" hidden></p>
       </div>
-
+ 
       <div class="field">
         <label for="loginPass">Mot de passe</label>
         <div class="password-wrap">
@@ -52,18 +52,18 @@
         </div>
         <p class="field-error" id="loginPassError" role="alert" hidden></p>
       </div>
-
+ 
       <div class="login-row">
         <label><input type="checkbox" id="rememberMe" /> Se souvenir de moi</label>
         <button type="button" class="link-btn" id="forgotPassBtn">Mot de passe oublié ?</button>
       </div>
-
+ 
       <button type="submit" class="btn-login" id="loginSubmitBtn"><span class="btn-label">Se connecter</span></button>
       </form>
     </div>
   </div>
 </div>
-
+ 
 <!-- ======================= MODAL D'INFORMATION (liens de connexion) ======================= -->
 <div class="modal-overlay" id="infoModal" hidden>
   <div class="modal">
@@ -77,10 +77,10 @@
     </div>
   </div>
 </div>
-
+ 
 <!-- ======================= APPLICATION ======================= -->
 <div class="app-shell" id="appShell" hidden>
-
+ 
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-top">
       <div class="sidebar-brand">
@@ -94,7 +94,7 @@
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 5l-7 7 7 7"/></svg>
       </button>
     </div>
-
+ 
     <div class="nav-group">
       <div class="nav-label">Navigation</div>
       <button class="nav-item active" data-view="dashboard" data-tip="Tableau de bord">
@@ -110,6 +110,10 @@
         <span class="nav-txt">Espace Médecin</span>
         <span class="nav-badge" id="medecinNavBadge" hidden>0</span>
       </button>
+      <button class="nav-item" data-view="pharmacie" data-tip="Espace Pharmacien">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8v8"/><path d="M8 12h8"/></svg>
+        <span class="nav-txt">Espace Pharmacien</span>
+      </button>
       <button class="nav-item" data-view="historique" data-tip="Historique PEC">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
         <span class="nav-txt">Historique PEC</span>
@@ -119,15 +123,15 @@
         <span class="nav-txt">Gestion des utilisateurs</span>
       </button>
     </div>
-
+ 
     <div class="sidebar-spacer"></div>
-
+ 
     <button class="btn-logout" id="logoutBtn" data-tip="Déconnexion">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
       <span class="nav-txt">Déconnexion</span>
     </button>
   </aside>
-
+ 
   <div class="main">
     <header class="topbar">
       <div>
@@ -143,9 +147,9 @@
         </div>
       </div>
     </header>
-
+ 
     <div class="content">
-
+ 
       <!-- ---------------- DASHBOARD ---------------- -->
       <section class="view" id="view-dashboard">
         <div class="hero-banner">
@@ -156,46 +160,95 @@
           </div>
           <button type="button" class="btn-primary hero-cta" id="heroCtaBtn">+ Nouvelle prise en charge</button>
         </div>
-
+ 
         <div class="stat-row">
           <div class="stat-card"><div class="num" id="statToday">0</div><div class="lbl">Prises en charge aujourd'hui</div></div>
           <button type="button" class="stat-card clickable" id="statPendingCard"><div class="num pending" id="statPending">0</div><div class="lbl">En attente de validation médecin</div></button>
           <div class="stat-card"><div class="num" id="statConsult">0</div><div class="lbl">Consultations enregistrées</div></div>
           <div class="stat-card"><div class="num" id="statExam">0</div><div class="lbl">Examens enregistrés</div></div>
         </div>
+ 
+        <div class="card period-card">
+          <div class="card-head">
+            <h3>Période d'analyse</h3>
+            <div class="chip-row" id="periodToggle">
+              <button type="button" class="chip" data-days="7">7 jours</button>
+              <button type="button" class="chip active" data-days="30">30 jours</button>
+              <button type="button" class="chip" data-days="90">3 mois</button>
+            </div>
+          </div>
+        </div>
+ 
+        <div class="evolution-row">
+          <div class="card evolution-card">
+            <div class="card-head">
+              <h3>Évolution des prises en charge</h3>
+              <div class="evolution-legend">
+                <div class="ev-legend-item">
+                  <svg width="28" height="12" viewBox="0 0 28 12" aria-hidden="true">
+                    <line x1="1" y1="6" x2="27" y2="6" class="ev-legend-line ev-legend-line-consultation" />
+                    <circle cx="14" cy="6" r="3" class="ev-legend-marker ev-legend-marker-consultation" />
+                  </svg>
+                  Consultations
+                </div>
+                <div class="ev-legend-item">
+                  <svg width="28" height="12" viewBox="0 0 28 12" aria-hidden="true">
+                    <line x1="1" y1="6" x2="27" y2="6" class="ev-legend-line ev-legend-line-examen" />
+                    <path d="M14,2 L18,6 L14,10 L10,6 Z" class="ev-legend-marker ev-legend-marker-examen" />
+                  </svg>
+                  Examens
+                </div>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="evolution-chart-outer">
+                <div id="evolutionChart" class="evolution-chart-wrap"></div>
+                <div class="ev-tooltip" id="evTooltip" hidden></div>
+              </div>
+            </div>
+          </div>
 
-        <div class="dash-grid">
           <div class="card dash-chart-card">
-            <div class="card-head"><h3>Répartition des prises en charge</h3></div>
+            <div class="card-head"><h3>Répartition consultations / examens</h3></div>
             <div class="card-body">
               <div class="donut-wrap">
-                <div class="donut empty" id="donutChart" style="--p:0">
-                  <div class="donut-hole"><span id="donutTotal">0</span><small>Total</small></div>
+                <div class="donut-outer">
+                  <div id="donutChart" class="donut-svg-wrap"></div>
+                  <div class="donut-center"><span id="donutTotal">0</span><small>Total</small></div>
+                  <div class="ev-tooltip" id="donutTooltip" hidden></div>
                 </div>
                 <div class="donut-legend">
-                  <div><span class="dot consultation"></span>Consultations <b id="legendConsult">0</b></div>
-                  <div><span class="dot examen"></span>Examens <b id="legendExam">0</b></div>
+                  <div><span class="dot consultation"></span>Consultations <b id="legendConsult">0</b> <small id="legendConsultPct" class="legend-pct">0%</small></div>
+                  <div><span class="dot examen"></span>Examens <b id="legendExam">0</b> <small id="legendExamPct" class="legend-pct">0%</small></div>
                 </div>
               </div>
             </div>
           </div>
 
-          <div class="card dash-activity-card">
-            <div class="card-head">
-              <h3>Activité récente</h3>
-              <button type="button" class="btn-secondary btn-sm" id="recentViewAllBtn">Voir tout</button>
-            </div>
+          <div class="card rdv-card">
+            <div class="card-head"><h3>Carnet de rendez-vous</h3></div>
             <div class="card-body" style="padding:0">
-              <table class="data-table">
-                <thead><tr><th>N° feuille</th><th>Date</th><th>Patient</th><th>Type</th></tr></thead>
-                <tbody id="recentBody"></tbody>
-              </table>
-              <div class="empty-state" id="recentEmpty">Aucune activité pour le moment.</div>
+              <ul class="rdv-list" id="rdvList"></ul>
+              <div class="empty-state" id="rdvEmpty" hidden>Aucun rendez-vous à venir.</div>
             </div>
           </div>
         </div>
-      </section>
 
+        <div class="card dash-activity-card">
+          <div class="card-head">
+            <h3>Dernières opérations médicales</h3>
+            <button type="button" class="btn-secondary btn-sm" id="recentViewAllBtn">Voir tout</button>
+          </div>
+          <div class="card-body" style="padding:0">
+            <table class="data-table">
+              <thead><tr><th>Patient</th><th>Prestation</th><th>Montant</th><th>Part assurance</th><th>Part patient</th><th>Date</th><th>Statut</th></tr></thead>
+              <tbody id="recentBody"></tbody>
+            </table>
+            <div class="empty-state" id="recentEmpty">Aucune activité pour le moment.</div>
+          </div>
+        </div>
+      </section>
+ 
       <!-- ---------------- NOUVELLE PRISE EN CHARGE ---------------- -->
       <section class="view" id="view-nouvelle-pec" hidden>
         <div class="card">
@@ -213,9 +266,9 @@
             <div class="hint">
               Matricules de test : <code>1234567890</code>, <code>2345678901</code>, <code>3456789012</code>, <code>4567890123</code>, <code>5678901234</code>
             </div>
-
+ 
             <div id="notFoundMsg" class="hint" style="color:var(--red)" hidden>Aucun assuré trouvé pour ce matricule.</div>
-
+ 
             <div class="assure-found" id="assureFound" hidden>
               <div class="row1">
                 <div class="idname" id="af-nom">—</div>
@@ -230,12 +283,12 @@
                 <div><b id="af-fonds">—</b>Fonds</div>
                 <div><b id="af-employeur">—</b>Employeur</div>
               </div>
-
+ 
               <div class="patient-picker">
                 <label for="patientSelect">Qui est le patient ?</label>
                 <select id="patientSelect"></select>
               </div>
-
+ 
               <div class="choice-group">
                 <label>Ticket modérateur</label>
                 <div class="chip-row" id="tmChoices">
@@ -244,14 +297,14 @@
                   <button type="button" class="chip" data-tm="Exonéré">Exonéré</button>
                 </div>
               </div>
-
+ 
               <div class="choice-group">
                 <label for="medecinSelect">Médecin</label>
                 <select id="medecinSelect"></select>
               </div>
-
+ 
               <div class="hint" id="readyHint">Sélectionnez un patient, un ticket modérateur et un médecin pour continuer.</div>
-
+ 
               <div class="type-buttons">
                 <button type="button" class="type-btn" id="btnConsultation" disabled>
                   <span class="ic">
@@ -276,7 +329,7 @@
           </div>
         </div>
       </section>
-
+ 
       <!-- ---------------- ESPACE MÉDECIN (file d'attente de validation) ---------------- -->
       <section class="view" id="view-medecin" hidden>
         <div class="card">
@@ -303,12 +356,36 @@
         </div>
       </section>
 
+      <!-- ---------------- ESPACE PHARMACIEN ---------------- -->
+      <section class="view" id="view-pharmacie" hidden>
+        <div class="card">
+          <div class="card-head">
+            <h3>Rechercher une ordonnance</h3>
+          </div>
+          <div class="card-body">
+            <div class="search-row">
+              <div class="field">
+                <label for="pharmaNagInput">NAG (matricule du patient)</label>
+                <input type="text" id="pharmaNagInput" placeholder="Saisir les 10 chiffres du NAG" maxlength="10" inputmode="numeric" />
+              </div>
+              <button type="button" class="btn-primary" id="pharmaSearchBtn">Rechercher</button>
+            </div>
+            <div class="hint">
+              NAG de test avec ordonnance : <code>2345678901</code>, <code>4567890123</code>
+            </div>
+            <div id="pharmaNotFound" class="hint" style="color:var(--red)" hidden>Aucune ordonnance en attente trouvée pour ce NAG.</div>
+          </div>
+        </div>
+
+        <div id="pharmaResults"></div>
+      </section>
+
       <!-- ---------------- FEUILLE DE SOINS (consultation / examen) ---------------- -->
       <section class="view" id="view-soins" hidden>
         <div class="soins-wrap">
           <div class="soins-top">
             <div class="soins-logo"><img src="CNAMGS.png" alt="Logo CNAMGS" /></div>
-
+ 
             <div class="soins-admin-col">
               <div class="soins-type-badge" id="soinsBadge">Consultation</div>
               <div class="soins-admin">
@@ -324,13 +401,13 @@
                 </select>
               </div>
             </div>
-
+ 
             <div class="soins-qr-col">
               <canvas id="qrCanvas" width="96" height="96"></canvas>
               <div class="qr-caption">Code QR généré</div>
             </div>
           </div>
-
+ 
           <div class="section-head">Patient <span style="font-weight:400">(données de l'assuré — non modifiables)</span></div>
           <div class="section-body locked">
             <div class="grid2">
@@ -367,7 +444,7 @@
               </div>
             </div>
           </div>
-
+ 
           <div class="section-head">Praticien <span class="lock-note">Pré-rempli via le médecin sélectionné — non modifiable</span></div>
           <div class="section-body locked">
             <div class="grid2">
@@ -401,7 +478,7 @@
               </div>
             </div>
           </div>
-
+ 
           <div class="section-head">Condition de prise en charge</div>
           <div class="section-body">
             <div class="cond-row">
@@ -423,8 +500,8 @@
               </div>
             </div>
           </div>
-
-          <div id="prestationsSection">
+ 
+          <div id="prestationsSection" hidden>
             <div class="section-head">Prestations <span class="lock-note" id="prestationsHint">À compléter par le médecin</span></div>
             <div class="section-body">
               <div class="presta-top">
@@ -435,7 +512,7 @@
                 </div>
                 <div class="grp">Code affection <input type="text" id="presta-code" /></div>
               </div>
-
+ 
               <table class="presta">
                 <thead>
                   <tr>
@@ -449,16 +526,37 @@
                 </thead>
                 <tbody id="prestaBody"></tbody>
               </table>
-
+ 
               <div class="row-btns">
                 <button type="button" id="addRowBtn">+ Ajouter une ligne</button>
                 <button type="button" id="removeRowBtn">− Supprimer la dernière</button>
               </div>
-
+ 
               <div class="totals">
                 <div class="t-row"><span>Total montant</span><input type="text" id="totalMontant" readonly value="0" /></div>
                 <div class="t-row"><span>Total ticket modérateur</span><input type="text" id="totalTm" readonly value="0" /></div>
                 <div class="t-row"><span>Total à payer par la CNAMGS</span><input type="text" id="totalPart" readonly value="0" /></div>
+              </div>
+            </div>
+          </div>
+
+          <div id="ordonnanceSection">
+            <div class="section-head">Ordonnance <span class="lock-note" id="ordonnanceHint">À compléter par le médecin</span></div>
+            <div class="section-body">
+              <table class="presta">
+                <thead>
+                  <tr>
+                    <th style="width:45%">Désignation</th>
+                    <th style="width:15%">Quantité</th>
+                    <th>Posologie / Durée du traitement</th>
+                  </tr>
+                </thead>
+                <tbody id="ordoBody"></tbody>
+              </table>
+
+              <div class="row-btns">
+                <button type="button" id="addOrdoRowBtn">+ Ajouter un médicament</button>
+                <button type="button" id="removeOrdoRowBtn">− Supprimer le dernier</button>
               </div>
             </div>
           </div>
@@ -469,7 +567,7 @@
           </div>
         </div>
       </section>
-
+ 
       <!-- ---------------- HISTORIQUE ---------------- -->
       <section class="view" id="view-historique" hidden>
         <div class="card">
@@ -528,7 +626,7 @@
           <div class="pagination-row" id="historiquePagination"></div>
         </div>
       </section>
-
+ 
       <!-- ---------------- GESTION DES UTILISATEURS ---------------- -->
       <section class="view" id="view-users" hidden>
         <div class="card">
@@ -552,16 +650,16 @@
           </div>
         </div>
       </section>
-
+ 
     </div>
-
+ 
     <footer class="app-footer">
       <div>© 2026 CNAMGS — Plateforme de gestion du circuit de l'assuré</div>
       <div>Prototype front-end · v1.0</div>
     </footer>
   </div>
 </div>
-
+ 
 <!-- ======================= MODAL APERÇU FEUILLE DE SOINS ======================= -->
 <div class="modal-overlay" id="previewModal" hidden>
   <div class="modal modal-lg">
@@ -575,7 +673,7 @@
     </div>
   </div>
 </div>
-
+ 
 <!-- ======================= MODAL AJOUT UTILISATEUR ======================= -->
 <div class="modal-overlay" id="userModal" hidden>
   <div class="modal">
@@ -598,6 +696,7 @@
           <option>Administrateur</option>
           <option>Agent de guichet</option>
           <option>Médecin-conseil</option>
+          <option>Pharmacien</option>
           <option>Contrôleur</option>
         </select>
       </div>
@@ -612,7 +711,7 @@
     </div>
   </div>
 </div>
-
+ 
 <script src="data.js"></script>
 <script src="app.js"></script>
 </body>
