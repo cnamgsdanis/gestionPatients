@@ -1,78 +1,215 @@
-```markdown
-# 🔐 Module 01 — Authentification
 
-Documentation des endpoints d'authentification de l'API **GestionPatients**.
+
+## 📄 Fichier 3/5 — `docs/api/02-patient.md`
+
+# 🧑‍⚕️ Module 02 — Patient
+
+Documentation du module de gestion des patients.
 
 **Base URL** : `http://localhost:8080`
 
+**🔒 Toutes les routes nécessitent un token JWT.**
+
+---
 
 ## 📑 Sommaire
 
 - [Vue d'ensemble](#-vue-densemble)
-- [Modèle Utilisateur](#-modèle-utilisateur)
-- [`POST /api/auth/register`](#-post-apiauthregister)
-- [`POST /api/auth/login`](#-post-apiauthlogin)
+- [Modèle Patient](#-modèle-patient)
+- [Permissions requises](#-permissions-requises)
+- [`GET /api/patients`](#-get-apipatients)
+- [`GET /api/patients/{id}`](#-get-apipatientsid)
+- [`POST /api/patients`](#-post-apipatients)
+- [`PUT /api/patients/{id}`](#-put-apipatientsid)
+- [`DELETE /api/patients/{id}`](#-delete-apipatientsid)
 - [Codes HTTP](#-codes-http)
-- [Format des erreurs](#-format-des-erreurs)
+- [Exemples frontend (fetch)](#-exemples-frontend-fetch)
+- [Notes techniques](#-notes-techniques)
 
-
+---
 
 ## 🎯 Vue d'ensemble
 
-Le module d'authentification permet de :
+Le module **Patient** permet de gérer les dossiers patients :
 
-- **Créer un compte utilisateur** → `POST /api/auth/register`
-- **Se connecter** → `POST /api/auth/login`
-
-**Sécurité** : les mots de passe sont hashés avec **BCrypt** (coût 12) avant stockage. Le mot de passe en clair n'est jamais enregistré ni renvoyé par l'API.
-
----
-
-## 📋 Modèle Utilisateur
-
-| Champ | Type | Description | Renvoyé |
-|---|---|---|---|
-| `id_utilisateur` | int | Identifiant unique (généré) | ✅ |
-| `username` | string | Identifiant de connexion (unique) | ✅ |
-| `mot_de_passe` | string | Hash BCrypt | ❌ |
-| `nom` | string | Nom complet | ✅ |
-| `email` | string | Adresse e-mail | ✅ |
-| `telephone` | string | Numéro de téléphone | ✅ |
-| `role` | string | `administrateur` · `agent_accueil` · `pharmacien` · `medecin` | ✅ |
-| `id_structure` | int | FK vers la table Structure | ✅ |
-| `actif` | boolean | `true` = compte utilisable | ✅ |
-| `date_creation` | string | Date de création (ISO 8601) | ✅ |
-| `derniere_connexion` | string / null | Dernière connexion réussie | ✅ |
+- Consulter la liste des patients
+- Consulter le détail d'un patient
+- Créer un nouveau patient
+- Modifier un patient existant
+- Supprimer un patient
 
 ---
 
-## 🔹 `POST /api/auth/register`
+## 📋 Modèle Patient
 
-Crée un nouveau compte utilisateur.
+| Champ | Type | Description |
+|---|---|---|
+| `id_patient` | int | Identifiant unique (généré) |
+| `photo_url` | string / null | URL de la photo |
+| `prenom` | string | Prénom |
+| `nom` | string | Nom de famille |
+| `sex` | string | `"M"` ou `"F"` |
+| `contact` | string / null | Numéro de téléphone |
+| `statut_assure` | boolean | `true` = assuré, `false` = non assuré |
+| `fonds` | int / null | Niveau de fonds : **1, 2, 3 ou 4** |
+| `matricule_nag` | string / null | Numéro d'assuré (NAG) |
+| `id_assure_principal` | int / null | ID du patient parent (si ayant droit) |
+
+> 📌 `fonds` est un **niveau** (1 à 4), pas un montant.
+
+> 📌 `id_assure_principal` est `null` pour un patient principal.
+
+---
+
+## 🛡️ Permissions requises
+
+| Route | Permission |
+|---|---|
+| `GET /api/patients` | `patient.lire` |
+| `GET /api/patients/{id}` | `patient.lire` |
+| `POST /api/patients` | `patient.creer` |
+| `PUT /api/patients/{id}` | `patient.modifier` |
+| `DELETE /api/patients/{id}` | `patient.supprimer` |
+
+**L'admin peut modifier ces permissions en direct** via :
+
+`POST /api/permissions/role/{role}/{code}`
+
+---
+
+## 🔹 `GET /api/patients`
+
+Renvoie **tous les patients**.
 
 ### Requête
 
-| Champ | Type | Obligatoire | Contrainte |
-|---|---|---|---|
-| `username` | string | ✅ | Non vide, unique |
-| `mot_de_passe` | string | ✅ | Minimum 4 caractères |
-| `nom` | string | ✅ | — |
-| `email` | string | ❌ | — |
-| `telephone` | string | ❌ | — |
-| `role` | string | ✅ | Voir valeurs ci-dessus |
-| `id_structure` | int | ✅ | Doit exister en base |
+**Headers** :
 
-**Body (JSON)**
+```http
+Authorization: Bearer <token>
+```
+
+**Paramètres** : aucun
+
+### Réponse succès — `200 OK`
+
+```json
+[
+  {
+    "id_patient": 1,
+    "photo_url": null,
+    "prenom": "Danis",
+    "nom": "BOUSSENGUIT",
+    "sex": "M",
+    "contact": "770000000",
+    "statut_assure": true,
+    "fonds": 3,
+    "matricule_nag": "2584559678",
+    "id_assure_principal": null
+  },
+  {
+    "id_patient": 2,
+    "photo_url": null,
+    "prenom": "Awa",
+    "nom": "Diop",
+    "sex": "F",
+    "contact": "781111111",
+    "statut_assure": false,
+    "fonds": 2,
+    "matricule_nag": null,
+    "id_assure_principal": 1
+  }
+]
+```
+
+> 📌 Si aucun patient : `[]` (tableau vide).
+
+### Erreurs
+
+| Code | Body | Cause |
+|---|---|---|
+| `401` | `{"error":"Token manquant"}` | Pas de header `Authorization` |
+| `403` | `{"error":"Permission refusee : patient.lire", "role": "..."}` | Rôle sans permission |
+
+---
+
+## 🔹 `GET /api/patients/{id}`
+
+Renvoie un seul patient par son ID.
+
+### Requête
+
+**URL** : `GET /api/patients/1`
+
+**Headers** : `Authorization: Bearer <token>`
+
+### Réponse succès — `200 OK`
 
 ```json
 {
-  "username": "danis",
-  "mot_de_passe": "danis123",
-  "nom": "Administrateur",
-  "email": "danis@gmail.com",
-  "telephone": "770000000",
-  "role": "administrateur",
-  "id_structure": 1
+  "id_patient": 1,
+  "photo_url": null,
+  "prenom": "Danis",
+  "nom": "BOUSSENGUIT",
+  "sex": "M",
+  "contact": "770000000",
+  "statut_assure": true,
+  "fonds": 3,
+  "matricule_nag": "2584559678",
+  "id_assure_principal": null
+}
+```
+
+### Erreurs
+
+| Code | Body | Cause |
+|---|---|---|
+| `401` | `{"error":"Token manquant"}` | Pas de token |
+| `403` | `{"error":"Permission refusee : patient.lire", "role": "..."}` | Permission manquante |
+| `404` | `{"error":"Patient introuvable"}` | Aucun patient avec cet ID |
+
+---
+
+## 🔹 `POST /api/patients`
+
+Crée un nouveau patient.
+
+### Requête
+
+**Headers** :
+
+```http
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+### Champs
+
+| Champ | Type | Obligatoire | Description |
+|---|---|---|---|
+| `photo_url` | string / null | ❌ | URL de la photo |
+| `prenom` | string | ✅ | Prénom |
+| `nom` | string | ✅ | Nom |
+| `sex` | string | ✅ | `"M"` ou `"F"` |
+| `contact` | string / null | ❌ | Téléphone |
+| `statut_assure` | boolean | ✅ | — |
+| `fonds` | int / null | ❌ | Niveau 1-4 |
+| `matricule_nag` | string / null | ❌ | — |
+| `id_assure_principal` | int / null | ❌ | ID du parent (optionnel) |
+
+### Body (JSON)
+
+```json
+{
+  "photo_url": null,
+  "prenom": "Awa",
+  "nom": "Diop",
+  "sex": "F",
+  "contact": "770000000",
+  "statut_assure": true,
+  "fonds": 2,
+  "matricule_nag": "NAG001",
+  "id_assure_principal": null
 }
 ```
 
@@ -80,49 +217,50 @@ Crée un nouveau compte utilisateur.
 
 ```json
 {
-  "id_utilisateur": 1,
-  "username": "danis",
-  "nom": "Administrateur",
-  "email": "danis@gmail.com",
-  "telephone": "770000000",
-  "role": "administrateur",
-  "id_structure": 1,
-  "actif": true,
-  "date_creation": "2026-09-15T13:38:30.5123954",
-  "derniere_connexion": null
+  "id_patient": 12
 }
 ```
+
+> 📌 Le client doit utiliser cet `id_patient` pour toute opération future.
 
 ### Erreurs
 
 | Code | Body | Cause |
 |---|---|---|
-| `400` | `{"error":"username obligatoire"}` | Champ `username` manquant ou vide |
-| `400` | `{"error":"mot de passe trop court (min 4)"}` | Mot de passe < 4 caractères |
-| `400` | `{"error":"role obligatoire"}` | Champ `role` manquant |
-| `400` | `{"error":"id_structure obligatoire"}` | `id_structure` ≤ 0 |
-| `409` | `{"error":"Cet username est deja pris"}` | Username déjà utilisé |
-| `500` | `{"error":"..."}` | Erreur serveur |
+| `401` | `{"error":"Token manquant"}` | Pas de token |
+| `403` | `{"error":"Permission refusee : patient.creer", ...}` | Permission manquante |
+| `500` | `{"error":"..."}` | Erreur SQL (champ obligatoire manquant, fonds hors 1-4, etc.) |
 
 ---
 
-## 🔹 `POST /api/auth/login`
+## 🔹 `PUT /api/patients/{id}`
 
-Authentifie un utilisateur existant.
+Modifie un patient existant.
 
 ### Requête
 
-| Champ | Type | Obligatoire |
-|---|---|---|
-| `username` | string | ✅ |
-| `mot_de_passe` | string | ✅ |
+**URL** : `PUT /api/patients/1`
 
-**Body (JSON)**
+**Headers** :
+
+```http
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+**Body** : identique à `POST /api/patients`
 
 ```json
 {
-  "username": "danis",
-  "mot_de_passe": "danis123"
+  "photo_url": null,
+  "prenom": "Awa",
+  "nom": "Diop",
+  "sex": "F",
+  "contact": "781111111",
+  "statut_assure": true,
+  "fonds": 4,
+  "matricule_nag": "NAG001",
+  "id_assure_principal": null
 }
 ```
 
@@ -130,31 +268,45 @@ Authentifie un utilisateur existant.
 
 ```json
 {
-  "id_utilisateur": 1,
-  "username": "danis",
-  "nom": "Administrateur",
-  "email": "danis@gmail.com",
-  "telephone": "770000000",
-  "role": "administrateur",
-  "id_structure": 1,
-  "actif": true,
-  "date_creation": "2026-09-15T13:38:30.5123954",
-  "derniere_connexion": "2026-09-15T13:39:47.8758417"
+  "message": "Modifie"
 }
 ```
-
-> 📌 `derniere_connexion` est mis à jour à chaque login réussi.
 
 ### Erreurs
 
 | Code | Body | Cause |
 |---|---|---|
-| `400` | `{"error":"username et mot_de_passe obligatoires"}` | Champ manquant |
-| `401` | `{"error":"Identifiants invalides"}` | Username inconnu **ou** mauvais mot de passe |
-| `403` | `{"error":"Compte desactive"}` | Compte désactivé (`actif = false`) |
-| `500` | `{"error":"..."}` | Erreur serveur |
+| `401` | `{"error":"Token manquant"}` | Pas de token |
+| `403` | `{"error":"Permission refusee : patient.modifier", ...}` | Permission manquante |
+| `404` | `{"error":"Introuvable"}` | Aucun patient avec cet ID |
 
-> 🔒 Le message `Identifiants invalides` est volontairement générique pour ne pas révéler si le username existe.
+---
+
+## 🔹 `DELETE /api/patients/{id}`
+
+Supprime un patient.
+
+### Requête
+
+**URL** : `DELETE /api/patients/1`
+
+**Headers** : `Authorization: Bearer <token>`
+
+### Réponse succès — `200 OK`
+
+```json
+{
+  "message": "Supprime"
+}
+```
+
+### Erreurs
+
+| Code | Body | Cause |
+|---|---|---|
+| `401` | `{"error":"Token manquant"}` | Pas de token |
+| `403` | `{"error":"Permission refusee : patient.supprimer", ...}` | Permission manquante |
+| `404` | `{"error":"Introuvable"}` | Aucun patient avec cet ID |
 
 ---
 
@@ -162,22 +314,57 @@ Authentifie un utilisateur existant.
 
 | Code | Signification | Quand il apparaît |
 |---|---|---|
-| `200` | OK | Login réussi |
-| `201` | Created | Compte créé avec succès |
-| `400` | Bad Request | Champ manquant ou invalide |
-| `401` | Unauthorized | Identifiants incorrects |
-| `403` | Forbidden | Compte désactivé |
-| `409` | Conflict | Username déjà utilisé |
-| `500` | Internal Server Error | Erreur serveur |
+| `200` | OK | Lecture ou modification réussie |
+| `201` | Created | Patient créé avec succès |
+| `401` | Unauthorized | Token manquant ou invalide |
+| `403` | Forbidden | Permission refusée |
+| `404` | Not Found | Patient inexistant |
+| `500` | Internal Server Error | Erreur SQL (voir console) |
 
 ---
 
-## ❌ Format des erreurs
+## 💻 Exemples frontend (fetch)
 
-Toutes les erreurs respectent le même format JSON :
+```javascript
+const API_URL = "http://localhost:8080";
 
-```json
-{ "error": "Message d'erreur lisible" }
+// Récupérer le token depuis localStorage
+function getToken() {
+  return JSON.parse(localStorage.getItem("user"))?.token;
+}
+
+// --- Lister les patients ---
+async function listerPatients() {
+  const res = await fetch(`${API_URL}/api/patients`, {
+    headers: {
+      "Authorization": `Bearer ${getToken()}`
+    }
+  });
+
+  if (!res.ok) {
+    throw new Error((await res.json()).error);
+  }
+
+  return await res.json();
+}
+
+// --- Créer un patient ---
+async function creerPatient(patient) {
+  const res = await fetch(`${API_URL}/api/patients`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${getToken()}`
+    },
+    body: JSON.stringify(patient)
+  });
+
+  if (!res.ok) {
+    throw new Error((await res.json()).error);
+  }
+
+  return (await res.json()).id_patient;
+}
 ```
 
 ---
@@ -186,14 +373,10 @@ Toutes les erreurs respectent le même format JSON :
 
 | Sujet | Détail |
 |---|---|
-| **Hashage** | BCrypt coût 12 |
-| **Longueur du hash** | 60 caractères |
-| **Préfixe du hash** | `$2a$12$...` |
-| **Sel** | Généré automatiquement par BCrypt |
-| **Comparaison** | `BCrypt.checkpw(plain, hash)` |
-| **Dernière connexion** | Mise à jour automatique après login réussi |
+| **fonds** | Entier 1-4 (niveau, pas un montant) |
+| **id_assure_principal** | `NULL` si patient principal, sinon ID du parent |
+| **Permissions** | Modifiables à chaud par l'admin via `/api/permissions` |
 
 ---
 
-*Module **01 - Authentification** — Projet GestionPatients — 2026*
-```
+*Module **02 - Patient** — Projet GestionPatients — 2026*

@@ -9,9 +9,12 @@
 // Import du serveur HTTP intégré au JDK (aucune dépendance externe)
 import com.sun.net.httpserver.HttpServer;
 
-// Import de nos deux contrôleurs (chacun gère ses propres routes)
+// Import de nos contrôleurs
 import controller.AuthController;
 import controller.PatientController;
+import controller.UtilisateurController;
+import controller.PermissionController;
+import service.PermissionService;
 
 // Import pour définir l'adresse (IP + port) du serveur
 import java.net.InetSocketAddress;
@@ -35,18 +38,21 @@ public class index {
         //    Chaque contrôleur expose une méthode "handle" qui reçoit
         //    la requête HTTP et renvoie la réponse.
         // ------------------------------------------------------------
-        AuthController    authController    = new AuthController();
-        PatientController patientController = new PatientController();
-
+        AuthController        authController        = new AuthController();
+        PatientController     patientController     = new PatientController();
+        UtilisateurController utilisateurController = new UtilisateurController();
+        PermissionController permissionController = new PermissionController();
         // ------------------------------------------------------------
         // 3. Enregistrement des routes
-        //    - /api/auth/*     → géré par AuthController
-        //    - /api/patients/* → géré par PatientController
+        //    - /api/auth/*         → géré par AuthController
+        //    - /api/patients/*     → géré par PatientController
+        //    - /api/utilisateurs/* → géré par UtilisateurController
         //    Le "::handle" est une référence de méthode (Java 8+).
         // ------------------------------------------------------------
-        server.createContext("/api/auth",     authController::handle);
-        server.createContext("/api/patients", patientController::handle);
-
+        server.createContext("/api/auth",         authController::handle);
+        server.createContext("/api/patients",     patientController::handle);
+        server.createContext("/api/utilisateurs", utilisateurController::handle);
+        server.createContext("/api/permissions", permissionController::handle);
         // ------------------------------------------------------------
         // 4. Configuration du pool de threads
         //    10 threads peuvent traiter 10 requêtes en même temps.
@@ -57,6 +63,7 @@ public class index {
         // ------------------------------------------------------------
         // 5. Démarrage du serveur
         // ------------------------------------------------------------
+        PermissionService.init();   //  Charge les permissions en mémoire
         server.start();
 
         // ------------------------------------------------------------
@@ -67,6 +74,7 @@ public class index {
         System.out.println("  POST /api/auth/register");
         System.out.println("  POST /api/auth/login");
         System.out.println("  GET/POST/PUT/DELETE /api/patients");
+        System.out.println("  GET/PUT/DELETE      /api/utilisateurs (admin)");
         System.out.println("=================DO BY DANIS@TECH END EVANN===================");
     }
 }

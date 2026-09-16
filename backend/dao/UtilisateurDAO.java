@@ -139,4 +139,64 @@ public class UtilisateurDAO {
         u.derniere_connexion = rs.getString("derniere_connexion");
         return u;
     }
+
+
+
+
+        // ------------------------------------------------------------
+    // Modifie les informations d'un utilisateur.
+    //  Ne touche PAS au mot de passe (endpoint dédié pour ça).
+    // ------------------------------------------------------------
+    public boolean update(Utilisateur u) throws SQLException {
+
+        String sql = "UPDATE Utilisateur SET " +
+                     "nom = ?, email = ?, telephone = ?, " +
+                     "role = ?, id_structure = ?, actif = ? " +
+                     "WHERE id_utilisateur = ?";
+
+        try (Connection c = Database.getConnection();
+             PreparedStatement ps = c.prepareStatement(sql)) {
+
+            ps.setString (1, u.nom);
+            ps.setString (2, u.email);
+            ps.setString (3, u.telephone);
+            ps.setString (4, u.role);
+            ps.setInt    (5, u.id_structure);
+            ps.setBoolean(6, u.actif);
+            ps.setInt    (7, u.id_utilisateur);
+
+            return ps.executeUpdate() > 0;
+        }
+    }
+
+    // ------------------------------------------------------------
+    // Supprime définitivement un utilisateur.
+    // ------------------------------------------------------------
+    public boolean delete(int id) throws SQLException {
+
+        try (Connection c = Database.getConnection();
+             PreparedStatement ps = c.prepareStatement(
+                "DELETE FROM Utilisateur WHERE id_utilisateur = ?")) {
+
+            ps.setInt(1, id);
+            return ps.executeUpdate() > 0;
+        }
+    }
+
+    // ------------------------------------------------------------
+    // Active ou désactive un compte utilisateur.
+    // (alternative douce à la suppression)
+    // ------------------------------------------------------------
+    public boolean setActif(int id, boolean actif) throws SQLException {
+
+        String sql = "UPDATE Utilisateur SET actif = ? WHERE id_utilisateur = ?";
+
+        try (Connection c = Database.getConnection();
+             PreparedStatement ps = c.prepareStatement(sql)) {
+
+            ps.setBoolean(1, actif);
+            ps.setInt    (2, id);
+            return ps.executeUpdate() > 0;
+        }
+    }
 }

@@ -1,35 +1,26 @@
-// ============================================================
-// PatientController.java — Contrôleur HTTP des patients
-// ------------------------------------------------------------
-// Routes exposées :
-//    GET    /api/patients         → liste tous les patients
-//    GET    /api/patients/{id}    → renvoie un patient
-//    POST   /api/patients         → crée un patient
-//    PUT    /api/patients/{id}    → modifie un patient
-//    DELETE /api/patients/{id}    → supprime un patient
-// ============================================================
-
 package controller;
 
 import com.google.gson.Gson;
 import com.sun.net.httpserver.HttpExchange;
 import dao.PatientDAO;
 import model.Patient;
+import security.AuthGuard;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
+/**
+ * Contrôleur HTTP des patients.
+ * Toutes les routes sont protégées par des PERMISSIONS (pas par rôle).
+ */
 public class PatientController {
 
     private final PatientDAO dao  = new PatientDAO();
     private final Gson       gson = new Gson();
 
-    /** Point d'entrée : dispatch selon la méthode HTTP. */
     public void handle(HttpExchange ex) throws IOException {
-
         String method = ex.getRequestMethod();
-
         try {
             switch (method) {
                 case "GET"    -> handleGet(ex);
@@ -45,76 +36,75 @@ public class PatientController {
     }
 
     // ============================================================
-    // GET /api/patients         → liste
-    // GET /api/patients/{id}    → un seul
+    // GET /api/patients          → liste tous les patients
+    // GET /api/patients/{id}     → un patient
+    //  Permission requise : patient.lire
     // ============================================================
     private void handleGet(HttpExchange ex) throws Exception {
 
-        // Le path ressemble à "/api/patients" ou "/api/patients/5"
-        String[] parts = ex.getRequestURI().getPath().split("/");
+        //  Vérification de la permission
+        if (!AuthGuard.verifierPermission(ex, "patient.lire")) return;
 
+        String[] parts = ex.getRequestURI().getPath().split("/");
         if (parts.length == 3) {
-            // /api/patients → liste complète
             List<Patient> liste = dao.findAll();
             sendJson(ex, 200, gson.toJson(liste));
-
         } else if (parts.length == 4) {
-            // /api/patients/{id} → un seul patient
             int id = Integer.parseInt(parts[3]);
             Patient p = dao.findById(id);
-
             if (p == null) sendJson(ex, 404, "{\"error\":\"Patient introuvable\"}");
             else           sendJson(ex, 200, gson.toJson(p));
-
         } else {
             sendJson(ex, 400, "{\"error\":\"Route invalide\"}");
         }
     }
 
     // ============================================================
-    // POST /api/patients → création
+    // POST /api/patients         → créer un patient
+    //  Permission requise : patient.creer
     // ============================================================
     private void handlePost(HttpExchange ex) throws Exception {
 
-        // Convertit le JSON reçu en objet Patient
-        Patient p = gson.fromJson(readBody(ex), Patient.class);
+        if (!AuthGuard.verifierPermission(ex, "patient.creer")) return;
 
+        Patient p = gson.fromJson(readBody(ex), Patient.class);
         int id = dao.insert(p);
         sendJson(ex, 201, "{\"id_patient\":" + id + "}");
     }
 
     // ============================================================
-    // PUT /api/patients/{id} → modification
+    // PUT /api/patients/{id}     → modifier un patient
+    //  Permission requise : patient.modifier
     // ============================================================
     private void handlePut(HttpExchange ex) throws Exception {
 
+        if (!AuthGuard.verifierPermission(ex, "patient.modifier")) return;
+
         String[] parts = ex.getRequestURI().getPath().split("/");
         int id = Integer.parseInt(parts[3]);
-
         Patient p = gson.fromJson(readBody(ex), Patient.class);
-        p.id_patient = id;   // on force l'ID depuis l'URL
-
+        p.id_patient = id;
         boolean ok = dao.update(p);
         sendJson(ex, ok ? 200 : 404,
                  ok ? "{\"message\":\"Modifie\"}" : "{\"error\":\"Introuvable\"}");
     }
 
     // ============================================================
-    // DELETE /api/patients/{id} → suppression
+    // DELETE /api/patients/{id}  → supprimer un patient
+    //  Permission requise : patient.supprimer
     // ============================================================
     private void handleDelete(HttpExchange ex) throws Exception {
 
+        if (!AuthGuard.verifierPermission(ex, "patient.supprimer")) return;
+
         String[] parts = ex.getRequestURI().getPath().split("/");
         int id = Integer.parseInt(parts[3]);
-
         boolean ok = dao.delete(id);
         sendJson(ex, ok ? 200 : 404,
                  ok ? "{\"message\":\"Supprime\"}" : "{\"error\":\"Introuvable\"}");
     }
 
-    // ============================================================
-    // Helpers (identiques à AuthController)
-    // ============================================================
+    // ---- Helpers ----
 
     private String readBody(HttpExchange ex) throws IOException {
         try (BufferedReader br = new BufferedReader(

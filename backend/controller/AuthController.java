@@ -8,23 +8,26 @@
 // Ne connaît NI le SQL NI BCrypt : délègue au DAO et au Service.
 // ============================================================
 package controller;
-import com.google.gson.Gson;                             // Conversion JSON ↔ Java
-import com.sun.net.httpserver.HttpExchange;              // Représente une requête HTTP
-import dao.UtilisateurDAO;                               // Accès BD
-import model.Utilisateur;                                // Modèle
-import service.AuthService;                              // Hash/vérification
 
-import java.io.*;                                        // Streams
-import java.nio.charset.StandardCharsets;                // UTF-8
+import com.google.gson.Gson; // Conversion JSON ↔ Java
+import com.sun.net.httpserver.HttpExchange; // Représente une requête HTTP
+import dao.UtilisateurDAO; // Accès BD
+import model.Utilisateur; // Modèle
+import service.AuthService; // Hash/vérification
+import service.JwtService;
+
+import java.io.*; // Streams
+import java.nio.charset.StandardCharsets; // UTF-8
 
 public class AuthController {
 
     // ------------------------------------------------------------
     // Dépendances (instanciées une seule fois)
     // ------------------------------------------------------------
-    private final UtilisateurDAO dao     = new UtilisateurDAO();
-    private final AuthService    service = new AuthService();
-    private final Gson           gson    = new Gson();
+    private final UtilisateurDAO dao = new UtilisateurDAO();
+    private final AuthService service = new AuthService();
+    private final Gson gson = new Gson();
+    private final JwtService jwtService = new JwtService();
 
     /**
      * Point d'entrée unique pour toutes les routes sous /api/auth/*.
@@ -32,8 +35,8 @@ public class AuthController {
      */
     public void handle(HttpExchange ex) throws IOException {
 
-        String method = ex.getRequestMethod();                // GET / POST / PUT / DELETE
-        String path   = ex.getRequestURI().getPath();         // ex: /api/auth/login
+        String method = ex.getRequestMethod(); // GET / POST / PUT / DELETE
+        String path = ex.getRequestURI().getPath(); // ex: /api/auth/login
 
         try {
             // ------------------------------------------------------------
@@ -85,6 +88,18 @@ public class AuthController {
             sendJson(ex, 400, "{\"error\":\"role obligatoire\"}");
             return;
         }
+        // Vérifier que le rôle est dans la liste autorisée
+        boolean roleValide = false;
+        for (String r : Utilisateur.ROLES_VALIDES) {
+            if (r.equals(u.role)) {
+                roleValide = true;
+                break;
+            }
+        }
+        if (!roleValide) {
+            sendJson(ex, 400, "{\"error\":\"role invalide\"}");
+            return;
+        }
         if (u.id_structure <= 0) {
             sendJson(ex, 400, "{\"error\":\"id_structure obligatoire\"}");
             return;
@@ -96,7 +111,7 @@ public class AuthController {
             return;
         }
 
-        // 5. ⚠️ Hashage du mot de passe AVANT insertion en base
+        // 5. Hashage du mot de passe AVANT insertion en base
         u.mot_de_passe = service.hash(u.mot_de_passe);
 
         // 6. Insertion en base, récupération de l'ID généré
@@ -104,7 +119,7 @@ public class AuthController {
         u.id_utilisateur = id;
 
         // 7. Recharger l'utilisateur depuis la base pour avoir les valeurs exactes
-        //    (actif, date_creation... sont remplis par SQL Server avec leurs DEFAULT)
+        // (actif, date_creation... sont remplis par SQL Server avec leurs DEFAULT)
         Utilisateur cree = dao.findById(id);
 
         // 8. Réponse 201 Created (sans le hash)
@@ -116,7 +131,7 @@ public class AuthController {
     // ============================================================
     private void login(HttpExchange ex) throws Exception {
 
-        // 1. Lire et parser le JSON : { "username": "...", "mot_de_passe": "..." }
+        // 1. Lire le JSON : { "username": "...", "mot_de_passe": "..." }
         String body = readBody(ex);
         Utilisateur demande = gson.fromJson(body, Utilisateur.class);
 
@@ -128,8 +143,6 @@ public class AuthController {
         // 2. Chercher l'utilisateur par son username
         Utilisateur u = dao.findByUsername(demande.username);
 
-        // Si introuvable, on renvoie un message GÉNÉRIQUE pour ne pas
-        // révéler si le username existe ou pas (sécurité).
         if (u == null) {
             sendJson(ex, 401, "{\"error\":\"Identifiants invalides\"}");
             return;
@@ -141,7 +154,7 @@ public class AuthController {
             return;
         }
 
-        // 4. Vérifier le mot de passe (BCrypt compare le clair et le hash)
+        // 4. Vérifier le mot de passe avec BCrypt
         if (!service.verifier(demande.mot_de_passe, u.mot_de_passe)) {
             sendJson(ex, 401, "{\"error\":\"Identifiants invalides\"}");
             return;
@@ -150,8 +163,19 @@ public class AuthController {
         // 5. Mettre à jour la date de dernière connexion
         dao.updateDerniereConnexion(u.id_utilisateur);
 
-        // 6. Réponse 200 OK (sans le hash)
-        sendJson(ex, 200, gson.toJson(u.sansMotDePasse()));
+        // 6. GÉNÉRER LE TOKEN JWT
+        String token = jwtService.genererToken(u);
+
+        // 7. Construire la réponse JSON avec le token + les infos utilisateur
+        // On construit manuellement pour insérer le token dans la réponse.
+        String userJson = gson.toJson(u.sansMotDePasse());
+        String reponse = "{"
+                + "\"token\":\"" + token + "\","
+                + "\"user\":" + userJson
+                + "}";
+
+        // 8. Envoyer la réponse 200 OK
+        sendJson(ex, 200, reponse);
     }
 
     // ============================================================
@@ -164,7 +188,8 @@ public class AuthController {
                 new InputStreamReader(ex.getRequestBody(), StandardCharsets.UTF_8))) {
             StringBuilder sb = new StringBuilder();
             String ligne;
-            while ((ligne = br.readLine()) != null) sb.append(ligne);
+            while ((ligne = br.readLine()) != null)
+                sb.append(ligne);
             return sb.toString();
         }
     }

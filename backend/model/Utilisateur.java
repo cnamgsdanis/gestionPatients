@@ -1,20 +1,16 @@
 package model;
 
-/**
- * Modèle représentant un utilisateur.
- * ⚠️ mot_de_passe contient TOUJOURS un hash BCrypt, jamais en clair.
- */
 public class Utilisateur {
 
     public int     id_utilisateur;
     public String  username;
-    public String  mot_de_passe;   // hash BCrypt
+    public String  mot_de_passe;
 
     public String  nom;
     public String  email;
     public String  telephone;
 
-    public String  role;
+    public String  role;                  // string libre, validé côté SQL
     public int     id_structure;
 
     public boolean actif;
@@ -23,7 +19,20 @@ public class Utilisateur {
 
     public Utilisateur() {}
 
-    /** Retourne une copie de cet utilisateur SANS le hash du mot de passe. */
+    /**
+     * Liste des rôles valides côté application.
+     * Doit rester SYNCHRONISÉE avec la contrainte SQL CK_Utilisateur_role.
+     */
+    public static final String[] ROLES_VALIDES = {
+        "administrateur",
+        "agent_accueil",
+        "pharmacien",
+        "medecin",
+        "directeur_structure",
+        "caissier_structure"
+    };
+
+    /** Retourne une copie sans le hash du mot de passe. */
     public Utilisateur sansMotDePasse() {
         Utilisateur c = new Utilisateur();
         c.id_utilisateur     = this.id_utilisateur;

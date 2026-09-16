@@ -233,20 +233,12 @@ rmdir /S /Q out
 mkdir out
 
 # 3. Compiler tous les .java (index.java + tous les packages)
-javac -cp "lib/mssql-jdbc-13.4.0.jre11.jar;lib/gson-2.10.1.jar;lib/jbcrypt-0.4.jar" -d out index.java controller/*.java dao/*.java db/*.java model/*.java service/*.java
+javac -cp "lib/mssql-jdbc-13.4.0.jre11.jar;lib/gson-2.10.1.jar;lib/jbcrypt-0.4.jar;lib/jjwt-api-0.12.6.jar;lib/jjwt-impl-0.12.6.jar;lib/jjwt-gson-0.12.6.jar" -d out index.java controller/*.java dao/*.java db/*.java model/*.java security/*.java service/*.java
 
 # 4. Lancer le serveur
-java -cp "out;lib/mssql-jdbc-13.4.0.jre11.jar;lib/gson-2.10.1.jar;lib/jbcrypt-0.4.jar" index
+java -cp "out;lib/mssql-jdbc-13.4.0.jre11.jar;lib/gson-2.10.1.jar;lib/jbcrypt-0.4.jar;lib/jjwt-api-0.12.6.jar;lib/jjwt-impl-0.12.6.jar;lib/jjwt-gson-0.12.6.jar" index
 ```
 
-### Étapes (Linux / macOS)
-
-```bash
-cd backend
-rm -rf out && mkdir -p out
-javac -cp "lib/mssql-jdbc-13.4.0.jre11.jar:lib/gson-2.10.1.jar:lib/jbcrypt-0.4.jar" -d out index.java controller/*.java dao/*.java db/*.java model/*.java service/*.java
-java -cp "out:lib/mssql-jdbc-13.4.0.jre11.jar:lib/gson-2.10.1.jar:lib/jbcrypt-0.4.jar" index
-```
 
 ### Résultat attendu
 
