@@ -1,0 +1,21 @@
+# Java compilé
+*.class
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Frontend
+node_modules/
+dist/
+build/
+.expo/
+.expo-shared/
+
+# Logs
+*.log
+
+# Fichiers temporaires
+*.tmp
+*.temp
