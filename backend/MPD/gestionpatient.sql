@@ -90,7 +90,7 @@ CREATE TABLE Prestation (
     date_prs        DATE          NOT NULL,
     type_prestation NVARCHAR(30)  NOT NULL
         CONSTRAINT CK_Prestation_type
-        CHECK (type_prestation IN ('consultation', 'examen', 'pharmacie', 'hospitalisation')),
+        CHECK (type_prestation IN ('consultation', 'examen', 'pharmacie', 'hospitalisation','directeur_structure','caissier_structure')),
     id_patient      INT NOT NULL,
     id_utilisateur  INT NOT NULL,
     id_structure    INT NOT NULL,
@@ -110,6 +110,8 @@ CREATE TABLE Prise_en_charge (
     id_pec          INT IDENTITY(1,1) PRIMARY KEY,
     montant_pec     DECIMAL(10,2) NOT NULL,
     date_pec        DATE          NOT NULL,
+    numero_de_feuille  NVARCHAR(255) NULL,
+    type_feuille  NVARCHAR(255) NULL,
     statut          NVARCHAR(20)  NOT NULL,
     id_prestation   INT NOT NULL,
     CONSTRAINT FK_PriseEnCharge_Prestation FOREIGN KEY (id_prestation)
