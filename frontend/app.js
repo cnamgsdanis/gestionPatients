@@ -828,7 +828,15 @@ function updateExamSwitchUI(entry) {
 
 // Anime la carte (léger flip 3D) puis recharge la feuille demandée à la place,
 // sans quitter la vue — donne l'impression de "retourner" la feuille.
+// La saisie en cours sur la feuille quittée est d'abord sauvegardée (brouillon,
+// statut inchangé) pour ne rien perdre en allant-venant entre les deux bons.
 function flipSoinsTo(entryId) {
+  const current = state.historique.find(h => h.id === state.editingEntryId);
+  if (current) {
+    captureFormIntoEntry(current);
+    saveJSON("pec_historique", state.historique);
+  }
+
   const wrap = document.getElementById("soinsWrap");
   wrap.classList.add("flip-leave");
   window.setTimeout(() => {
@@ -1104,9 +1112,11 @@ function examEntryFromConsultation(consultEntry) {
   };
 }
 
-function submitMedecinValidation() {
-  const entry = state.historique.find(h => h.id === state.editingEntryId);
-  if (!entry) return;
+// Recopie l'état actuel du formulaire (Prestations/Ordonnance ou bon d'examen)
+// dans l'entrée d'historique correspondante — sans toucher à son statut.
+// Utilisé à la fois par la validation finale et par la bascule Consultation ⇄ Examen,
+// pour qu'aucune saisie en cours ne soit perdue en changeant de feuille.
+function captureFormIntoEntry(entry) {
   entry.signature = document.getElementById("pr-signature").value;
 
   if (entry.type === "Examen") {
@@ -1135,7 +1145,12 @@ function submitMedecinValidation() {
     entry.prestaDomicile = (document.querySelector('input[name=domicile]:checked') || {}).value || "";
     entry.prestaCode = document.getElementById("presta-code").value;
   }
+}
 
+function submitMedecinValidation() {
+  const entry = state.historique.find(h => h.id === state.editingEntryId);
+  if (!entry) return;
+  captureFormIntoEntry(entry);
   entry.statut = "Validée";
   saveJSON("pec_historique", state.historique);
   state.editingEntryId = null;
