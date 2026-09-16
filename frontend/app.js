@@ -12,10 +12,14 @@ const state = {
   soinsMode: "agent",     // 'agent' (création, envoi au médecin) | 'medecin' (validation)
   editingEntryId: null,   // id de l'entrée historique en cours de validation par le médecin
   prestaLocked: true,     // la section Prestations n'est éditable qu'en mode 'medecin'
-  historique: loadJSON("pec_historique", []),
+  historique: loadJSON("pec_historique", HISTORIQUE_SEED),
   users: loadJSON("pec_users", USERS_SEED.slice()),
   historiqueFilters: { search: "", type: "", statut: "", from: "", to: "" },
-  historiquePage: 1
+  historiquePage: 1,
+  evolutionPeriod: 30,    // période (en jours) utilisée par les courbes d'évolution et la répartition
+  ordoRows: [],           // lignes d'ordonnance en cours d'édition sur la feuille de soins (médecin)
+  ordoLocked: true,       // la section Ordonnance n'est éditable qu'en mode 'medecin'
+  currentUser: null       // utilisateur connecté (state.users), déterminé par l'e-mail saisi à la connexion
 };
 
 // Migration douce : les entrées enregistrées avant l'ajout des actions/du statut avaient des champs manquants.
@@ -23,6 +27,7 @@ let historiqueMigrated = false;
 state.historique.forEach((h, i) => {
   if (!h.id) { h.id = Date.now() + i; historiqueMigrated = true; }
   if (!h.statut) { h.statut = "Validée"; historiqueMigrated = true; }
+  if (!h.ordonnance) { h.ordonnance = []; historiqueMigrated = true; }
 });
 if (historiqueMigrated) saveJSON("pec_historique", state.historique);
 
@@ -149,6 +154,15 @@ function mockAuthenticate(email, password) {
   });
 }
 
+// Restreint la barre latérale à l'espace Pharmacien lorsque l'utilisateur connecté a ce rôle
+// (identifié par e-mail dans state.users). Les autres rôles gardent l'accès complet actuel.
+function applyRoleAccess(user) {
+  const isPharmacien = !!user && user.role === "Pharmacien";
+  document.querySelectorAll(".nav-item[data-view]").forEach(btn => {
+    btn.hidden = isPharmacien && btn.dataset.view !== "pharmacie";
+  });
+}
+
 let loginSubmitting = false;
 document.getElementById("loginForm").addEventListener("submit", function (e) {
   e.preventDefault();
@@ -191,7 +205,14 @@ document.getElementById("loginForm").addEventListener("submit", function (e) {
     document.getElementById("view-login").hidden = true;
     document.getElementById("appShell").hidden = false;
     stopLoginDna();
-    renderDashboardStats();
+
+    state.currentUser = state.users.find(u => u.email.toLowerCase() === email.toLowerCase()) || null;
+    applyRoleAccess(state.currentUser);
+    if (state.currentUser && state.currentUser.role === "Pharmacien") {
+      goToView("pharmacie");
+    } else {
+      renderDashboardStats();
+    }
   });
 });
 
@@ -226,6 +247,8 @@ document.getElementById("logoutBtn").addEventListener("click", function () {
   setFieldError("loginEmail", "loginEmailError", "");
   setFieldError("loginPass", "loginPassError", "");
   resetSearch();
+  state.currentUser = null;
+  applyRoleAccess(null);
   goToView("dashboard");
   buildLoginDna();
 });
@@ -270,7 +293,8 @@ const VIEW_META = {
   medecin: { title: "Espace Médecin", crumb: "Accueil / Espace Médecin" },
   soins: { title: "Feuille de soins", crumb: "Accueil / Feuille de soins" },
   historique: { title: "Historique PEC", crumb: "Accueil / Historique" },
-  users: { title: "Gestion des utilisateurs", crumb: "Accueil / Utilisateurs" }
+  users: { title: "Gestion des utilisateurs", crumb: "Accueil / Utilisateurs" },
+  pharmacie: { title: "Espace Pharmacien", crumb: "Accueil / Espace Pharmacien" }
 };
 
 function goToView(name) {
@@ -289,6 +313,7 @@ function goToView(name) {
   if (name === "users") renderUsers();
   if (name === "dashboard") renderDashboardStats();
   if (name === "medecin") renderMedecinQueue();
+  if (name === "pharmacie") resetPharmaSearch();
 }
 
 document.querySelectorAll(".nav-item[data-view]").forEach(btn => {
@@ -565,11 +590,19 @@ function openSoins(type) {
   document.getElementById("addRowBtn").disabled = true;
   document.getElementById("removeRowBtn").disabled = true;
 
+  // L'ordonnance (médicaments prescrits) est elle aussi du ressort du médecin.
+  state.ordoLocked = true;
+  document.getElementById("ordonnanceHint").hidden = false;
+  document.getElementById("addOrdoRowBtn").disabled = true;
+  document.getElementById("removeOrdoRowBtn").disabled = true;
+  state.ordoRows = [emptyOrdoRow()];
+
   document.getElementById("saveSoinsBtn").textContent = "Envoyer au médecin";
 
   drawPseudoQR(document.getElementById("qrCanvas"), patient.matricule + "-" + numero);
 
   renderRows();
+  renderOrdoRows();
   goToView("soins");
 }
 
@@ -640,6 +673,13 @@ function openSoinsForValidation(entryId) {
   document.getElementById("addRowBtn").disabled = false;
   document.getElementById("removeRowBtn").disabled = false;
 
+  // L'ordonnance est déverrouillée : le médecin prescrit désignation + quantité (pas de montant).
+  state.ordoLocked = false;
+  document.getElementById("ordonnanceHint").hidden = true;
+  document.getElementById("addOrdoRowBtn").disabled = false;
+  document.getElementById("removeOrdoRowBtn").disabled = false;
+  state.ordoRows = (entry.ordonnance && entry.ordonnance.length) ? entry.ordonnance.map(r => Object.assign({}, r)) : [emptyOrdoRow()];
+
   document.getElementById("saveSoinsBtn").textContent = "Valider et enregistrer";
 
   state.rows = (entry.prestations && entry.prestations.length) ? entry.prestations.map(r => Object.assign({}, r)) : [emptyRow()];
@@ -647,6 +687,7 @@ function openSoinsForValidation(entryId) {
   drawPseudoQR(document.getElementById("qrCanvas"), (entry.matricule || "") + "-" + entry.numero);
 
   renderRows();
+  renderOrdoRows();
   goToView("soins");
 }
 
@@ -702,6 +743,47 @@ document.getElementById("removeRowBtn").addEventListener("click", () => {
   renderRows();
 });
 
+/* ---- Ordonnance (médicaments prescrits par le médecin) ----------------- */
+
+function emptyOrdoRow() {
+  return { designation: "", quantite: "", posologie: "", statut: "Non servi", servicePar: "", dateService: "", prixUnitaire: "", partAssurance: "", partPatient: "" };
+}
+
+function renderOrdoRows() {
+  const body = document.getElementById("ordoBody");
+  if (!body) return;
+  body.innerHTML = "";
+  const locked = !!state.ordoLocked;
+  state.ordoRows.forEach((row, i) => {
+    const tr = document.createElement("tr");
+    const options = '<option value=""></option>' + MEDICAMENTS.map(m =>
+      '<option value="' + m.designation.replace(/"/g, "&quot;") + '"' + (row.designation === m.designation ? " selected" : "") + ">" + m.designation + "</option>"
+    ).join("");
+    tr.innerHTML =
+      '<td><select data-key="designation"' + (locked ? " disabled" : "") + ">" + options + "</select></td>" +
+      '<td><input type="text" class="num" data-key="quantite" value="' + (row.quantite ? String(row.quantite).replace(/"/g, "&quot;") : "") + '"' + (locked ? " disabled" : "") + " /></td>" +
+      '<td><input type="text" data-key="posologie" value="' + (row.posologie ? String(row.posologie).replace(/"/g, "&quot;") : "") + '"' + (locked ? " disabled" : "") + " /></td>";
+    body.appendChild(tr);
+
+    if (!locked) {
+      tr.querySelector('[data-key="designation"]').addEventListener("change", e => { state.ordoRows[i].designation = e.target.value; });
+      tr.querySelector('[data-key="quantite"]').addEventListener("input", e => { state.ordoRows[i].quantite = e.target.value; });
+      tr.querySelector('[data-key="posologie"]').addEventListener("input", e => { state.ordoRows[i].posologie = e.target.value; });
+    }
+  });
+}
+
+document.getElementById("addOrdoRowBtn").addEventListener("click", () => {
+  if (state.ordoLocked) return;
+  state.ordoRows.push(emptyOrdoRow());
+  renderOrdoRows();
+});
+document.getElementById("removeOrdoRowBtn").addEventListener("click", () => {
+  if (state.ordoLocked) return;
+  if (state.ordoRows.length > 1) state.ordoRows.pop();
+  renderOrdoRows();
+});
+
 function num(v) {
   const n = parseFloat(String(v || "").replace(/[^0-9.,-]/g, "").replace(",", "."));
   return isNaN(n) ? 0 : n;
@@ -740,6 +822,7 @@ function submitAgentFeuille() {
     grossesse: (document.querySelector('input[name=grossesse]:checked') || {}).value || "",
     statut: "En attente",
     prestations: [],
+    ordonnance: [],
     prestaDate: "",
     prestaDomicile: "",
     prestaCode: "",
@@ -757,6 +840,9 @@ function submitMedecinValidation() {
   const entry = state.historique.find(h => h.id === state.editingEntryId);
   if (!entry) return;
   entry.prestations = state.rows.filter(r => r.designation || r.montant);
+  entry.ordonnance = state.ordoRows
+    .filter(r => r.designation && r.quantite)
+    .map(r => ({ designation: r.designation, quantite: r.quantite, posologie: r.posologie || "", statut: "Non servi", servicePar: "", dateService: "", prixUnitaire: "", partAssurance: "", partPatient: "" }));
   entry.totalMontant = document.getElementById("totalMontant").value;
   entry.totalTm = document.getElementById("totalTm").value;
   entry.totalPart = document.getElementById("totalPart").value;
@@ -779,7 +865,8 @@ document.getElementById("saveSoinsBtn").addEventListener("click", () => {
 });
 
 /* ---------------------------------------------------------------------- */
-/* Tableau de bord : statistiques, graphique, activité récente             */
+/* Tableau de bord : statistiques, courbes d'évolution, répartition,       */
+/* dernières opérations médicales                                         */
 /* ---------------------------------------------------------------------- */
 
 function pendingCount() { return state.historique.filter(h => h.statut === "En attente").length; }
@@ -797,25 +884,238 @@ function renderDashboardStats() {
   const todays = state.historique.filter(h => h.date === today);
   const consultCount = state.historique.filter(h => h.type === "Consultation").length;
   const examCount = state.historique.filter(h => h.type === "Examen").length;
-  const total = consultCount + examCount;
 
   document.getElementById("statToday").textContent = todays.length;
   document.getElementById("statPending").textContent = pendingCount();
   document.getElementById("statConsult").textContent = consultCount;
   document.getElementById("statExam").textContent = examCount;
 
-  const donut = document.getElementById("donutChart");
-  const pct = total ? Math.round((consultCount / total) * 100) : 0;
-  donut.style.setProperty("--p", pct);
-  donut.classList.toggle("empty", total === 0);
-  document.getElementById("donutTotal").textContent = total;
-  document.getElementById("legendConsult").textContent = consultCount;
-  document.getElementById("legendExam").textContent = examCount;
-
+  renderEvolutionChart();
+  renderDonut();
   renderRecentActivity();
+  renderRendezVous();
   refreshPendingBadge();
 }
 document.getElementById("statPendingCard").addEventListener("click", () => goToView("medecin"));
+
+/* ---- Sélecteur de période (partagé entre la courbe et la répartition) -- */
+
+document.querySelectorAll("#periodToggle .chip").forEach(chip => {
+  chip.addEventListener("click", () => {
+    state.evolutionPeriod = parseInt(chip.dataset.days, 10);
+    document.querySelectorAll("#periodToggle .chip").forEach(c => c.classList.toggle("active", c === chip));
+    renderEvolutionChart();
+    renderDonut();
+  });
+});
+
+/* ---- Utilitaires de dates -------------------------------------------- */
+
+function dateNDaysAgo(n) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - n);
+  return d;
+}
+function frDate(d) {
+  return pad(d.getDate()) + "/" + pad(d.getMonth() + 1) + "/" + d.getFullYear();
+}
+const MONTHS_ABBR = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
+function frDateLong(d) {
+  return d.getDate() + " " + MONTHS_ABBR[d.getMonth()] + " " + d.getFullYear();
+}
+function parseFRDate(s) {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s || "");
+  if (!m) return null;
+  return new Date(parseInt(m[3], 10), parseInt(m[2], 10) - 1, parseInt(m[1], 10));
+}
+function getHistoriqueSince(days) {
+  const start = dateNDaysAgo(days - 1);
+  return state.historique.filter(h => {
+    const d = parseFRDate(h.date);
+    return d && d >= start;
+  });
+}
+
+/* ---- Courbes d'évolution des prises en charge (SVG dessiné en JS) ----- */
+
+function buildEvolutionSeries(days) {
+  const buckets = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = dateNDaysAgo(i);
+    buckets.push({ date: d, key: frDate(d), consult: 0, exam: 0 });
+  }
+  const byKey = {};
+  buckets.forEach(b => { byKey[b.key] = b; });
+  state.historique.forEach(h => {
+    const b = byKey[h.date];
+    if (!b) return;
+    if (h.type === "Consultation") b.consult++;
+    else if (h.type === "Examen") b.exam++;
+  });
+  return buckets;
+}
+
+function renderEvolutionChart() {
+  const wrap = document.getElementById("evolutionChart");
+  if (!wrap) return;
+  const days = state.evolutionPeriod;
+  const data = buildEvolutionSeries(days);
+
+  const w = 900, h = 130;
+  const padL = 32, padR = 12, padT = 12, padB = 24;
+  const innerW = w - padL - padR;
+  const innerH = h - padT - padB;
+  const maxVal = Math.max(1, ...data.map(d => Math.max(d.consult, d.exam)));
+  const niceMax = maxVal <= 5 ? maxVal + (maxVal < 5 ? 1 : 0) : Math.ceil(maxVal * 1.15);
+  const stepX = data.length > 1 ? innerW / (data.length - 1) : 0;
+
+  function xAt(i) { return padL + i * stepX; }
+  function yAt(v) { return padT + innerH * (1 - v / niceMax); }
+
+  function pathFor(key) {
+    return data.map((d, i) => (i === 0 ? "M" : "L") + xAt(i).toFixed(1) + "," + yAt(d[key]).toFixed(1)).join(" ");
+  }
+  function areaFor(key) {
+    return pathFor(key) + " L" + xAt(data.length - 1).toFixed(1) + "," + (padT + innerH).toFixed(1) +
+      " L" + xAt(0).toFixed(1) + "," + (padT + innerH).toFixed(1) + " Z";
+  }
+
+  // Lignes horizontales de repère (0, 25%, 50%, 75%, 100%)
+  let gridSvg = "";
+  let gridLabels = "";
+  const ticks = 4;
+  for (let t = 0; t <= ticks; t++) {
+    const val = Math.round((niceMax / ticks) * t);
+    const y = yAt(val);
+    gridSvg += '<line x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (w - padR) + '" y2="' + y.toFixed(1) + '" class="ev-grid" />';
+    gridLabels += '<text x="' + (padL - 8) + '" y="' + (y + 3).toFixed(1) + '" class="ev-axis-label" text-anchor="end">' + val + "</text>";
+  }
+
+  // Étiquettes de l'axe des X (un nombre limité, réparties sur la période)
+  const maxLabels = 7;
+  const labelEvery = Math.max(1, Math.ceil(data.length / maxLabels));
+  let xLabels = "";
+  data.forEach((d, i) => {
+    if (i % labelEvery !== 0 && i !== data.length - 1) return;
+    const label = pad(d.date.getDate()) + "/" + pad(d.date.getMonth() + 1);
+    xLabels += '<text x="' + xAt(i).toFixed(1) + '" y="' + (h - 8) + '" class="ev-axis-label" text-anchor="middle">' + label + "</text>";
+  });
+
+  const svg =
+    '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" class="evolution-svg" role="img" aria-label="Évolution des prises en charge">' +
+      gridSvg + gridLabels + xLabels +
+      '<path d="' + areaFor("consult") + '" class="ev-area ev-area-consultation" />' +
+      '<path d="' + areaFor("exam") + '" class="ev-area ev-area-examen" />' +
+      '<path d="' + pathFor("consult") + '" class="ev-line ev-line-consultation" />' +
+      '<path d="' + pathFor("exam") + '" class="ev-line ev-line-examen" />' +
+    "</svg>";
+
+  // Marqueurs interactifs : superposés en HTML (positionnés en %) pour éviter
+  // toute déformation due au preserveAspectRatio="none" du SVG. Limités aux
+  // périodes courtes (7/30 jours) pour ne pas surcharger la vue à 3 mois.
+  let markersHtml = "";
+  if (data.length <= 31) {
+    data.forEach((d, i) => {
+      const leftPct = (xAt(i) / w * 100).toFixed(2);
+      const dateLabel = frDateLong(d.date);
+      markersHtml +=
+        '<button type="button" class="ev-marker ev-marker-consultation" style="left:' + leftPct + '%;top:' + (yAt(d.consult) / h * 100).toFixed(2) + '%" ' +
+        'data-date="' + dateLabel + '" data-type="Consultations" data-value="' + d.consult + '" data-color="var(--green)"></button>' +
+        '<button type="button" class="ev-marker ev-marker-examen" style="left:' + leftPct + '%;top:' + (yAt(d.exam) / h * 100).toFixed(2) + '%" ' +
+        'data-date="' + dateLabel + '" data-type="Examens" data-value="' + d.exam + '" data-color="var(--blue)"></button>';
+    });
+  }
+
+  wrap.innerHTML = svg + '<div class="ev-markers">' + markersHtml + "</div>";
+
+  const tooltip = document.getElementById("evTooltip");
+  if (tooltip) {
+    const outer = wrap.parentElement;
+    const showTip = (btn) => {
+      const rect = btn.getBoundingClientRect();
+      const outerRect = outer.getBoundingClientRect();
+      tooltip.style.left = (rect.left + rect.width / 2 - outerRect.left) + "px";
+      tooltip.style.top = (rect.top - outerRect.top) + "px";
+      tooltip.innerHTML =
+        '<span class="ev-tooltip-dot" style="background:' + btn.dataset.color + '"></span>' +
+        "<b>" + btn.dataset.type + "</b> — " + btn.dataset.date + " : " + btn.dataset.value;
+      tooltip.hidden = false;
+    };
+    const hideTip = () => { tooltip.hidden = true; };
+    wrap.querySelectorAll(".ev-marker").forEach(btn => {
+      btn.addEventListener("mouseenter", () => showTip(btn));
+      btn.addEventListener("mouseleave", hideTip);
+      btn.addEventListener("focus", () => showTip(btn));
+      btn.addEventListener("blur", hideTip);
+    });
+  }
+}
+
+/* ---- Répartition consultations / examens (donut, sur la période) ------ */
+
+function buildDonutSvg(consultCount, examCount, total) {
+  const size = 120, r = 48, sw = 20, cx = 60, cy = 60;
+  const circ = 2 * Math.PI * r;
+
+  if (!total) {
+    return '<svg viewBox="0 0 ' + size + ' ' + size + '" class="donut-svg" role="img" aria-label="Répartition consultations / examens">' +
+      '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" class="donut-seg donut-seg-empty" stroke-width="' + sw + '" />' +
+      "</svg>";
+  }
+
+  const consultLen = (consultCount / total) * circ;
+  const examLen = (examCount / total) * circ;
+  const consultPct = Math.round((consultCount / total) * 100);
+  const examPct = Math.round((examCount / total) * 100);
+
+  return '<svg viewBox="0 0 ' + size + ' ' + size + '" class="donut-svg" role="img" aria-label="Répartition consultations / examens">' +
+    '<g transform="rotate(-90 ' + cx + ' ' + cy + ')">' +
+      '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" class="donut-seg donut-seg-consultation" stroke-width="' + sw + '" ' +
+        'stroke-dasharray="' + consultLen.toFixed(1) + " " + (circ - consultLen).toFixed(1) + '" stroke-dashoffset="0" ' +
+        'data-label="Consultations" data-value="' + consultCount + '" data-pct="' + consultPct + '" data-color="var(--green)" />' +
+      '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" class="donut-seg donut-seg-examen" stroke-width="' + sw + '" ' +
+        'stroke-dasharray="' + examLen.toFixed(1) + " " + (circ - examLen).toFixed(1) + '" stroke-dashoffset="-' + consultLen.toFixed(1) + '" ' +
+        'data-label="Examens" data-value="' + examCount + '" data-pct="' + examPct + '" data-color="var(--blue)" />' +
+    "</g>" +
+  "</svg>";
+}
+
+function renderDonut() {
+  const items = getHistoriqueSince(state.evolutionPeriod);
+  const consultCount = items.filter(h => h.type === "Consultation").length;
+  const examCount = items.filter(h => h.type === "Examen").length;
+  const total = consultCount + examCount;
+
+  const donutWrap = document.getElementById("donutChart");
+  donutWrap.innerHTML = buildDonutSvg(consultCount, examCount, total);
+
+  document.getElementById("donutTotal").textContent = total;
+  document.getElementById("legendConsult").textContent = consultCount;
+  document.getElementById("legendExam").textContent = examCount;
+  document.getElementById("legendConsultPct").textContent = (total ? Math.round((consultCount / total) * 100) : 0) + "%";
+  document.getElementById("legendExamPct").textContent = (total ? Math.round((examCount / total) * 100) : 0) + "%";
+
+  const tooltip = document.getElementById("donutTooltip");
+  if (tooltip) {
+    const outer = donutWrap.parentElement;
+    const showTip = (seg, evt) => {
+      const outerRect = outer.getBoundingClientRect();
+      tooltip.style.left = (evt.clientX - outerRect.left) + "px";
+      tooltip.style.top = (evt.clientY - outerRect.top) + "px";
+      tooltip.innerHTML =
+        '<span class="ev-tooltip-dot" style="background:' + seg.dataset.color + '"></span>' +
+        "<b>" + seg.dataset.label + "</b> — " + seg.dataset.value + " (" + seg.dataset.pct + "%)";
+      tooltip.hidden = false;
+    };
+    const hideTip = () => { tooltip.hidden = true; };
+    donutWrap.querySelectorAll(".donut-seg[data-label]").forEach(seg => {
+      seg.addEventListener("mouseenter", e => showTip(seg, e));
+      seg.addEventListener("mousemove", e => showTip(seg, e));
+      seg.addEventListener("mouseleave", hideTip);
+    });
+  }
+}
 
 /* ---------------------------------------------------------------------- */
 /* Espace Médecin : file d'attente des feuilles à valider                  */
@@ -846,21 +1146,66 @@ function renderMedecinQueue() {
   refreshPendingBadge();
 }
 
+/* ---- Dernières opérations médicales (patient, prestation, montant,     */
+/* part assurance, part patient, date, statut) --------------------------- */
+
+function prestationSummary(h) {
+  const list = (h.prestations || []).filter(r => r.designation);
+  if (!list.length) return h.type || "—";
+  if (list.length === 1) return list[0].designation;
+  return list[0].designation + " + " + (list.length - 1) + " autre(s)";
+}
+function partPatient(h) {
+  const diff = num(h.totalMontant) - num(h.totalPart);
+  return fmt(diff > 0 ? diff : 0);
+}
+
 function renderRecentActivity() {
   const body = document.getElementById("recentBody");
   const empty = document.getElementById("recentEmpty");
-  const recent = state.historique.slice(0, 5);
+  const recent = state.historique.slice(0, 8);
   body.innerHTML = "";
   empty.hidden = recent.length > 0;
   recent.forEach(h => {
     const tr = document.createElement("tr");
-    const pillClass = h.type === "Consultation" ? "consultation" : "examen";
+    const statutClass = h.statut === "Validée" ? "validee" : "attente";
     tr.innerHTML =
-      "<td>" + h.numero + "</td>" +
-      "<td>" + h.date + "</td>" +
       "<td>" + (h.patientNom || h.patient || "") + "</td>" +
-      '<td><span class="pill ' + pillClass + '">' + h.type + "</span></td>";
+      "<td>" + prestationSummary(h) + "</td>" +
+      "<td>" + (h.totalMontant || "0") + "</td>" +
+      "<td>" + (h.totalPart || "0") + "</td>" +
+      "<td>" + partPatient(h) + "</td>" +
+      "<td>" + h.date + "</td>" +
+      '<td><span class="pill ' + statutClass + '">' + h.statut + "</span></td>";
     body.appendChild(tr);
+  });
+}
+
+/* ---- Carnet de rendez-vous (tableau de bord) --------------------------- */
+
+function renderRendezVous() {
+  const list = document.getElementById("rdvList");
+  const empty = document.getElementById("rdvEmpty");
+  if (!list) return;
+  const today = todayFR();
+  const tomorrow = frDate(dateNDaysAgo(-1));
+
+  list.innerHTML = "";
+  empty.hidden = RENDEZVOUS.length > 0;
+  RENDEZVOUS.forEach(r => {
+    let dayLabel;
+    if (r.date === today) dayLabel = "Aujourd'hui";
+    else if (r.date === tomorrow) dayLabel = "Demain";
+    else {
+      const d = parseFRDate(r.date);
+      dayLabel = d ? pad(d.getDate()) + "/" + pad(d.getMonth() + 1) : r.date;
+    }
+    const li = document.createElement("li");
+    li.className = "rdv-item";
+    li.innerHTML =
+      '<div class="rdv-time"><span class="rdv-day">' + dayLabel + '</span><span class="rdv-hour">' + r.heure + "</span></div>" +
+      '<div class="rdv-info"><div class="rdv-patient">' + r.patient + '</div><div class="rdv-meta">' + r.medecin + " — " + r.motif + "</div></div>";
+    list.appendChild(li);
   });
 }
 
@@ -869,12 +1214,6 @@ function renderRecentActivity() {
 /* ---------------------------------------------------------------------- */
 
 const HIST_PAGE_SIZE = 8;
-
-function parseFRDate(s) {
-  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s || "");
-  if (!m) return null;
-  return new Date(parseInt(m[3], 10), parseInt(m[2], 10) - 1, parseInt(m[1], 10));
-}
 
 function getFilteredHistorique() {
   const f = state.historiqueFilters;
@@ -1102,6 +1441,110 @@ document.getElementById("userForm").addEventListener("submit", e => {
   userModal.hidden = true;
   renderUsers();
 });
+
+/* ---------------------------------------------------------------------- */
+/* Espace Pharmacien : recherche d'ordonnance par NAG et délivrance        */
+/* ---------------------------------------------------------------------- */
+
+// Taux de remboursement CNAMGS appliqué au tarif de base du médicament, selon
+// le ticket modérateur déjà enregistré sur la feuille de soins (même logique
+// que pour les prestations : la donnée vient de l'étape agent, verrouillée ici).
+const TM_RATE = { "Plein": 0.8, "Plein (ALD)": 1, "Exonéré": 1 };
+
+function medicamentPrix(designation) {
+  const m = MEDICAMENTS.find(x => x.designation === designation);
+  return m ? m.prix : 0;
+}
+
+function resetPharmaSearch() {
+  document.getElementById("pharmaNagInput").value = "";
+  document.getElementById("pharmaNotFound").hidden = true;
+  document.getElementById("pharmaResults").innerHTML = "";
+}
+
+function runPharmaSearch(nag) {
+  nag = (nag || "").trim();
+  const entries = state.historique.filter(h =>
+    h.type === "Consultation" && h.statut === "Validée" &&
+    h.matricule === nag && (h.ordonnance || []).length > 0
+  );
+  document.getElementById("pharmaNotFound").hidden = !nag || entries.length > 0;
+  renderPharmaResults(entries);
+}
+
+document.getElementById("pharmaSearchBtn").addEventListener("click", () => {
+  runPharmaSearch(document.getElementById("pharmaNagInput").value);
+});
+
+function renderPharmaResults(entries) {
+  const wrap = document.getElementById("pharmaResults");
+  wrap.innerHTML = "";
+
+  entries.forEach(entry => {
+    const rate = TM_RATE[entry.ticketModerateur] != null ? TM_RATE[entry.ticketModerateur] : 0.8;
+
+    const rows = entry.ordonnance.map((med, i) => {
+      const prix = medicamentPrix(med.designation);
+      const servi = med.statut === "Servi";
+      const partAssurance = servi ? num(med.partAssurance) : Math.round(prix * rate);
+      const partPatient = servi ? num(med.partPatient) : (prix - Math.round(prix * rate));
+      const actionCell = servi
+        ? '<span class="rx-served-note">Servi le ' + med.dateService + " — " + med.servicePar + "</span>"
+        : '<button type="button" class="btn-primary btn-sm" data-action="servir" data-entry="' + entry.id + '" data-idx="' + i + '">Servir</button>';
+      return '<tr class="' + (servi ? "rx-row-done" : "") + '">' +
+        "<td>" + med.designation + "</td>" +
+        "<td>" + med.quantite + "</td>" +
+        "<td>" + (med.posologie || "—") + "</td>" +
+        "<td>" + fmt(prix) + "</td>" +
+        "<td>" + fmt(partAssurance) + "</td>" +
+        "<td>" + fmt(partPatient) + "</td>" +
+        '<td><span class="pill ' + (servi ? "validee" : "attente") + '">' + med.statut + "</span></td>" +
+        "<td>" + actionCell + "</td>" +
+      "</tr>";
+    }).join("");
+
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML =
+      '<div class="card-head"><h3>' + (entry.patientNom || "") + " — Feuille " + entry.numero + "</h3>" +
+        '<span class="pill consultation">Consultation du ' + entry.date + "</span>" +
+      "</div>" +
+      '<div class="card-body" style="padding-top:0">' +
+        '<p class="hint" style="margin-top:0">Prescrit par <b>' + (entry.medecin || "—") + "</b>" + (entry.medecinEtab ? " — " + entry.medecinEtab : "") + "</p>" +
+      "</div>" +
+      '<div class="card-body" style="padding:0">' +
+        '<table class="data-table">' +
+          "<thead><tr><th>Désignation</th><th>Quantité</th><th>Posologie / Durée</th><th>Prix</th><th>Part assurance</th><th>Part patient</th><th>Statut</th><th>Action</th></tr></thead>" +
+          "<tbody>" + rows + "</tbody>" +
+        "</table>" +
+      "</div>";
+    wrap.appendChild(card);
+
+    card.querySelectorAll('[data-action="servir"]').forEach(btn => {
+      btn.addEventListener("click", () => {
+        if (!confirm("Confirmer la délivrance de ce médicament ?")) return;
+        const targetEntry = state.historique.find(h => h.id === parseInt(btn.dataset.entry, 10));
+        if (!targetEntry) return;
+        const med = targetEntry.ordonnance[parseInt(btn.dataset.idx, 10)];
+        if (!med || med.statut === "Servi") return;
+
+        const prix = medicamentPrix(med.designation);
+        const r = TM_RATE[targetEntry.ticketModerateur] != null ? TM_RATE[targetEntry.ticketModerateur] : 0.8;
+        const pa = Math.round(prix * r);
+
+        med.statut = "Servi";
+        med.dateService = todayFR();
+        med.servicePar = state.currentUser ? (state.currentUser.prenom + " " + state.currentUser.nom) : "Pharmacien";
+        med.prixUnitaire = String(prix);
+        med.partAssurance = String(pa);
+        med.partPatient = String(prix - pa);
+
+        saveJSON("pec_historique", state.historique);
+        runPharmaSearch(document.getElementById("pharmaNagInput").value);
+      });
+    });
+  });
+}
 
 /* ---------------------------------------------------------------------- */
 /* Initialisation                                                          */
