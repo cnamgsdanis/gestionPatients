@@ -82,11 +82,14 @@ const MEDECINS = [
 ];
 
 const USERS_SEED = [
-  { id: 1, nom: "NDONG", prenom: "Alice", email: "a.ndong@cnamgs.ga", role: "Administrateur", statut: "Actif" },
-  { id: 2, nom: "IBINGA", prenom: "Steevy", email: "s.ibinga@cnamgs.ga", role: "Agent de guichet", statut: "Actif" },
-  { id: 3, nom: "Dr. AKUE", prenom: "Rosine", email: "r.akue@cnamgs.ga", role: "Médecin-conseil", statut: "Actif" },
-  { id: 4, nom: "MEZUI", prenom: "Bertrand", email: "b.mezui@cnamgs.ga", role: "Contrôleur", statut: "Inactif" },
-  { id: 5, nom: "ESSONO", prenom: "Pierrette", email: "p.essono@cnamgs.ga", role: "Pharmacien", statut: "Actif" }
+  { id: 1, nom: "NDONG", prenom: "Alice", email: "a.ndong@cnamgs.ga", role: "Super Admin", statut: "Actif" },
+  { id: 2, nom: "IBINGA", prenom: "Steevy", email: "s.ibinga@cnamgs.ga", role: "Agent hospitalier", statut: "Actif" },
+  { id: 3, nom: "Dr. AKUE", prenom: "Rosine", email: "r.akue@cnamgs.ga", role: "Médecin", statut: "Actif" },
+  { id: 4, nom: "MEZUI", prenom: "Bertrand", email: "b.mezui@cnamgs.ga", role: "DG", statut: "Inactif" },
+  { id: 5, nom: "ESSONO", prenom: "Pierrette", email: "p.essono@cnamgs.ga", role: "Pharmacie", statut: "Actif", etablissement: "Pharmacie du Centre" },
+  { id: 6, nom: "MOUELE", prenom: "Judicaël", email: "j.mouele@cnamgs.ga", role: "Pharmacie", statut: "Actif", etablissement: "Pharmacie Awendjé" },
+  { id: 7, nom: "NZIGOU", prenom: "Sandrine", email: "s.nzigou@cnamgs.ga", role: "Pharmacie", statut: "Actif", etablissement: "Pharmacie Nzeng-Ayong" },
+  { id: 8, nom: "OBIANG", prenom: "Léa", email: "l.obiang@cnamgs.ga", role: "Caisse", statut: "Actif" }
 ];
 
 /* Catalogue fictif des médicaments, avec un tarif de référence fixe
@@ -194,8 +197,6 @@ function buildHistoriqueSeed() {
       patientNom: assure.prenom + " " + assure.nom,
       dateNaissance: assure.dateNaissance,
       matricule: assure.matricule,
-      assureNom: "",
-      matriculeAssure: "",
       estAssure: true,
       fonds: assure.fonds,
       ticketModerateur: tm === 0 ? "Exonéré" : "Plein",
@@ -226,7 +227,13 @@ const HISTORIQUE_SEED = buildHistoriqueSeed();
 /* Ordonnances de démonstration pour l'espace Pharmacien, greffées sur deux
    consultations déjà validées (index 2 et 3 de HISTORIQUE_SEED_PLAN). */
 HISTORIQUE_SEED[2].ordonnance = [
-  { designation: MEDICAMENTS[0].designation, quantite: "1", posologie: "1 comprimé matin et soir, 5 jours", statut: "Non servi", servicePar: "", dateService: "", prixUnitaire: "", partAssurance: "", partPatient: "" },
+  {
+    designation: MEDICAMENTS[0].designation, quantite: "1", posologie: "1 comprimé matin et soir, 5 jours",
+    statut: "Servi", servicePar: "Pharmacie Awendjé", dateService: dateFRFromOffset(3),
+    prixUnitaire: String(MEDICAMENTS[0].prix),
+    partAssurance: String(MEDICAMENTS[0].prix),
+    partPatient: "0"
+  },
   { designation: MEDICAMENTS[2].designation, quantite: "1", posologie: "1 comprimé au coucher, 3 jours", statut: "Non servi", servicePar: "", dateService: "", prixUnitaire: "", partAssurance: "", partPatient: "" }
 ];
 HISTORIQUE_SEED[3].ordonnance = [
@@ -239,34 +246,3 @@ HISTORIQUE_SEED[3].ordonnance = [
   },
   { designation: MEDICAMENTS[3].designation, quantite: "1", posologie: "1 comprimé par jour, 14 jours", statut: "Non servi", servicePar: "", dateService: "", prixUnitaire: "", partAssurance: "", partPatient: "" }
 ];
-
-/* --------------------------------------------------------------------------
-   Jeu de données fictif pour le carnet de rendez-vous du tableau de bord.
-   -------------------------------------------------------------------------- */
-
-/* [ jours à partir d'aujourd'hui, heure, index assuré, index médecin, motif ] */
-const RENDEZVOUS_SEED_PLAN = [
-  [0, "09:30", 0, 0, "Consultation de suivi"],
-  [0, "11:00", 2, 3, "Renouvellement d'ordonnance"],
-  [1, "08:45", 1, 1, "Consultation générale"],
-  [1, "14:15", 4, 2, "Contrôle post-opératoire"],
-  [2, "10:00", 3, 4, "Consultation prénatale"]
-];
-
-function buildRendezVousSeed() {
-  return RENDEZVOUS_SEED_PLAN.map((row, i) => {
-    const [daysFromNow, heure, assureIdx, medecinIdx, motif] = row;
-    const assure = ASSURES[assureIdx];
-    const medecin = MEDECINS[medecinIdx];
-    return {
-      id: 1800000000000 + i,
-      date: dateFRFromOffset(-daysFromNow),
-      heure: heure,
-      patient: assure.prenom + " " + assure.nom,
-      medecin: "Dr. " + medecin.prenom + " " + medecin.nom,
-      motif: motif
-    };
-  });
-}
-
-const RENDEZVOUS = buildRendezVousSeed();

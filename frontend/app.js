@@ -9,6 +9,7 @@ const state = {
   currentTM: null,        // 'Plein' | 'Plein (ALD)' | 'Exonéré'
   currentMedecin: null,   // objet MEDECINS
   rows: [],
+  examRows: [],           // lignes du tableau "Examens" (bon d'examen)
   soinsMode: "agent",     // 'agent' (création, envoi au médecin) | 'medecin' (validation)
   editingEntryId: null,   // id de l'entrée historique en cours de validation par le médecin
   prestaLocked: true,     // la section Prestations n'est éditable qu'en mode 'medecin'
@@ -16,10 +17,13 @@ const state = {
   users: loadJSON("pec_users", USERS_SEED.slice()),
   historiqueFilters: { search: "", type: "", statut: "", from: "", to: "" },
   historiquePage: 1,
-  evolutionPeriod: 30,    // période (en jours) utilisée par les courbes d'évolution et la répartition
   ordoRows: [],           // lignes d'ordonnance en cours d'édition sur la feuille de soins (médecin)
   ordoLocked: true,       // la section Ordonnance n'est éditable qu'en mode 'medecin'
-  currentUser: null       // utilisateur connecté (state.users), déterminé par l'e-mail saisi à la connexion
+  currentUser: null,      // utilisateur connecté (state.users), déterminé par l'e-mail saisi à la connexion
+  reglements: loadJSON("pec_reglements", []),   // paiements réels enregistrés par l'assurance envers les pharmacies : { id, pharmacie, montant, date, note }
+  pharmaSuiviFilters: { from: "", to: "", pharmacie: "", statut: "" },
+  reglementsHopitaux: loadJSON("pec_reglements_hopitaux", []), // paiements réels envers les hôpitaux : { id, hopital, montant, date, note }
+  hopitalSuiviFilters: { from: "", to: "", hopital: "", type: "", statut: "" }
 };
 
 // Migration douce : les entrées enregistrées avant l'ajout des actions/du statut avaient des champs manquants.
@@ -28,6 +32,21 @@ state.historique.forEach((h, i) => {
   if (!h.id) { h.id = Date.now() + i; historiqueMigrated = true; }
   if (!h.statut) { h.statut = "Validée"; historiqueMigrated = true; }
   if (!h.ordonnance) { h.ordonnance = []; historiqueMigrated = true; }
+  // Migration douce : avant l'ajout du bon d'examen, les feuilles de type "Examen"
+  // réutilisaient le tableau générique "prestations" — on les bascule vers "examens".
+  if (h.type === "Examen" && !h.examens) {
+    h.examens = (h.prestations || []).map(r => ({ designation: r.designation, cotation: r.montant, tm: r.tm, part: r.part }));
+    h.examNature = h.examNature || "";
+    h.examSituation = h.examSituation || "";
+    h.examCodePraticien = h.examCodePraticien || "";
+    h.examEtablissement = h.examEtablissement || "";
+    h.examCodeEtablissement = h.examCodeEtablissement || "";
+    h.examDate = h.examDate || h.prestaDate || "";
+    h.examMotif = h.examMotif || "";
+    h.examPubSignature = h.examPubSignature || "";
+    h.examSpecialisteSignature = h.examSpecialisteSignature || "";
+    historiqueMigrated = true;
+  }
 });
 if (historiqueMigrated) saveJSON("pec_historique", state.historique);
 
@@ -154,13 +173,92 @@ function mockAuthenticate(email, password) {
   });
 }
 
-// Restreint la barre latérale à l'espace Pharmacien lorsque l'utilisateur connecté a ce rôle
-// (identifié par e-mail dans state.users). Les autres rôles gardent l'accès complet actuel.
+// Gestion des accès par rôle : purement côté front (protection d'affichage
+// et de navigation dans cette SPA), puisque l'application n'a pas de backend
+// réel — voir §1 du guide de design du projet. Ceci n'est PAS une sécurité
+// applicative : sans API à protéger, on ne peut garantir qu'une restriction
+// côté serveur. Chaque rôle a la liste des vues autorisées et une vue
+// d'atterrissage par défaut à la connexion.
+//
+// La matrice est modifiable par le Super Admin depuis "Gestion des
+// permissions" (state.roleAccess, persistée dans pec_role_access) ; ce
+// bloc ne fournit que les valeurs par défaut ("réinitialiser").
+const PERMISSION_VIEWS = [
+  { key: "dashboard", label: "Tableau de bord" },
+  { key: "rapports", label: "Rapports" },
+  { key: "nouvelle-pec", label: "Nouvelle prise en charge" },
+  { key: "medecin", label: "Espace Médecin" },
+  { key: "pharmacie", label: "Espace Pharmacien" },
+  { key: "historique", label: "Historique PEC" },
+  { key: "users", label: "Gestion des utilisateurs" }
+];
+const ROLE_ACCESS_DEFAULT = {
+  "Super Admin": { views: ["dashboard", "rapports", "nouvelle-pec", "medecin", "pharmacie", "historique", "users"], landing: "dashboard" },
+  "DG": { views: ["dashboard", "rapports"], landing: "dashboard" },
+  "Médecin": { views: ["medecin"], landing: "medecin" },
+  "Agent hospitalier": { views: ["nouvelle-pec", "historique"], landing: "nouvelle-pec" },
+  "Pharmacie": { views: ["pharmacie"], landing: "pharmacie" },
+  "Caisse": { views: ["dashboard", "rapports"], landing: "rapports" }
+};
+state.roleAccess = loadJSON("pec_role_access", JSON.parse(JSON.stringify(ROLE_ACCESS_DEFAULT)));
+
+// "soins" (feuille de soins) n'a pas d'item de sidebar propre : on y accède
+// depuis "nouvelle-pec" (agent) ou "medecin" (validation) — donc autorisé
+// dès que l'un des deux l'est, sans case à cocher dédiée dans la matrice.
+function getEffectiveViews(role) {
+  const access = state.roleAccess[role];
+  if (!access) return null;
+  const views = access.views.slice();
+  if ((views.includes("nouvelle-pec") || views.includes("medecin")) && !views.includes("soins")) {
+    views.push("soins");
+  }
+  return views;
+}
+
+// Restreint la barre latérale aux vues autorisées par le rôle de l'utilisateur
+// connecté. Un utilisateur sans rôle reconnu (e-mail non trouvé dans
+// state.users, cas de démo) garde l'accès complet actuel. Seul le Super
+// Admin voit "Gestion des permissions", verrouillé (non présent dans la
+// matrice éditable pour éviter de s'auto-verrouiller l'accès à l'écran).
 function applyRoleAccess(user) {
-  const isPharmacien = !!user && user.role === "Pharmacien";
+  const isSuperAdmin = !!user && user.role === "Super Admin";
+  const views = user ? getEffectiveViews(user.role) : null;
   document.querySelectorAll(".nav-item[data-view]").forEach(btn => {
-    btn.hidden = isPharmacien && btn.dataset.view !== "pharmacie";
+    if (btn.dataset.view === "permissions") { btn.hidden = !isSuperAdmin; return; }
+    btn.hidden = !!views && !views.includes(btn.dataset.view);
   });
+}
+
+// Vrai si la vue est autorisée pour l'utilisateur connecté — appelé par
+// goToView() pour empêcher qu'un appel direct (bouton, raccourci) contourne
+// le cloisonnement visuel de la barre latérale.
+function isViewAllowed(name) {
+  if (!state.currentUser) return true;
+  if (name === "permissions") return state.currentUser.role === "Super Admin";
+  const views = getEffectiveViews(state.currentUser.role);
+  if (!views) return true;
+  return views.includes(name);
+}
+
+// Reflète l'utilisateur réellement connecté dans le menu utilisateur de la
+// topbar (déclencheur + en-tête du dropdown, tous deux à l'intérieur de
+// #userMenu) — jusqu'ici figé sur "Alice NDONG / Super Admin".
+function updateUserPill(user, email) {
+  const scope = document.getElementById("userMenu");
+  if (!scope) return;
+  const nameEls = scope.querySelectorAll(".name");
+  const roleEls = scope.querySelectorAll(".role");
+  const avatarEls = scope.querySelectorAll(".avatar");
+
+  const name = user ? (user.prenom + " " + user.nom) : (email || "—");
+  const role = user ? user.role : "Utilisateur";
+  const initials = user
+    ? ((user.prenom[0] || "") + (user.nom[0] || "")).toUpperCase()
+    : (email ? email.slice(0, 2).toUpperCase() : "??");
+
+  nameEls.forEach(el => { el.textContent = name; });
+  roleEls.forEach(el => { el.textContent = role; });
+  avatarEls.forEach(el => { el.textContent = initials; });
 }
 
 let loginSubmitting = false;
@@ -208,8 +306,10 @@ document.getElementById("loginForm").addEventListener("submit", function (e) {
 
     state.currentUser = state.users.find(u => u.email.toLowerCase() === email.toLowerCase()) || null;
     applyRoleAccess(state.currentUser);
-    if (state.currentUser && state.currentUser.role === "Pharmacien") {
-      goToView("pharmacie");
+    updateUserPill(state.currentUser, email);
+    const access = state.currentUser ? state.roleAccess[state.currentUser.role] : null;
+    if (access && access.landing !== "dashboard") {
+      goToView(access.landing);
     } else {
       renderDashboardStats();
     }
@@ -240,7 +340,7 @@ document.getElementById("forgotPassBtn").addEventListener("click", () => {
   showInfoModal("Mot de passe oublié", "<p>Contactez votre administrateur pour réinitialiser votre mot de passe. La réinitialisation en libre-service sera ajoutée prochainement.</p>");
 });
 
-document.getElementById("logoutBtn").addEventListener("click", function () {
+function performLogout() {
   document.getElementById("appShell").hidden = true;
   document.getElementById("view-login").hidden = false;
   document.getElementById("loginForm").reset();
@@ -251,6 +351,76 @@ document.getElementById("logoutBtn").addEventListener("click", function () {
   applyRoleAccess(null);
   goToView("dashboard");
   buildLoginDna();
+}
+document.getElementById("logoutBtn").addEventListener("click", performLogout);
+
+/* ---------------------------------------------------------------------- */
+/* Menu utilisateur (topbar) : dropdown profil                            */
+/* ---------------------------------------------------------------------- */
+
+const userMenuTrigger = document.getElementById("userMenuTrigger");
+const userDropdown = document.getElementById("userDropdown");
+
+function setUserMenuOpen(open) {
+  userDropdown.classList.toggle("open", open);
+  userMenuTrigger.setAttribute("aria-expanded", String(open));
+}
+userMenuTrigger.addEventListener("click", e => {
+  e.stopPropagation();
+  setUserMenuOpen(!userDropdown.classList.contains("open"));
+});
+document.addEventListener("click", e => {
+  if (!document.getElementById("userMenu").contains(e.target)) setUserMenuOpen(false);
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") setUserMenuOpen(false);
+});
+
+function openProfilModal() {
+  const u = state.currentUser;
+  document.getElementById("profil-nom").value = u ? (u.prenom + " " + u.nom) : "";
+  document.getElementById("profil-email").value = u ? u.email : "";
+  document.getElementById("profil-role").value = u ? u.role : "Utilisateur";
+  const etabWrap = document.getElementById("profil-etab-wrap");
+  if (u && u.etablissement) {
+    document.getElementById("profil-etab").value = u.etablissement;
+    etabWrap.hidden = false;
+  } else {
+    etabWrap.hidden = true;
+  }
+  document.getElementById("profilModal").hidden = false;
+}
+document.getElementById("userMenuProfil").addEventListener("click", () => { setUserMenuOpen(false); openProfilModal(); });
+document.getElementById("closeProfilModal").addEventListener("click", () => { document.getElementById("profilModal").hidden = true; });
+document.getElementById("cancelProfilModal").addEventListener("click", () => { document.getElementById("profilModal").hidden = true; });
+document.getElementById("profilForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const u = state.currentUser;
+  if (!u) { document.getElementById("profilModal").hidden = true; return; }
+  const nomComplet = document.getElementById("profil-nom").value.trim();
+  const parts = nomComplet.split(" ");
+  u.prenom = parts.shift() || nomComplet;
+  u.nom = parts.join(" ") || "";
+  saveJSON("pec_users", state.users);
+  updateUserPill(u, u.email);
+  document.getElementById("profilModal").hidden = true;
+});
+
+document.getElementById("userMenuParams").addEventListener("click", () => {
+  setUserMenuOpen(false);
+  showInfoModal("Paramètres", "<p>Les paramètres du compte et les préférences de l'application seront disponibles prochainement.</p>");
+});
+document.getElementById("userMenuNotifs").addEventListener("click", () => {
+  setUserMenuOpen(false);
+  showInfoModal("Notifications", "<p>Aucune notification pour le moment. Le centre de notifications sera disponible prochainement.</p>");
+});
+document.getElementById("userMenuHelp").addEventListener("click", () => {
+  setUserMenuOpen(false);
+  showInfoModal("Aide / Support", "<p>Pour toute question, contactez votre administrateur CNAMGS. Une page d'aide dédiée sera ajoutée prochainement.</p>");
+});
+document.getElementById("userMenuLogout").addEventListener("click", () => {
+  setUserMenuOpen(false);
+  performLogout();
 });
 
 /* ---------------------------------------------------------------------- */
@@ -294,10 +464,15 @@ const VIEW_META = {
   soins: { title: "Feuille de soins", crumb: "Accueil / Feuille de soins" },
   historique: { title: "Historique PEC", crumb: "Accueil / Historique" },
   users: { title: "Gestion des utilisateurs", crumb: "Accueil / Utilisateurs" },
-  pharmacie: { title: "Espace Pharmacien", crumb: "Accueil / Espace Pharmacien" }
+  pharmacie: { title: "Espace Pharmacien", crumb: "Accueil / Espace Pharmacien" },
+  rapports: { title: "Rapports", crumb: "Accueil / Rapports" },
+  permissions: { title: "Gestion des permissions", crumb: "Accueil / Permissions" }
 };
 
 function goToView(name) {
+  if (!isViewAllowed(name)) {
+    name = state.roleAccess[state.currentUser.role].landing;
+  }
   document.querySelectorAll(".view").forEach(v => v.hidden = true);
   document.getElementById("view-" + name).hidden = false;
 
@@ -314,13 +489,28 @@ function goToView(name) {
   if (name === "dashboard") renderDashboardStats();
   if (name === "medecin") renderMedecinQueue();
   if (name === "pharmacie") resetPharmaSearch();
+  if (name === "rapports") renderRapports();
+  if (name === "permissions") renderPermissions();
 }
+
+// Ouvre la page Rapports directement sur l'onglet demandé (utilisé par les
+// boutons "Voir le rapport complet" du tableau de bord).
+function goToRapportTab(tab) {
+  goToView("rapports");
+  document.querySelectorAll("#rapportsTabToggle .chip").forEach(c => c.classList.toggle("active", c.dataset.tab === tab));
+  document.getElementById("rapport-hopitaux").hidden = tab !== "hopitaux";
+  document.getElementById("rapport-pharmacies").hidden = tab !== "pharmacies";
+}
+document.querySelectorAll("#rapportsTabToggle .chip").forEach(chip => {
+  chip.addEventListener("click", () => goToRapportTab(chip.dataset.tab));
+});
+document.querySelectorAll("[data-rapport-tab]").forEach(btn => {
+  btn.addEventListener("click", () => goToRapportTab(btn.dataset.rapportTab));
+});
 
 document.querySelectorAll(".nav-item[data-view]").forEach(btn => {
   btn.addEventListener("click", () => goToView(btn.dataset.view));
 });
-document.getElementById("heroCtaBtn").addEventListener("click", () => goToView("nouvelle-pec"));
-document.getElementById("recentViewAllBtn").addEventListener("click", () => goToView("historique"));
 
 /* ---------------------------------------------------------------------- */
 /* Recherche d'un assuré par matricule                                    */
@@ -530,6 +720,18 @@ function openSoins(type) {
   state.editingEntryId = null;
   state.currentType = type;
   state.rows = [emptyRow()];
+  state.examRows = [emptyExamRow()];
+
+  const isExam = type === "Examen";
+  document.getElementById("soinsWrap").classList.toggle("examen-theme", isExam);
+  document.getElementById("prSectionTitle").textContent = isExam ? "Praticien prescripteur" : "Praticien";
+  document.getElementById("prestationsSection").hidden = isExam;
+  document.getElementById("ordonnanceSection").hidden = isExam;
+  document.getElementById("examenSection").hidden = !isExam;
+
+  // La bascule Consultation ⇄ Examen n'a de sens que côté médecin, en validation.
+  document.getElementById("recommandExamenSection").hidden = true;
+  document.getElementById("retourConsultationSection").hidden = true;
 
   const assure = state.currentAssure;
   const patient = state.currentPatient;
@@ -550,9 +752,6 @@ function openSoins(type) {
   document.getElementById("p-matriculePatient").value = patient.matricule;
 
   const isSelf = patient.estAssure;
-  document.getElementById("p-assureNom").value = isSelf ? "" : (assure.prenom + " " + assure.nom);
-  document.getElementById("p-matriculeAssure").value = isSelf ? "" : assure.matricule;
-
   document.getElementById("chk-assure").checked = isSelf;
   document.getElementById("chk-ayant").checked = !isSelf;
   document.getElementById("chk-assure-wrap").classList.toggle("on", isSelf);
@@ -597,18 +796,42 @@ function openSoins(type) {
   document.getElementById("removeOrdoRowBtn").disabled = true;
   state.ordoRows = [emptyOrdoRow()];
 
+  // Le bon d'examen (prestations + examens + volet établissement public) est lui aussi
+  // du ressort du médecin : verrouillé à cette étape, comme Prestations/Ordonnance ci-dessus.
+  document.getElementById("examPrestaHint").hidden = false;
+  document.getElementById("exam-presta-date").value = todayFR();
+  document.getElementById("exam-presta-date").disabled = true;
+  document.getElementById("exam-etablissement").value = "";
+  document.getElementById("exam-etablissement").disabled = true;
+  document.getElementById("exam-code-praticien").value = "";
+  document.getElementById("exam-code-praticien").disabled = true;
+  document.getElementById("exam-code-etablissement").value = "";
+  document.getElementById("exam-code-etablissement").disabled = true;
+  document.getElementById("exam-motif").value = "";
+  document.getElementById("exam-motif").disabled = true;
+  document.getElementById("exam-pub-signature").value = "";
+  document.getElementById("exam-specialiste-signature").value = "";
+  [
+    "exam-nature-radiologie", "exam-nature-biologie", "exam-nature-autre",
+    "exam-situation-hospitalise", "exam-situation-externe"
+  ].forEach(id => { document.getElementById(id).disabled = true; });
+  document.getElementById("addExamRowBtn").disabled = true;
+  document.getElementById("removeExamRowBtn").disabled = true;
+
   document.getElementById("saveSoinsBtn").textContent = "Envoyer au médecin";
 
   drawPseudoQR(document.getElementById("qrCanvas"), patient.matricule + "-" + numero);
 
   renderRows();
   renderOrdoRows();
+  renderExamRows();
   goToView("soins");
 }
 
-function openSoinsForValidation(entryId) {
+function openSoinsForValidation(entryId, opts) {
   const entry = state.historique.find(h => h.id === entryId);
   if (!entry) return;
+  const skipNav = !!(opts && opts.skipNav);
   state.soinsMode = "medecin";
   state.editingEntryId = entryId;
   state.currentType = entry.type;
@@ -625,14 +848,21 @@ function openSoinsForValidation(entryId) {
   document.getElementById("p-patientNom").value = entry.patientNom || "";
   document.getElementById("p-dateNaissance").value = entry.dateNaissance || "";
   document.getElementById("p-matriculePatient").value = entry.matricule || "";
-  document.getElementById("p-assureNom").value = entry.assureNom || "";
-  document.getElementById("p-matriculeAssure").value = entry.matriculeAssure || "";
 
   const isSelf = !!entry.estAssure;
   document.getElementById("chk-assure").checked = isSelf;
   document.getElementById("chk-ayant").checked = !isSelf;
   document.getElementById("chk-assure-wrap").classList.toggle("on", isSelf);
   document.getElementById("chk-ayant-wrap").classList.toggle("on", !isSelf);
+
+  const isExam = entry.type === "Examen";
+  document.getElementById("soinsWrap").classList.toggle("examen-theme", isExam);
+  document.getElementById("prSectionTitle").textContent = isExam ? "Praticien prescripteur" : "Praticien";
+  document.getElementById("prestationsSection").hidden = isExam;
+  document.getElementById("ordonnanceSection").hidden = isExam;
+  document.getElementById("examenSection").hidden = !isExam;
+
+  updateExamSwitchUI(entry);
 
   document.getElementById("pr-nom").value = entry.medecin || "";
   document.getElementById("pr-etab").value = entry.medecinEtab || "";
@@ -680,6 +910,36 @@ function openSoinsForValidation(entryId) {
   document.getElementById("removeOrdoRowBtn").disabled = false;
   state.ordoRows = (entry.ordonnance && entry.ordonnance.length) ? entry.ordonnance.map(r => Object.assign({}, r)) : [emptyOrdoRow()];
 
+  // Le bon d'examen est lui aussi déverrouillé : c'est le travail du médecin.
+  if (isExam) {
+    document.getElementById("examPrestaHint").hidden = true;
+    document.getElementById("exam-presta-date").value = entry.examDate || todayFR();
+    document.getElementById("exam-presta-date").disabled = false;
+    document.getElementById("exam-etablissement").value = entry.examEtablissement || "";
+    document.getElementById("exam-etablissement").disabled = false;
+    document.getElementById("exam-code-praticien").value = entry.examCodePraticien || "";
+    document.getElementById("exam-code-praticien").disabled = false;
+    document.getElementById("exam-code-etablissement").value = entry.examCodeEtablissement || "";
+    document.getElementById("exam-code-etablissement").disabled = false;
+    document.getElementById("exam-motif").value = entry.examMotif || "";
+    document.getElementById("exam-motif").disabled = false;
+    document.getElementById("exam-pub-signature").value = entry.examPubSignature || "";
+    document.getElementById("exam-specialiste-signature").value = entry.examSpecialisteSignature || "";
+
+    document.getElementById("exam-nature-radiologie").checked = entry.examNature === "Radiologie";
+    document.getElementById("exam-nature-biologie").checked = entry.examNature === "Biologie";
+    document.getElementById("exam-nature-autre").checked = entry.examNature === "Autre";
+    document.getElementById("exam-situation-hospitalise").checked = entry.examSituation === "Hospitalisé";
+    document.getElementById("exam-situation-externe").checked = entry.examSituation === "Soins Externes";
+    [
+      "exam-nature-radiologie", "exam-nature-biologie", "exam-nature-autre",
+      "exam-situation-hospitalise", "exam-situation-externe"
+    ].forEach(id => { document.getElementById(id).disabled = false; });
+    document.getElementById("addExamRowBtn").disabled = false;
+    document.getElementById("removeExamRowBtn").disabled = false;
+  }
+  state.examRows = (entry.examens && entry.examens.length) ? entry.examens.map(r => Object.assign({}, r)) : [emptyExamRow()];
+
   document.getElementById("saveSoinsBtn").textContent = "Valider et enregistrer";
 
   state.rows = (entry.prestations && entry.prestations.length) ? entry.prestations.map(r => Object.assign({}, r)) : [emptyRow()];
@@ -688,13 +948,103 @@ function openSoinsForValidation(entryId) {
 
   renderRows();
   renderOrdoRows();
-  goToView("soins");
+  renderExamRows();
+  if (!skipNav) goToView("soins");
 }
 
 document.getElementById("btnConsultation").addEventListener("click", () => openSoins("Consultation"));
 document.getElementById("btnExamen").addEventListener("click", () => openSoins("Examen"));
 document.getElementById("cancelSoinsBtn").addEventListener("click", () => {
   goToView(state.soinsMode === "medecin" ? "medecin" : "nouvelle-pec");
+});
+
+/* ---- Bascule animée Consultation ⇄ Examen (bon d'examen lié) ------------ */
+
+// Met à jour les deux cartes de bascule (vers l'examen depuis une Consultation,
+// vers la consultation depuis un Examen) selon la feuille actuellement affichée.
+function updateExamSwitchUI(entry) {
+  const isExam = entry.type === "Examen";
+  const forwardBox = document.getElementById("recommandExamenSection");
+  const backBox = document.getElementById("retourConsultationSection");
+
+  forwardBox.hidden = isExam;
+  if (!isExam) {
+    const linked = (entry.linkedExamenIds || [])
+      .map(id => state.historique.find(h => h.id === id))
+      .filter(Boolean);
+    const last = linked[linked.length - 1];
+    const btn = document.getElementById("examSwitchBtn");
+    const addAnother = document.getElementById("examSwitchAddAnother");
+    if (last) {
+      document.getElementById("examSwitchBtnLabel").textContent = "Voir le bon d'examen " + last.numero;
+      document.getElementById("examSwitchSub").textContent = "Un examen a déjà été recommandé pour cette consultation.";
+      btn.dataset.mode = "goto";
+      btn.dataset.targetId = String(last.id);
+      addAnother.hidden = false;
+    } else {
+      document.getElementById("examSwitchBtnLabel").textContent = "Créer un bon d'examen";
+      document.getElementById("examSwitchSub").textContent = "Génère un bon d'examen lié, pré-rempli avec les informations du patient.";
+      btn.dataset.mode = "create";
+      btn.dataset.targetId = "";
+      addAnother.hidden = true;
+    }
+  }
+
+  const src = isExam && entry.linkedConsultationId
+    ? state.historique.find(h => h.id === entry.linkedConsultationId)
+    : null;
+  backBox.hidden = !src;
+  if (src) {
+    document.getElementById("retourConsultationSub").textContent = "Lié à la consultation " + src.numero;
+    document.getElementById("retourConsultationBtn").dataset.targetId = String(src.id);
+  }
+}
+
+// Anime la carte (léger flip 3D) puis recharge la feuille demandée à la place,
+// sans quitter la vue — donne l'impression de "retourner" la feuille.
+// La saisie en cours sur la feuille quittée est d'abord sauvegardée (brouillon,
+// statut inchangé) pour ne rien perdre en allant-venant entre les deux bons.
+function flipSoinsTo(entryId) {
+  const current = state.historique.find(h => h.id === state.editingEntryId);
+  if (current) {
+    captureFormIntoEntry(current);
+    saveJSON("pec_historique", state.historique);
+  }
+
+  const wrap = document.getElementById("soinsWrap");
+  wrap.classList.add("flip-leave");
+  window.setTimeout(() => {
+    openSoinsForValidation(entryId, { skipNav: true });
+    wrap.classList.remove("flip-leave");
+    wrap.classList.add("flip-enter");
+    void wrap.offsetWidth; // force le reflow pour que la transition rejoue à la sortie de la classe
+    wrap.classList.remove("flip-enter");
+  }, 260);
+}
+
+function createLinkedExamAndFlip() {
+  const consultEntry = state.historique.find(h => h.id === state.editingEntryId);
+  if (!consultEntry) return;
+  const examEntry = examEntryFromConsultation(consultEntry);
+  consultEntry.linkedExamenIds = (consultEntry.linkedExamenIds || []).concat([examEntry.id]);
+  state.historique.unshift(examEntry);
+  saveJSON("pec_historique", state.historique);
+  refreshPendingBadge();
+  flipSoinsTo(examEntry.id);
+}
+
+document.getElementById("examSwitchBtn").addEventListener("click", () => {
+  const btn = document.getElementById("examSwitchBtn");
+  if (btn.dataset.mode === "goto" && btn.dataset.targetId) {
+    flipSoinsTo(parseInt(btn.dataset.targetId, 10));
+  } else {
+    createLinkedExamAndFlip();
+  }
+});
+document.getElementById("examSwitchAddAnother").addEventListener("click", createLinkedExamAndFlip);
+document.getElementById("retourConsultationBtn").addEventListener("click", () => {
+  const targetId = document.getElementById("retourConsultationBtn").dataset.targetId;
+  if (targetId) flipSoinsTo(parseInt(targetId, 10));
 });
 
 function emptyRow() { return { designation: "", qte: "", montant: "", tm: "", part: "", valide: "" }; }
@@ -741,6 +1091,47 @@ document.getElementById("removeRowBtn").addEventListener("click", () => {
   if (state.prestaLocked) return;
   if (state.rows.length > 1) state.rows.pop();
   renderRows();
+});
+
+/* ---- Examens (tableau du bon d'examen, rempli par le médecin) ---------- */
+
+function emptyExamRow() { return { designation: "", cotation: "", tm: "", part: "" }; }
+
+function renderExamRows() {
+  const body = document.getElementById("examenBody");
+  if (!body) return;
+  body.innerHTML = "";
+  const locked = !!state.prestaLocked;
+  state.examRows.forEach((row, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      cell("designation", row.designation, "text", locked) +
+      cell("cotation", row.cotation, "num", locked) +
+      cell("tm", row.tm, "num", locked) +
+      cell("part", row.part, "num", locked);
+    body.appendChild(tr);
+
+    if (!locked) {
+      ["designation", "cotation", "tm", "part"].forEach(key => {
+        tr.querySelector('[data-key="' + key + '"]').addEventListener("input", e => {
+          state.examRows[i][key] = e.target.value;
+          updateExamTotals();
+        });
+      });
+    }
+  });
+  updateExamTotals();
+}
+
+document.getElementById("addExamRowBtn").addEventListener("click", () => {
+  if (state.prestaLocked) return;
+  state.examRows.push(emptyExamRow());
+  renderExamRows();
+});
+document.getElementById("removeExamRowBtn").addEventListener("click", () => {
+  if (state.prestaLocked) return;
+  if (state.examRows.length > 1) state.examRows.pop();
+  renderExamRows();
 });
 
 /* ---- Ordonnance (médicaments prescrits par le médecin) ----------------- */
@@ -798,6 +1189,12 @@ function updateTotals() {
   document.getElementById("totalTm").value = fmt(sum("tm"));
   document.getElementById("totalPart").value = fmt(sum("part"));
 }
+function updateExamTotals() {
+  const sum = key => state.examRows.reduce((a, r) => a + num(r[key]), 0);
+  document.getElementById("examTotalCotation").value = fmt(sum("cotation"));
+  document.getElementById("examTotalTm").value = fmt(sum("tm"));
+  document.getElementById("examTotalPart").value = fmt(sum("part"));
+}
 
 function submitAgentFeuille() {
   const medecin = state.currentMedecin;
@@ -809,8 +1206,6 @@ function submitAgentFeuille() {
     patientNom: document.getElementById("p-patientNom").value,
     dateNaissance: document.getElementById("p-dateNaissance").value,
     matricule: document.getElementById("p-matriculePatient").value,
-    assureNom: document.getElementById("p-assureNom").value,
-    matriculeAssure: document.getElementById("p-matriculeAssure").value,
     estAssure: document.getElementById("chk-assure").checked,
     fonds: document.getElementById("soinsFonds").value,
     ticketModerateur: state.currentTM,
@@ -826,6 +1221,16 @@ function submitAgentFeuille() {
     prestaDate: "",
     prestaDomicile: "",
     prestaCode: "",
+    examens: [],
+    examNature: "",
+    examSituation: "",
+    examCodePraticien: "",
+    examEtablissement: "",
+    examCodeEtablissement: "",
+    examDate: "",
+    examMotif: "",
+    examPubSignature: "",
+    examSpecialisteSignature: "",
     totalMontant: "0",
     totalTm: "0",
     totalPart: "0"
@@ -836,20 +1241,90 @@ function submitAgentFeuille() {
   goToView("dashboard");
 }
 
+// Bon d'examen créé par le médecin depuis la validation d'une Consultation
+// (bouton "Créer un bon d'examen") — reprend les données partagées du
+// patient/praticien, prêt à être complété par un médecin.
+function examEntryFromConsultation(consultEntry) {
+  return {
+    id: Date.now() + 1,
+    numero: nextFeuilleNum(),
+    date: todayFR(),
+    type: "Examen",
+    patientNom: consultEntry.patientNom,
+    dateNaissance: consultEntry.dateNaissance,
+    matricule: consultEntry.matricule,
+    estAssure: consultEntry.estAssure,
+    fonds: consultEntry.fonds,
+    ticketModerateur: consultEntry.ticketModerateur,
+    medecin: consultEntry.medecin,
+    medecinEtab: consultEntry.medecinEtab,
+    medecinCode: consultEntry.medecinCode,
+    medecinType: consultEntry.medecinType,
+    accidentTiers: consultEntry.accidentTiers,
+    grossesse: consultEntry.grossesse,
+    statut: "En attente",
+    prestations: [],
+    ordonnance: [],
+    prestaDate: "",
+    prestaDomicile: "",
+    prestaCode: "",
+    examens: [],
+    examNature: "",
+    examSituation: "",
+    examCodePraticien: "",
+    examEtablissement: "",
+    examCodeEtablissement: "",
+    examDate: "",
+    examMotif: "",
+    examPubSignature: "",
+    examSpecialisteSignature: "",
+    totalMontant: "0",
+    totalTm: "0",
+    totalPart: "0",
+    signature: "",
+    linkedConsultationId: consultEntry.id
+  };
+}
+
+// Recopie l'état actuel du formulaire (Prestations/Ordonnance ou bon d'examen)
+// dans l'entrée d'historique correspondante — sans toucher à son statut.
+// Utilisé à la fois par la validation finale et par la bascule Consultation ⇄ Examen,
+// pour qu'aucune saisie en cours ne soit perdue en changeant de feuille.
+function captureFormIntoEntry(entry) {
+  entry.signature = document.getElementById("pr-signature").value;
+
+  if (entry.type === "Examen") {
+    entry.examens = state.examRows.filter(r => r.designation || r.cotation);
+    entry.examNature = (document.querySelector('input[name=examNature]:checked') || {}).value || "";
+    entry.examSituation = (document.querySelector('input[name=examSituation]:checked') || {}).value || "";
+    entry.examCodePraticien = document.getElementById("exam-code-praticien").value;
+    entry.examEtablissement = document.getElementById("exam-etablissement").value;
+    entry.examCodeEtablissement = document.getElementById("exam-code-etablissement").value;
+    entry.examDate = document.getElementById("exam-presta-date").value;
+    entry.examMotif = document.getElementById("exam-motif").value;
+    entry.examPubSignature = document.getElementById("exam-pub-signature").value;
+    entry.examSpecialisteSignature = document.getElementById("exam-specialiste-signature").value;
+    entry.totalMontant = document.getElementById("examTotalCotation").value;
+    entry.totalTm = document.getElementById("examTotalTm").value;
+    entry.totalPart = document.getElementById("examTotalPart").value;
+  } else {
+    entry.prestations = state.rows.filter(r => r.designation || r.montant);
+    entry.ordonnance = state.ordoRows
+      .filter(r => r.designation && r.quantite)
+      .map(r => ({ designation: r.designation, quantite: r.quantite, posologie: r.posologie || "", statut: "Non servi", servicePar: "", dateService: "", prixUnitaire: "", partAssurance: "", partPatient: "" }));
+    entry.totalMontant = document.getElementById("totalMontant").value;
+    entry.totalTm = document.getElementById("totalTm").value;
+    entry.totalPart = document.getElementById("totalPart").value;
+    entry.prestaDate = document.getElementById("presta-date").value;
+    entry.prestaDomicile = (document.querySelector('input[name=domicile]:checked') || {}).value || "";
+    entry.prestaCode = document.getElementById("presta-code").value;
+  }
+}
+
 function submitMedecinValidation() {
   const entry = state.historique.find(h => h.id === state.editingEntryId);
   if (!entry) return;
-  entry.prestations = state.rows.filter(r => r.designation || r.montant);
-  entry.ordonnance = state.ordoRows
-    .filter(r => r.designation && r.quantite)
-    .map(r => ({ designation: r.designation, quantite: r.quantite, posologie: r.posologie || "", statut: "Non servi", servicePar: "", dateService: "", prixUnitaire: "", partAssurance: "", partPatient: "" }));
-  entry.totalMontant = document.getElementById("totalMontant").value;
-  entry.totalTm = document.getElementById("totalTm").value;
-  entry.totalPart = document.getElementById("totalPart").value;
-  entry.prestaDate = document.getElementById("presta-date").value;
-  entry.prestaDomicile = (document.querySelector('input[name=domicile]:checked') || {}).value || "";
-  entry.prestaCode = document.getElementById("presta-code").value;
-  entry.signature = document.getElementById("pr-signature").value;
+  captureFormIntoEntry(entry);
   entry.statut = "Validée";
   saveJSON("pec_historique", state.historique);
   state.editingEntryId = null;
@@ -880,241 +1355,22 @@ function refreshPendingBadge() {
 }
 
 function renderDashboardStats() {
-  const today = todayFR();
-  const todays = state.historique.filter(h => h.date === today);
-  const consultCount = state.historique.filter(h => h.type === "Consultation").length;
-  const examCount = state.historique.filter(h => h.type === "Examen").length;
-
-  document.getElementById("statToday").textContent = todays.length;
-  document.getElementById("statPending").textContent = pendingCount();
-  document.getElementById("statConsult").textContent = consultCount;
-  document.getElementById("statExam").textContent = examCount;
-
-  renderEvolutionChart();
-  renderDonut();
-  renderRecentActivity();
-  renderRendezVous();
+  renderPharmaDashboard();
+  renderHopitalDashboard();
   refreshPendingBadge();
 }
-document.getElementById("statPendingCard").addEventListener("click", () => goToView("medecin"));
 
-/* ---- Sélecteur de période (partagé entre la courbe et la répartition) -- */
-
-document.querySelectorAll("#periodToggle .chip").forEach(chip => {
-  chip.addEventListener("click", () => {
-    state.evolutionPeriod = parseInt(chip.dataset.days, 10);
-    document.querySelectorAll("#periodToggle .chip").forEach(c => c.classList.toggle("active", c === chip));
-    renderEvolutionChart();
-    renderDonut();
-  });
-});
+function renderRapports() {
+  renderPharmaRapport();
+  renderHopitalRapport();
+}
 
 /* ---- Utilitaires de dates -------------------------------------------- */
 
-function dateNDaysAgo(n) {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() - n);
-  return d;
-}
-function frDate(d) {
-  return pad(d.getDate()) + "/" + pad(d.getMonth() + 1) + "/" + d.getFullYear();
-}
-const MONTHS_ABBR = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
-function frDateLong(d) {
-  return d.getDate() + " " + MONTHS_ABBR[d.getMonth()] + " " + d.getFullYear();
-}
 function parseFRDate(s) {
   const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s || "");
   if (!m) return null;
   return new Date(parseInt(m[3], 10), parseInt(m[2], 10) - 1, parseInt(m[1], 10));
-}
-function getHistoriqueSince(days) {
-  const start = dateNDaysAgo(days - 1);
-  return state.historique.filter(h => {
-    const d = parseFRDate(h.date);
-    return d && d >= start;
-  });
-}
-
-/* ---- Courbes d'évolution des prises en charge (SVG dessiné en JS) ----- */
-
-function buildEvolutionSeries(days) {
-  const buckets = [];
-  for (let i = days - 1; i >= 0; i--) {
-    const d = dateNDaysAgo(i);
-    buckets.push({ date: d, key: frDate(d), consult: 0, exam: 0 });
-  }
-  const byKey = {};
-  buckets.forEach(b => { byKey[b.key] = b; });
-  state.historique.forEach(h => {
-    const b = byKey[h.date];
-    if (!b) return;
-    if (h.type === "Consultation") b.consult++;
-    else if (h.type === "Examen") b.exam++;
-  });
-  return buckets;
-}
-
-function renderEvolutionChart() {
-  const wrap = document.getElementById("evolutionChart");
-  if (!wrap) return;
-  const days = state.evolutionPeriod;
-  const data = buildEvolutionSeries(days);
-
-  const w = 900, h = 130;
-  const padL = 32, padR = 12, padT = 12, padB = 24;
-  const innerW = w - padL - padR;
-  const innerH = h - padT - padB;
-  const maxVal = Math.max(1, ...data.map(d => Math.max(d.consult, d.exam)));
-  const niceMax = maxVal <= 5 ? maxVal + (maxVal < 5 ? 1 : 0) : Math.ceil(maxVal * 1.15);
-  const stepX = data.length > 1 ? innerW / (data.length - 1) : 0;
-
-  function xAt(i) { return padL + i * stepX; }
-  function yAt(v) { return padT + innerH * (1 - v / niceMax); }
-
-  function pathFor(key) {
-    return data.map((d, i) => (i === 0 ? "M" : "L") + xAt(i).toFixed(1) + "," + yAt(d[key]).toFixed(1)).join(" ");
-  }
-  function areaFor(key) {
-    return pathFor(key) + " L" + xAt(data.length - 1).toFixed(1) + "," + (padT + innerH).toFixed(1) +
-      " L" + xAt(0).toFixed(1) + "," + (padT + innerH).toFixed(1) + " Z";
-  }
-
-  // Lignes horizontales de repère (0, 25%, 50%, 75%, 100%)
-  let gridSvg = "";
-  let gridLabels = "";
-  const ticks = 4;
-  for (let t = 0; t <= ticks; t++) {
-    const val = Math.round((niceMax / ticks) * t);
-    const y = yAt(val);
-    gridSvg += '<line x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (w - padR) + '" y2="' + y.toFixed(1) + '" class="ev-grid" />';
-    gridLabels += '<text x="' + (padL - 8) + '" y="' + (y + 3).toFixed(1) + '" class="ev-axis-label" text-anchor="end">' + val + "</text>";
-  }
-
-  // Étiquettes de l'axe des X (un nombre limité, réparties sur la période)
-  const maxLabels = 7;
-  const labelEvery = Math.max(1, Math.ceil(data.length / maxLabels));
-  let xLabels = "";
-  data.forEach((d, i) => {
-    if (i % labelEvery !== 0 && i !== data.length - 1) return;
-    const label = pad(d.date.getDate()) + "/" + pad(d.date.getMonth() + 1);
-    xLabels += '<text x="' + xAt(i).toFixed(1) + '" y="' + (h - 8) + '" class="ev-axis-label" text-anchor="middle">' + label + "</text>";
-  });
-
-  const svg =
-    '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" class="evolution-svg" role="img" aria-label="Évolution des prises en charge">' +
-      gridSvg + gridLabels + xLabels +
-      '<path d="' + areaFor("consult") + '" class="ev-area ev-area-consultation" />' +
-      '<path d="' + areaFor("exam") + '" class="ev-area ev-area-examen" />' +
-      '<path d="' + pathFor("consult") + '" class="ev-line ev-line-consultation" />' +
-      '<path d="' + pathFor("exam") + '" class="ev-line ev-line-examen" />' +
-    "</svg>";
-
-  // Marqueurs interactifs : superposés en HTML (positionnés en %) pour éviter
-  // toute déformation due au preserveAspectRatio="none" du SVG. Limités aux
-  // périodes courtes (7/30 jours) pour ne pas surcharger la vue à 3 mois.
-  let markersHtml = "";
-  if (data.length <= 31) {
-    data.forEach((d, i) => {
-      const leftPct = (xAt(i) / w * 100).toFixed(2);
-      const dateLabel = frDateLong(d.date);
-      markersHtml +=
-        '<button type="button" class="ev-marker ev-marker-consultation" style="left:' + leftPct + '%;top:' + (yAt(d.consult) / h * 100).toFixed(2) + '%" ' +
-        'data-date="' + dateLabel + '" data-type="Consultations" data-value="' + d.consult + '" data-color="var(--green)"></button>' +
-        '<button type="button" class="ev-marker ev-marker-examen" style="left:' + leftPct + '%;top:' + (yAt(d.exam) / h * 100).toFixed(2) + '%" ' +
-        'data-date="' + dateLabel + '" data-type="Examens" data-value="' + d.exam + '" data-color="var(--blue)"></button>';
-    });
-  }
-
-  wrap.innerHTML = svg + '<div class="ev-markers">' + markersHtml + "</div>";
-
-  const tooltip = document.getElementById("evTooltip");
-  if (tooltip) {
-    const outer = wrap.parentElement;
-    const showTip = (btn) => {
-      const rect = btn.getBoundingClientRect();
-      const outerRect = outer.getBoundingClientRect();
-      tooltip.style.left = (rect.left + rect.width / 2 - outerRect.left) + "px";
-      tooltip.style.top = (rect.top - outerRect.top) + "px";
-      tooltip.innerHTML =
-        '<span class="ev-tooltip-dot" style="background:' + btn.dataset.color + '"></span>' +
-        "<b>" + btn.dataset.type + "</b> — " + btn.dataset.date + " : " + btn.dataset.value;
-      tooltip.hidden = false;
-    };
-    const hideTip = () => { tooltip.hidden = true; };
-    wrap.querySelectorAll(".ev-marker").forEach(btn => {
-      btn.addEventListener("mouseenter", () => showTip(btn));
-      btn.addEventListener("mouseleave", hideTip);
-      btn.addEventListener("focus", () => showTip(btn));
-      btn.addEventListener("blur", hideTip);
-    });
-  }
-}
-
-/* ---- Répartition consultations / examens (donut, sur la période) ------ */
-
-function buildDonutSvg(consultCount, examCount, total) {
-  const size = 120, r = 48, sw = 20, cx = 60, cy = 60;
-  const circ = 2 * Math.PI * r;
-
-  if (!total) {
-    return '<svg viewBox="0 0 ' + size + ' ' + size + '" class="donut-svg" role="img" aria-label="Répartition consultations / examens">' +
-      '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" class="donut-seg donut-seg-empty" stroke-width="' + sw + '" />' +
-      "</svg>";
-  }
-
-  const consultLen = (consultCount / total) * circ;
-  const examLen = (examCount / total) * circ;
-  const consultPct = Math.round((consultCount / total) * 100);
-  const examPct = Math.round((examCount / total) * 100);
-
-  return '<svg viewBox="0 0 ' + size + ' ' + size + '" class="donut-svg" role="img" aria-label="Répartition consultations / examens">' +
-    '<g transform="rotate(-90 ' + cx + ' ' + cy + ')">' +
-      '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" class="donut-seg donut-seg-consultation" stroke-width="' + sw + '" ' +
-        'stroke-dasharray="' + consultLen.toFixed(1) + " " + (circ - consultLen).toFixed(1) + '" stroke-dashoffset="0" ' +
-        'data-label="Consultations" data-value="' + consultCount + '" data-pct="' + consultPct + '" data-color="var(--green)" />' +
-      '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" class="donut-seg donut-seg-examen" stroke-width="' + sw + '" ' +
-        'stroke-dasharray="' + examLen.toFixed(1) + " " + (circ - examLen).toFixed(1) + '" stroke-dashoffset="-' + consultLen.toFixed(1) + '" ' +
-        'data-label="Examens" data-value="' + examCount + '" data-pct="' + examPct + '" data-color="var(--blue)" />' +
-    "</g>" +
-  "</svg>";
-}
-
-function renderDonut() {
-  const items = getHistoriqueSince(state.evolutionPeriod);
-  const consultCount = items.filter(h => h.type === "Consultation").length;
-  const examCount = items.filter(h => h.type === "Examen").length;
-  const total = consultCount + examCount;
-
-  const donutWrap = document.getElementById("donutChart");
-  donutWrap.innerHTML = buildDonutSvg(consultCount, examCount, total);
-
-  document.getElementById("donutTotal").textContent = total;
-  document.getElementById("legendConsult").textContent = consultCount;
-  document.getElementById("legendExam").textContent = examCount;
-  document.getElementById("legendConsultPct").textContent = (total ? Math.round((consultCount / total) * 100) : 0) + "%";
-  document.getElementById("legendExamPct").textContent = (total ? Math.round((examCount / total) * 100) : 0) + "%";
-
-  const tooltip = document.getElementById("donutTooltip");
-  if (tooltip) {
-    const outer = donutWrap.parentElement;
-    const showTip = (seg, evt) => {
-      const outerRect = outer.getBoundingClientRect();
-      tooltip.style.left = (evt.clientX - outerRect.left) + "px";
-      tooltip.style.top = (evt.clientY - outerRect.top) + "px";
-      tooltip.innerHTML =
-        '<span class="ev-tooltip-dot" style="background:' + seg.dataset.color + '"></span>' +
-        "<b>" + seg.dataset.label + "</b> — " + seg.dataset.value + " (" + seg.dataset.pct + "%)";
-      tooltip.hidden = false;
-    };
-    const hideTip = () => { tooltip.hidden = true; };
-    donutWrap.querySelectorAll(".donut-seg[data-label]").forEach(seg => {
-      seg.addEventListener("mouseenter", e => showTip(seg, e));
-      seg.addEventListener("mousemove", e => showTip(seg, e));
-      seg.addEventListener("mouseleave", hideTip);
-    });
-  }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1144,69 +1400,6 @@ function renderMedecinQueue() {
     btn.addEventListener("click", () => openSoinsForValidation(parseInt(btn.dataset.id, 10)));
   });
   refreshPendingBadge();
-}
-
-/* ---- Dernières opérations médicales (patient, prestation, montant,     */
-/* part assurance, part patient, date, statut) --------------------------- */
-
-function prestationSummary(h) {
-  const list = (h.prestations || []).filter(r => r.designation);
-  if (!list.length) return h.type || "—";
-  if (list.length === 1) return list[0].designation;
-  return list[0].designation + " + " + (list.length - 1) + " autre(s)";
-}
-function partPatient(h) {
-  const diff = num(h.totalMontant) - num(h.totalPart);
-  return fmt(diff > 0 ? diff : 0);
-}
-
-function renderRecentActivity() {
-  const body = document.getElementById("recentBody");
-  const empty = document.getElementById("recentEmpty");
-  const recent = state.historique.slice(0, 8);
-  body.innerHTML = "";
-  empty.hidden = recent.length > 0;
-  recent.forEach(h => {
-    const tr = document.createElement("tr");
-    const statutClass = h.statut === "Validée" ? "validee" : "attente";
-    tr.innerHTML =
-      "<td>" + (h.patientNom || h.patient || "") + "</td>" +
-      "<td>" + prestationSummary(h) + "</td>" +
-      "<td>" + (h.totalMontant || "0") + "</td>" +
-      "<td>" + (h.totalPart || "0") + "</td>" +
-      "<td>" + partPatient(h) + "</td>" +
-      "<td>" + h.date + "</td>" +
-      '<td><span class="pill ' + statutClass + '">' + h.statut + "</span></td>";
-    body.appendChild(tr);
-  });
-}
-
-/* ---- Carnet de rendez-vous (tableau de bord) --------------------------- */
-
-function renderRendezVous() {
-  const list = document.getElementById("rdvList");
-  const empty = document.getElementById("rdvEmpty");
-  if (!list) return;
-  const today = todayFR();
-  const tomorrow = frDate(dateNDaysAgo(-1));
-
-  list.innerHTML = "";
-  empty.hidden = RENDEZVOUS.length > 0;
-  RENDEZVOUS.forEach(r => {
-    let dayLabel;
-    if (r.date === today) dayLabel = "Aujourd'hui";
-    else if (r.date === tomorrow) dayLabel = "Demain";
-    else {
-      const d = parseFRDate(r.date);
-      dayLabel = d ? pad(d.getDate()) + "/" + pad(d.getMonth() + 1) : r.date;
-    }
-    const li = document.createElement("li");
-    li.className = "rdv-item";
-    li.innerHTML =
-      '<div class="rdv-time"><span class="rdv-day">' + dayLabel + '</span><span class="rdv-hour">' + r.heure + "</span></div>" +
-      '<div class="rdv-info"><div class="rdv-patient">' + r.patient + '</div><div class="rdv-meta">' + r.medecin + " — " + r.motif + "</div></div>";
-    list.appendChild(li);
-  });
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1329,12 +1522,46 @@ function previewEntry(id) {
   if (!h) return;
   const pillClass = h.type === "Consultation" ? "consultation" : "examen";
   const statutClass = h.statut === "Validée" ? "validee" : "attente";
-  const rows = (h.prestations || []).filter(r => r.designation || r.montant);
-  const rowsHtml = rows.length
-    ? rows.map(r =>
-        "<tr><td>" + (r.designation || "") + "</td><td>" + (r.qte || "") + "</td><td>" + (r.montant || "") + "</td><td>" + (r.tm || "") + "</td><td>" + (r.part || "") + "</td></tr>"
-      ).join("")
-    : '<tr><td colspan="5" style="text-align:center;color:var(--muted)">Aucune prestation renseignée</td></tr>';
+  const isExam = h.type === "Examen";
+
+  let tableHead, rowsHtml;
+  if (isExam) {
+    const rows = (h.examens || []).filter(r => r.designation || r.cotation);
+    tableHead = "<tr><th>Désignation de l'examen</th><th>Cotation</th><th>TM</th><th>Part CNAMGS</th></tr>";
+    rowsHtml = rows.length
+      ? rows.map(r =>
+          "<tr><td>" + (r.designation || "") + "</td><td>" + (r.cotation || "") + "</td><td>" + (r.tm || "") + "</td><td>" + (r.part || "") + "</td></tr>"
+        ).join("")
+      : '<tr><td colspan="4" style="text-align:center;color:var(--muted)">Aucun examen renseigné</td></tr>';
+  } else {
+    const rows = (h.prestations || []).filter(r => r.designation || r.montant);
+    tableHead = "<tr><th>Désignation</th><th>Qté</th><th>Montant</th><th>TM</th><th>Part CNAMGS</th></tr>";
+    rowsHtml = rows.length
+      ? rows.map(r =>
+          "<tr><td>" + (r.designation || "") + "</td><td>" + (r.qte || "") + "</td><td>" + (r.montant || "") + "</td><td>" + (r.tm || "") + "</td><td>" + (r.part || "") + "</td></tr>"
+        ).join("")
+      : '<tr><td colspan="5" style="text-align:center;color:var(--muted)">Aucune prestation renseignée</td></tr>';
+  }
+
+  const extraGrid = isExam
+    ? "<div><b>Nature de la prestation</b><span>" + (h.examNature || "—") + "</span></div>" +
+      "<div><b>Situation du patient</b><span>" + (h.examSituation || "—") + "</span></div>" +
+      "<div><b>Établissement réalisant l'examen</b><span>" + (h.examEtablissement || "—") + "</span></div>"
+    : "";
+
+  let linkHtml = "";
+  if (isExam && h.linkedConsultationId) {
+    const src = state.historique.find(e => e.id === h.linkedConsultationId);
+    if (src) {
+      linkHtml = '<div class="preview-link">Examen recommandé suite à la feuille <a href="#" data-preview-link="' + src.id + '">' + src.numero + "</a></div>";
+    }
+  } else if (!isExam && h.linkedExamenIds && h.linkedExamenIds.length) {
+    const links = h.linkedExamenIds
+      .map(examId => state.historique.find(e => e.id === examId))
+      .filter(Boolean)
+      .map(ex => '<a href="#" data-preview-link="' + ex.id + '">' + ex.numero + "</a>");
+    if (links.length) linkHtml = '<div class="preview-link">Examen(s) recommandé(s) : ' + links.join(", ") + "</div>";
+  }
 
   document.getElementById("previewBody").innerHTML =
     '<div class="preview-head"><img src="CNAMGS.png" alt="CNAMGS" /><div>' +
@@ -1342,6 +1569,7 @@ function previewEntry(id) {
       '<span class="pill ' + statutClass + '">' + (h.statut || "Validée") + "</span>" +
       '<div class="preview-num">' + h.numero + "</div>" +
     "</div></div>" +
+    linkHtml +
     '<div class="preview-grid">' +
       "<div><b>Patient</b><span>" + (h.patientNom || h.patient || "—") + "</span></div>" +
       "<div><b>Matricule</b><span>" + (h.matricule || "—") + "</span></div>" +
@@ -1351,13 +1579,21 @@ function previewEntry(id) {
       "<div><b>Médecin</b><span>" + (h.medecin || "—") + "</span></div>" +
       "<div><b>Accident causé par un tiers</b><span>" + (h.accidentTiers || "—") + "</span></div>" +
       "<div><b>Soins liés à la grossesse</b><span>" + (h.grossesse || "—") + "</span></div>" +
+      extraGrid +
     "</div>" +
-    '<table class="data-table"><thead><tr><th>Désignation</th><th>Qté</th><th>Montant</th><th>TM</th><th>Part CNAMGS</th></tr></thead><tbody>' + rowsHtml + "</tbody></table>" +
+    '<table class="data-table"><thead>' + tableHead + "</thead><tbody>" + rowsHtml + "</tbody></table>" +
     '<div class="preview-totals">' +
       "<div>Total montant <b>" + h.totalMontant + "</b></div>" +
       "<div>Total TM <b>" + h.totalTm + "</b></div>" +
       "<div>Total CNAMGS <b>" + h.totalPart + "</b></div>" +
     "</div>";
+
+  document.getElementById("previewBody").querySelectorAll('[data-preview-link]').forEach(a => {
+    a.addEventListener("click", e => {
+      e.preventDefault();
+      previewEntry(parseInt(a.dataset.previewLink, 10));
+    });
+  });
 
   document.getElementById("previewModal").hidden = false;
 }
@@ -1534,7 +1770,7 @@ function renderPharmaResults(entries) {
 
         med.statut = "Servi";
         med.dateService = todayFR();
-        med.servicePar = state.currentUser ? (state.currentUser.prenom + " " + state.currentUser.nom) : "Pharmacien";
+        med.servicePar = (state.currentUser && state.currentUser.etablissement) ? state.currentUser.etablissement : "Pharmacie";
         med.prixUnitaire = String(prix);
         med.partAssurance = String(pa);
         med.partPatient = String(prix - pa);
@@ -1547,9 +1783,584 @@ function renderPharmaResults(entries) {
 }
 
 /* ---------------------------------------------------------------------- */
+/* Tableau de bord : suivi des prestations des pharmacies partenaires      */
+/* ---------------------------------------------------------------------- */
+
+function fmtFCFA(n) { return fmt(n) + " FCFA"; }
+
+// Toutes les lignes de médicaments effectivement servies (données réelles,
+// issues de state.historique[].ordonnance — voir l'espace Pharmacien).
+function getServedMedicaments() {
+  const meds = [];
+  state.historique.forEach(h => {
+    (h.ordonnance || []).forEach(med => {
+      if (med.statut === "Servi" && med.servicePar) meds.push(med);
+    });
+  });
+  return meds;
+}
+
+const EMPTY_PHARMA_FILTERS = { from: "", to: "", pharmacie: "", statut: "" };
+
+function getPharmaSuiviPeriodFiltered(filters) {
+  const f = filters || EMPTY_PHARMA_FILTERS;
+  return getServedMedicaments().filter(med => {
+    if (f.pharmacie && med.servicePar !== f.pharmacie) return false;
+    if (f.from || f.to) {
+      const d = parseFRDate(med.dateService);
+      if (!d) return false;
+      if (f.from && d < new Date(f.from)) return false;
+      if (f.to && d > new Date(f.to + "T23:59:59")) return false;
+    }
+    return true;
+  });
+}
+
+// Agrège les prestations servies par pharmacie et applique les règlements
+// réels enregistrés (state.reglements) : reste à payer = montant total - montant payé.
+// Sans filtres (dashboard) : vue globale, toutes pharmacies, toute la période.
+function getPharmacieAggregates(filters) {
+  const f = filters || EMPTY_PHARMA_FILTERS;
+  const meds = getPharmaSuiviPeriodFiltered(f);
+  const byPharma = {};
+  meds.forEach(med => {
+    const key = med.servicePar;
+    if (!byPharma[key]) byPharma[key] = { pharmacie: key, count: 0, montantTotal: 0 };
+    byPharma[key].count++;
+    byPharma[key].montantTotal += num(med.partAssurance);
+  });
+
+  const paidByPharma = {};
+  state.reglements.forEach(r => { paidByPharma[r.pharmacie] = (paidByPharma[r.pharmacie] || 0) + num(r.montant); });
+
+  let list = Object.keys(byPharma).map(key => {
+    const p = byPharma[key];
+    const paye = paidByPharma[key] || 0;
+    const reste = Math.max(0, p.montantTotal - paye);
+    const statut = paye <= 0 ? "Impayé" : (reste <= 0 ? "Payé" : "Partiellement payé");
+    return { pharmacie: p.pharmacie, count: p.count, montantTotal: p.montantTotal, paye: paye, reste: reste, statut: statut };
+  });
+
+  if (f.statut) list = list.filter(p => p.statut === f.statut);
+  list.sort((a, b) => b.reste - a.reste);
+  return list;
+}
+
+// Nombre de pharmacies partenaires enregistrées (state.users, rôle Pharmacie) —
+// un décompte du réseau, indépendant de la période/du statut de règlement.
+function getPartnerPharmacyCount(filters) {
+  const f = filters || EMPTY_PHARMA_FILTERS;
+  const names = new Set(state.users.filter(u => u.role === "Pharmacie" && u.etablissement).map(u => u.etablissement));
+  if (f.pharmacie) return names.has(f.pharmacie) ? 1 : 0;
+  return names.size;
+}
+
+function monthLabel(b) {
+  const name = MOIS[b.month];
+  return name.charAt(0).toUpperCase() + name.slice(1) + " " + b.year;
+}
+
+function getPharmaEvolutionByMonth(meds) {
+  const buckets = {};
+  meds.forEach(med => {
+    const d = parseFRDate(med.dateService);
+    if (!d) return;
+    const key = d.getFullYear() + "-" + pad(d.getMonth() + 1);
+    if (!buckets[key]) buckets[key] = { key: key, year: d.getFullYear(), month: d.getMonth(), count: 0, montant: 0 };
+    buckets[key].count++;
+    buckets[key].montant += num(med.partAssurance);
+  });
+  return Object.values(buckets).sort((a, b) => a.key.localeCompare(b.key));
+}
+
+// Diagramme en barres générique (HTML/CSS, comme les marqueurs du graphique
+// d'évolution PEC) : items = [{ label, value, ... }], opts = { color, tooltip(it) }.
+function renderBarChart(containerId, tooltipId, items, opts) {
+  const wrap = document.getElementById(containerId);
+  if (!wrap) return;
+
+  if (!items.length) {
+    wrap.innerHTML = '<div class="empty-state" style="padding:30px 0">Aucune donnée pour ces filtres.</div>';
+    return;
+  }
+
+  const maxVal = Math.max(1, ...items.map(it => it.value));
+  wrap.innerHTML = '<div class="pharma-bar-wrap">' + items.map((it, i) => {
+    const pct = Math.max(2, Math.round((it.value / maxVal) * 100));
+    return '<div class="pharma-bar-col">' +
+      '<div class="pharma-bar" style="height:' + pct + '%;background:' + (opts.color || "var(--blue)") + '" data-idx="' + i + '"></div>' +
+      '<div class="pharma-bar-label">' + it.label + "</div>" +
+    "</div>";
+  }).join("") + "</div>";
+
+  const tooltip = document.getElementById(tooltipId);
+  if (!tooltip) return;
+  const outer = wrap.parentElement;
+  wrap.querySelectorAll(".pharma-bar").forEach(bar => {
+    const it = items[parseInt(bar.dataset.idx, 10)];
+    const show = evt => {
+      const outerRect = outer.getBoundingClientRect();
+      tooltip.style.left = (evt.clientX - outerRect.left) + "px";
+      tooltip.style.top = (bar.getBoundingClientRect().top - outerRect.top) + "px";
+      tooltip.innerHTML = opts.tooltip(it);
+      tooltip.hidden = false;
+    };
+    bar.addEventListener("mouseenter", show);
+    bar.addEventListener("mousemove", show);
+    bar.addEventListener("mouseleave", () => { tooltip.hidden = true; });
+  });
+}
+
+function renderPharmaSuiviTable(list) {
+  const body = document.getElementById("pharmaSuiviBody");
+  const empty = document.getElementById("pharmaSuiviEmpty");
+  body.innerHTML = "";
+  empty.hidden = list.length > 0;
+
+  list.forEach(p => {
+    const statutClass = p.statut === "Payé" ? "validee" : (p.statut === "Impayé" ? "inactif" : "attente");
+    const actionCell = p.reste > 0
+      ? '<button type="button" class="btn-secondary btn-sm" data-action="regler" data-pharmacie="' + p.pharmacie.replace(/"/g, "&quot;") + '">Enregistrer un paiement</button>'
+      : '<span class="rx-served-note">Soldé</span>';
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      "<td>" + p.pharmacie + "</td>" +
+      "<td>" + p.count + "</td>" +
+      "<td>" + fmtFCFA(p.montantTotal) + "</td>" +
+      "<td>" + fmtFCFA(p.paye) + "</td>" +
+      "<td>" + fmtFCFA(p.reste) + "</td>" +
+      '<td><span class="pill ' + statutClass + '">' + p.statut + "</span></td>" +
+      '<td class="row-actions">' + actionCell + "</td>";
+    body.appendChild(tr);
+  });
+
+  body.querySelectorAll('[data-action="regler"]').forEach(btn => {
+    btn.addEventListener("click", () => openReglementModal(btn.dataset.pharmacie));
+  });
+}
+
+// Dashboard : vue synthétique, toujours globale (aucun filtre) — cartes + graphiques.
+function renderPharmaDashboard() {
+  const aggregates = getPharmacieAggregates(null);
+  const totalPrestations = aggregates.reduce((a, p) => a + p.count, 0);
+  const totalMontant = aggregates.reduce((a, p) => a + p.montantTotal, 0);
+  const totalPaye = aggregates.reduce((a, p) => a + p.paye, 0);
+  const totalReste = aggregates.reduce((a, p) => a + p.reste, 0);
+
+  document.getElementById("pharmaStatCount").textContent = getPartnerPharmacyCount(null);
+  document.getElementById("pharmaStatPrestations").textContent = totalPrestations;
+  document.getElementById("pharmaStatMontant").textContent = fmtFCFA(totalMontant);
+  document.getElementById("pharmaStatPaye").textContent = fmtFCFA(totalPaye);
+  document.getElementById("pharmaStatReste").textContent = fmtFCFA(totalReste);
+
+  renderBarChart("pharmaBarChart", "pharmaBarTooltip",
+    aggregates.map(p => ({ label: p.pharmacie, value: p.reste })),
+    { color: "var(--blue)", tooltip: it => "<b>" + it.label + "</b> — " + fmtFCFA(it.value) + " restant dû" }
+  );
+
+  const monthBuckets = getPharmaEvolutionByMonth(getPharmaSuiviPeriodFiltered(null));
+  renderBarChart("pharmaEvoChart", "pharmaEvoTooltip",
+    monthBuckets.map(b => ({ label: monthLabel(b), value: b.count, montant: b.montant })),
+    { color: "var(--green)", tooltip: it => "<b>" + it.label + "</b> — " + it.value + " prestation(s)" + (it.montant ? " — " + fmtFCFA(it.montant) : "") }
+  );
+}
+
+// Page Rapports : vue détaillée, respecte state.pharmaSuiviFilters — tableau uniquement.
+function renderPharmaRapport() {
+  renderPharmaSuiviTable(getPharmacieAggregates(state.pharmaSuiviFilters));
+}
+
+function populatePharmaFilterOptions() {
+  const sel = document.getElementById("pharmaFilterPharmacie");
+  const current = sel.value;
+  const names = Array.from(new Set(state.users.filter(u => u.role === "Pharmacie" && u.etablissement).map(u => u.etablissement))).sort();
+  sel.innerHTML = '<option value="">Toutes les pharmacies</option>' + names.map(n => '<option value="' + n.replace(/"/g, "&quot;") + '">' + n + "</option>").join("");
+  sel.value = current;
+}
+
+["pharmaFilterFrom", "pharmaFilterTo", "pharmaFilterPharmacie", "pharmaFilterStatut"].forEach(id => {
+  document.getElementById(id).addEventListener("input", () => {
+    state.pharmaSuiviFilters = {
+      from: document.getElementById("pharmaFilterFrom").value,
+      to: document.getElementById("pharmaFilterTo").value,
+      pharmacie: document.getElementById("pharmaFilterPharmacie").value,
+      statut: document.getElementById("pharmaFilterStatut").value
+    };
+    renderPharmaRapport();
+  });
+});
+document.getElementById("pharmaFilterResetBtn").addEventListener("click", () => {
+  document.getElementById("pharmaFilterFrom").value = "";
+  document.getElementById("pharmaFilterTo").value = "";
+  document.getElementById("pharmaFilterPharmacie").value = "";
+  document.getElementById("pharmaFilterStatut").value = "";
+  state.pharmaSuiviFilters = { from: "", to: "", pharmacie: "", statut: "" };
+  renderPharmaRapport();
+});
+
+function openReglementModal(pharmacie) {
+  document.getElementById("reg-pharmacie").value = pharmacie;
+  document.getElementById("reg-montant").value = "";
+  document.getElementById("reg-note").value = "";
+  document.getElementById("reglementModal").hidden = false;
+}
+document.getElementById("closeReglementModal").addEventListener("click", () => { document.getElementById("reglementModal").hidden = true; });
+document.getElementById("cancelReglementModal").addEventListener("click", () => { document.getElementById("reglementModal").hidden = true; });
+document.getElementById("reglementForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const pharmacie = document.getElementById("reg-pharmacie").value;
+  const montant = num(document.getElementById("reg-montant").value);
+  if (!pharmacie || montant <= 0) return;
+  state.reglements.push({
+    id: Date.now(),
+    pharmacie: pharmacie,
+    montant: montant,
+    date: todayFR(),
+    note: document.getElementById("reg-note").value.trim()
+  });
+  saveJSON("pec_reglements", state.reglements);
+  document.getElementById("reglementModal").hidden = true;
+  renderPharmaRapport();
+});
+
+/* ---------------------------------------------------------------------- */
+/* Tableau de bord : suivi des prestations des hôpitaux partenaires        */
+/* ---------------------------------------------------------------------- */
+
+// Une feuille de soins validée = une prestation réellement réalisée par
+// l'hôpital (medecinEtab). Montant dû à l'hôpital = totalPart, c'est-à-dire
+// le champ déjà existant "Total à payer par la CNAMGS" (pas le montant total
+// facturé, qui inclut la part du patient).
+const EMPTY_HOPITAL_FILTERS = { from: "", to: "", hopital: "", type: "", statut: "" };
+
+function getHopitalSuiviFiltered(filters) {
+  const f = filters || EMPTY_HOPITAL_FILTERS;
+  return state.historique.filter(h => {
+    if (h.statut !== "Validée" || !h.medecinEtab) return false;
+    if (f.hopital && h.medecinEtab !== f.hopital) return false;
+    if (f.type && h.type !== f.type) return false;
+    if (f.from || f.to) {
+      const d = parseFRDate(h.date);
+      if (!d) return false;
+      if (f.from && d < new Date(f.from)) return false;
+      if (f.to && d > new Date(f.to + "T23:59:59")) return false;
+    }
+    return true;
+  });
+}
+
+// Sans filtres (dashboard) : vue globale, tous hôpitaux, toute la période.
+function getHopitalAggregates(filters) {
+  const f = filters || EMPTY_HOPITAL_FILTERS;
+  const entries = getHopitalSuiviFiltered(f);
+  const byHopital = {};
+  entries.forEach(h => {
+    const key = h.medecinEtab;
+    if (!byHopital[key]) byHopital[key] = { hopital: key, consult: 0, exam: 0, montantTotal: 0 };
+    if (h.type === "Consultation") byHopital[key].consult++;
+    else if (h.type === "Examen") byHopital[key].exam++;
+    byHopital[key].montantTotal += num(h.totalPart);
+  });
+
+  const paidByHopital = {};
+  state.reglementsHopitaux.forEach(r => { paidByHopital[r.hopital] = (paidByHopital[r.hopital] || 0) + num(r.montant); });
+
+  let list = Object.keys(byHopital).map(key => {
+    const h = byHopital[key];
+    const paye = paidByHopital[key] || 0;
+    const reste = Math.max(0, h.montantTotal - paye);
+    const statut = paye <= 0 ? "Impayé" : (reste <= 0 ? "Payé" : "Partiellement payé");
+    return { hopital: h.hopital, consult: h.consult, exam: h.exam, count: h.consult + h.exam, montantTotal: h.montantTotal, paye: paye, reste: reste, statut: statut };
+  });
+
+  if (f.statut) list = list.filter(p => p.statut === f.statut);
+  list.sort((a, b) => b.reste - a.reste);
+  return list;
+}
+
+// Nombre d'hôpitaux partenaires enregistrés (MEDECINS, champ etablissement) —
+// un décompte du réseau, indépendant de la période/du statut de règlement.
+function getPartnerHospitalCount(filters) {
+  const f = filters || EMPTY_HOPITAL_FILTERS;
+  const names = new Set(MEDECINS.map(m => m.etablissement).filter(Boolean));
+  if (f.hopital) return names.has(f.hopital) ? 1 : 0;
+  return names.size;
+}
+
+function getHopitalEvolutionByMonth(entries) {
+  const buckets = {};
+  entries.forEach(h => {
+    const d = parseFRDate(h.date);
+    if (!d) return;
+    const key = d.getFullYear() + "-" + pad(d.getMonth() + 1);
+    if (!buckets[key]) buckets[key] = { key: key, year: d.getFullYear(), month: d.getMonth(), consult: 0, exam: 0, montant: 0 };
+    if (h.type === "Consultation") buckets[key].consult++;
+    else if (h.type === "Examen") buckets[key].exam++;
+    buckets[key].montant += num(h.totalPart);
+  });
+  return Object.values(buckets).sort((a, b) => a.key.localeCompare(b.key));
+}
+
+// Diagramme en barres groupées (2 séries par catégorie, ex. Consultations /
+// Examens) : items = [{ label, a, b, montant }], opts = { tooltip(it) }.
+function renderGroupedBarChart(containerId, tooltipId, items, opts) {
+  const wrap = document.getElementById(containerId);
+  if (!wrap) return;
+
+  if (!items.length) {
+    wrap.innerHTML = '<div class="empty-state" style="padding:30px 0">Aucune donnée pour ces filtres.</div>';
+    return;
+  }
+
+  const maxVal = Math.max(1, ...items.map(it => Math.max(it.a, it.b)));
+  wrap.innerHTML = '<div class="pharma-bar-wrap">' + items.map((it, i) => {
+    const pctA = Math.max(2, Math.round((it.a / maxVal) * 100));
+    const pctB = Math.max(2, Math.round((it.b / maxVal) * 100));
+    return '<div class="pharma-bar-col">' +
+      '<div class="pharma-bar-pair" data-idx="' + i + '">' +
+        '<div class="pharma-bar" style="height:' + pctA + '%;background:var(--green)"></div>' +
+        '<div class="pharma-bar" style="height:' + pctB + '%;background:var(--blue)"></div>' +
+      "</div>" +
+      '<div class="pharma-bar-label">' + it.label + "</div>" +
+    "</div>";
+  }).join("") + "</div>";
+
+  const tooltip = document.getElementById(tooltipId);
+  if (!tooltip) return;
+  const outer = wrap.parentElement;
+  wrap.querySelectorAll(".pharma-bar-pair").forEach(pair => {
+    const it = items[parseInt(pair.dataset.idx, 10)];
+    const show = evt => {
+      const outerRect = outer.getBoundingClientRect();
+      tooltip.style.left = (evt.clientX - outerRect.left) + "px";
+      tooltip.style.top = (pair.getBoundingClientRect().top - outerRect.top) + "px";
+      tooltip.innerHTML = opts.tooltip(it);
+      tooltip.hidden = false;
+    };
+    pair.addEventListener("mouseenter", show);
+    pair.addEventListener("mousemove", show);
+    pair.addEventListener("mouseleave", () => { tooltip.hidden = true; });
+  });
+}
+
+function renderHopitalSuiviTable(list) {
+  const body = document.getElementById("hospSuiviBody");
+  const empty = document.getElementById("hospSuiviEmpty");
+  body.innerHTML = "";
+  empty.hidden = list.length > 0;
+
+  list.forEach(p => {
+    const statutClass = p.statut === "Payé" ? "validee" : (p.statut === "Impayé" ? "inactif" : "attente");
+    const actionCell = p.reste > 0
+      ? '<button type="button" class="btn-secondary btn-sm" data-action="regler-hopital" data-hopital="' + p.hopital.replace(/"/g, "&quot;") + '">Enregistrer un paiement</button>'
+      : '<span class="rx-served-note">Soldé</span>';
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      "<td>" + p.hopital + "</td>" +
+      "<td>" + p.consult + "</td>" +
+      "<td>" + p.exam + "</td>" +
+      "<td>" + p.count + "</td>" +
+      "<td>" + fmtFCFA(p.montantTotal) + "</td>" +
+      "<td>" + fmtFCFA(p.paye) + "</td>" +
+      "<td>" + fmtFCFA(p.reste) + "</td>" +
+      '<td><span class="pill ' + statutClass + '">' + p.statut + "</span></td>" +
+      '<td class="row-actions">' + actionCell + "</td>";
+    body.appendChild(tr);
+  });
+
+  body.querySelectorAll('[data-action="regler-hopital"]').forEach(btn => {
+    btn.addEventListener("click", () => openReglementHopitalModal(btn.dataset.hopital));
+  });
+}
+
+// Dashboard : vue synthétique, toujours globale (aucun filtre) — cartes + graphiques.
+function renderHopitalDashboard() {
+  const aggregates = getHopitalAggregates(null);
+  const totalConsult = aggregates.reduce((a, p) => a + p.consult, 0);
+  const totalExam = aggregates.reduce((a, p) => a + p.exam, 0);
+  const totalMontant = aggregates.reduce((a, p) => a + p.montantTotal, 0);
+  const totalPaye = aggregates.reduce((a, p) => a + p.paye, 0);
+  const totalReste = aggregates.reduce((a, p) => a + p.reste, 0);
+
+  document.getElementById("hospStatCount").textContent = getPartnerHospitalCount(null);
+  document.getElementById("hospStatPrestations").textContent = totalConsult + totalExam;
+  document.getElementById("hospStatConsult").textContent = totalConsult;
+  document.getElementById("hospStatExam").textContent = totalExam;
+  document.getElementById("hospStatMontant").textContent = fmtFCFA(totalMontant);
+  document.getElementById("hospStatPaye").textContent = fmtFCFA(totalPaye);
+  document.getElementById("hospStatReste").textContent = fmtFCFA(totalReste);
+
+  renderBarChart("hospResteChart", "hospResteTooltip",
+    aggregates.map(p => ({ label: p.hopital, value: p.reste })),
+    { color: "var(--blue)", tooltip: it => "<b>" + it.label + "</b> — " + fmtFCFA(it.value) + " restant dû" }
+  );
+
+  const monthBuckets = getHopitalEvolutionByMonth(getHopitalSuiviFiltered(null));
+  renderGroupedBarChart("hospEvoChart", "hospEvoTooltip",
+    monthBuckets.map(b => ({ label: monthLabel(b), a: b.consult, b: b.exam, montant: b.montant })),
+    { tooltip: it => "<b>" + it.label + "</b><br>Consultations : " + it.a + "<br>Examens : " + it.b + (it.montant ? "<br>Montant : " + fmtFCFA(it.montant) : "") }
+  );
+}
+
+// Page Rapports : vue détaillée, respecte state.hopitalSuiviFilters — tableau
+// + comparaison consultations/examens par hôpital.
+function renderHopitalRapport() {
+  const aggregates = getHopitalAggregates(state.hopitalSuiviFilters);
+  renderHopitalSuiviTable(aggregates);
+  renderGroupedBarChart("hospCompareChart", "hospCompareTooltip",
+    aggregates.map(p => ({ label: p.hopital, a: p.consult, b: p.exam })),
+    { tooltip: it => "<b>" + it.label + "</b><br>Consultations : " + it.a + "<br>Examens : " + it.b + "<br>Total : " + (it.a + it.b) + " prestation(s)" }
+  );
+}
+
+function populateHospFilterOptions() {
+  const sel = document.getElementById("hospFilterHopital");
+  const current = sel.value;
+  const names = Array.from(new Set(MEDECINS.map(m => m.etablissement).filter(Boolean))).sort();
+  sel.innerHTML = '<option value="">Tous les hôpitaux</option>' + names.map(n => '<option value="' + n.replace(/"/g, "&quot;") + '">' + n + "</option>").join("");
+  sel.value = current;
+}
+
+["hospFilterFrom", "hospFilterTo", "hospFilterHopital", "hospFilterType", "hospFilterStatut"].forEach(id => {
+  document.getElementById(id).addEventListener("input", () => {
+    state.hopitalSuiviFilters = {
+      from: document.getElementById("hospFilterFrom").value,
+      to: document.getElementById("hospFilterTo").value,
+      hopital: document.getElementById("hospFilterHopital").value,
+      type: document.getElementById("hospFilterType").value,
+      statut: document.getElementById("hospFilterStatut").value
+    };
+    renderHopitalRapport();
+  });
+});
+document.getElementById("hospFilterResetBtn").addEventListener("click", () => {
+  document.getElementById("hospFilterFrom").value = "";
+  document.getElementById("hospFilterTo").value = "";
+  document.getElementById("hospFilterHopital").value = "";
+  document.getElementById("hospFilterType").value = "";
+  document.getElementById("hospFilterStatut").value = "";
+  state.hopitalSuiviFilters = { from: "", to: "", hopital: "", type: "", statut: "" };
+  renderHopitalRapport();
+});
+
+function openReglementHopitalModal(hopital) {
+  document.getElementById("regh-hopital").value = hopital;
+  document.getElementById("regh-montant").value = "";
+  document.getElementById("regh-note").value = "";
+  document.getElementById("reglementHopitalModal").hidden = false;
+}
+document.getElementById("closeReglementHopitalModal").addEventListener("click", () => { document.getElementById("reglementHopitalModal").hidden = true; });
+document.getElementById("cancelReglementHopitalModal").addEventListener("click", () => { document.getElementById("reglementHopitalModal").hidden = true; });
+document.getElementById("reglementHopitalForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const hopital = document.getElementById("regh-hopital").value;
+  const montant = num(document.getElementById("regh-montant").value);
+  if (!hopital || montant <= 0) return;
+  state.reglementsHopitaux.push({
+    id: Date.now(),
+    hopital: hopital,
+    montant: montant,
+    date: todayFR(),
+    note: document.getElementById("regh-note").value.trim()
+  });
+  saveJSON("pec_reglements_hopitaux", state.reglementsHopitaux);
+  document.getElementById("reglementHopitalModal").hidden = true;
+  renderHopitalRapport();
+});
+
+/* ---------------------------------------------------------------------- */
+/* Gestion des permissions (Super Admin) : matrice rôle → vues autorisées  */
+/* ---------------------------------------------------------------------- */
+
+function landingOptionsHtml(views) {
+  return views.map(v => {
+    const label = (PERMISSION_VIEWS.find(pv => pv.key === v) || {}).label || v;
+    return '<option value="' + v + '">' + label + "</option>";
+  }).join("");
+}
+
+function renderPermissions() {
+  const body = document.getElementById("permissionsBody");
+  body.innerHTML = "";
+
+  Object.keys(state.roleAccess).forEach(role => {
+    const tr = document.createElement("tr");
+
+    if (role === "Super Admin") {
+      tr.innerHTML =
+        "<td><b>" + role + "</b></td>" +
+        PERMISSION_VIEWS.map(() => '<td style="text-align:center"><input type="checkbox" checked disabled /></td>').join("") +
+        '<td><span class="rx-served-note">Tous les accès (non modifiable)</span></td>';
+      body.appendChild(tr);
+      return;
+    }
+
+    const access = state.roleAccess[role];
+    let tds = "<td><b>" + role + "</b></td>";
+    PERMISSION_VIEWS.forEach(v => {
+      const checked = access.views.includes(v.key);
+      tds += '<td style="text-align:center"><input type="checkbox" data-role="' + role + '" data-view="' + v.key + '"' + (checked ? " checked" : "") + " /></td>";
+    });
+    tds += '<td><select class="permissions-landing" data-role="' + role + '">' + landingOptionsHtml(access.views) + "</select></td>";
+    tr.innerHTML = tds;
+    body.appendChild(tr);
+
+    const select = tr.querySelector(".permissions-landing");
+    select.value = access.views.includes(access.landing) ? access.landing : (access.views[0] || "");
+    select.disabled = access.views.length === 0;
+  });
+
+  body.querySelectorAll('input[type="checkbox"][data-role]').forEach(cb => {
+    cb.addEventListener("change", () => {
+      const access = state.roleAccess[cb.dataset.role];
+      const view = cb.dataset.view;
+      if (cb.checked) {
+        if (!access.views.includes(view)) access.views.push(view);
+      } else {
+        access.views = access.views.filter(v => v !== view);
+        if (access.landing === view) access.landing = access.views[0] || "";
+      }
+      const select = cb.closest("tr").querySelector(".permissions-landing");
+      select.innerHTML = landingOptionsHtml(access.views);
+      select.value = access.views.includes(access.landing) ? access.landing : (access.views[0] || "");
+      select.disabled = access.views.length === 0;
+    });
+  });
+
+  body.querySelectorAll("select.permissions-landing").forEach(sel => {
+    sel.addEventListener("change", () => {
+      state.roleAccess[sel.dataset.role].landing = sel.value;
+    });
+  });
+}
+
+document.getElementById("savePermissionsBtn").addEventListener("click", function () {
+  const emptyRole = Object.keys(state.roleAccess).find(role => role !== "Super Admin" && state.roleAccess[role].views.length === 0);
+  if (emptyRole) {
+    alert("Le rôle « " + emptyRole + " » n'a plus aucune vue autorisée. Cochez au moins une vue avant d'enregistrer.");
+    return;
+  }
+  saveJSON("pec_role_access", state.roleAccess);
+  applyRoleAccess(state.currentUser);
+  const label = this.textContent;
+  this.textContent = "Enregistré";
+  setTimeout(() => { this.textContent = label; }, 1500);
+});
+
+document.getElementById("resetPermissionsBtn").addEventListener("click", () => {
+  if (!confirm("Réinitialiser toutes les permissions aux valeurs par défaut ?")) return;
+  state.roleAccess = JSON.parse(JSON.stringify(ROLE_ACCESS_DEFAULT));
+  saveJSON("pec_role_access", state.roleAccess);
+  applyRoleAccess(state.currentUser);
+  renderPermissions();
+});
+
+/* ---------------------------------------------------------------------- */
 /* Initialisation                                                          */
 /* ---------------------------------------------------------------------- */
 
 updateClock();
+populatePharmaFilterOptions();
+populateHospFilterOptions();
 buildLoginParticles();
 buildLoginDna();
