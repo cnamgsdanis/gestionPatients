@@ -539,7 +539,8 @@
 
       <!-- ---------------- FEUILLE DE SOINS (consultation / examen) ---------------- -->
       <section class="view" id="view-soins" hidden>
-        <div class="soins-wrap">
+        <div class="soins-flip-stage">
+        <div class="soins-wrap" id="soinsWrap">
           <div class="soins-top">
             <div class="soins-logo"><img src="CNAMGS.png" alt="Logo CNAMGS" /></div>
  
@@ -577,19 +578,11 @@
                   <div class="f-label">Date de naissance</div>
                   <input type="text" id="p-dateNaissance" disabled />
                 </div>
-                <div class="f-field">
-                  <div class="f-label">Nom et prénom de l'assuré <span style="font-weight:400;font-size:10.5px">(si le patient n'est pas l'assuré)</span></div>
-                  <input type="text" id="p-assureNom" disabled />
-                </div>
               </div>
               <div>
                 <div class="f-field">
                   <div class="f-label">Matricule du patient</div>
                   <input type="text" id="p-matriculePatient" disabled />
-                </div>
-                <div class="f-field">
-                  <div class="f-label">Matricule de l'assuré <span style="font-weight:400;font-size:10.5px">(si le patient n'est pas l'assuré)</span></div>
-                  <input type="text" id="p-matriculeAssure" disabled />
                 </div>
                 <div class="f-field">
                   <div class="f-label">Situation du patient</div>
@@ -602,7 +595,7 @@
             </div>
           </div>
  
-          <div class="section-head">Praticien <span class="lock-note">Pré-rempli via le médecin sélectionné — non modifiable</span></div>
+          <div class="section-head"><span id="prSectionTitle">Praticien</span> <span class="lock-note">Pré-rempli via le médecin sélectionné — non modifiable</span></div>
           <div class="section-body locked">
             <div class="grid2">
               <div>
@@ -697,6 +690,106 @@
             </div>
           </div>
 
+          <div id="examenSection" hidden>
+            <div id="retourConsultationSection" hidden style="padding:12px 16px">
+              <div class="exam-switch-card back" id="retourConsultationCard">
+                <div class="exam-switch-icon">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 3v6a4 4 0 0 0 8 0V3"/><path d="M10 15v2a4 4 0 0 0 8 0v-2"/><circle cx="19" cy="8" r="1.6"/></svg>
+                </div>
+                <div class="exam-switch-text">
+                  <div class="exam-switch-title">Bon d'examen recommandé</div>
+                  <div class="exam-switch-sub" id="retourConsultationSub">Lié à une consultation</div>
+                </div>
+                <button type="button" class="exam-switch-btn back" id="retourConsultationBtn" data-target-id="">
+                  <svg class="arrow back" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+                  <span>Retour à la consultation</span>
+                </button>
+              </div>
+            </div>
+            <div class="section-head">Prestations et praticien réalisant l'examen <span class="lock-note" id="examPrestaHint">À compléter par le médecin</span></div>
+            <div class="section-body">
+              <div class="presta-top">
+                <div class="grp">Date et heure de la prestation <input type="text" id="exam-presta-date" placeholder="JJ/MM/AAAA" /></div>
+                <div class="grp">Nature de la prestation
+                  <label style="font-weight:400"><input type="radio" name="examNature" id="exam-nature-radiologie" value="Radiologie" /> Radiologie</label>
+                  <label style="font-weight:400"><input type="radio" name="examNature" id="exam-nature-biologie" value="Biologie" /> Biologie</label>
+                  <label style="font-weight:400"><input type="radio" name="examNature" id="exam-nature-autre" value="Autre" /> Autre</label>
+                </div>
+                <div class="grp">Situation du patient
+                  <label style="font-weight:400"><input type="radio" name="examSituation" id="exam-situation-hospitalise" value="Hospitalisé" /> Hospitalisé</label>
+                  <label style="font-weight:400"><input type="radio" name="examSituation" id="exam-situation-externe" value="Soins Externes" /> Soins Externes</label>
+                </div>
+              </div>
+              <div class="grid2">
+                <div>
+                  <div class="f-field">
+                    <div class="f-label">Nom de l'établissement réalisant l'examen</div>
+                    <input type="text" id="exam-etablissement" />
+                  </div>
+                </div>
+                <div>
+                  <div class="f-field">
+                    <div class="f-label">Code du praticien réalisant l'examen</div>
+                    <input type="text" id="exam-code-praticien" />
+                  </div>
+                  <div class="f-field">
+                    <div class="f-label">Code de l'établissement</div>
+                    <input type="text" id="exam-code-etablissement" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="section-head">Examens</div>
+            <div class="section-body">
+              <table class="presta">
+                <thead>
+                  <tr>
+                    <th style="width:34%">Désignation de l'examen</th>
+                    <th style="width:22%">Cotation</th>
+                    <th style="width:22%">Ticket modérateur</th>
+                    <th>Montant CNAMGS</th>
+                  </tr>
+                </thead>
+                <tbody id="examenBody"></tbody>
+              </table>
+
+              <div class="row-btns">
+                <button type="button" id="addExamRowBtn">+ Ajouter un examen</button>
+                <button type="button" id="removeExamRowBtn">− Supprimer le dernier</button>
+              </div>
+
+              <div class="f-field" style="margin-top:6px">
+                <div class="f-label">Bilan / Motif de l'examen</div>
+                <textarea id="exam-motif" rows="2"></textarea>
+              </div>
+
+              <div class="totals">
+                <div class="t-row"><span>Total établissement réalisant l'examen</span><input type="text" id="examTotalCotation" readonly value="0" /></div>
+                <div class="t-row"><span>Total ticket modérateur assuré</span><input type="text" id="examTotalTm" readonly value="0" /></div>
+                <div class="t-row"><span>Total à la charge de la CNAMGS</span><input type="text" id="examTotalPart" readonly value="0" /></div>
+              </div>
+            </div>
+
+            <div class="section-head">Examen réalisé par un établissement public <span class="lock-note">Obligatoire pour les GEF, même en cas d'orientation vers un établissement privé</span></div>
+            <div class="section-body">
+              <div class="grid2">
+                <div>
+                  <div class="f-field">
+                    <div class="f-label">Signature et cachet du praticien (obligatoire)</div>
+                    <textarea id="exam-pub-signature" rows="2"></textarea>
+                  </div>
+                </div>
+                <div>
+                  <div class="f-field">
+                    <div class="f-label">Signature et cachet du radiologue ou du biologiste ou de tout autre spécialiste privé réalisant l'examen</div>
+                    <textarea id="exam-specialiste-signature" rows="2"></textarea>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div id="ordonnanceSection">
             <div class="section-head">Ordonnance <span class="lock-note" id="ordonnanceHint">À compléter par le médecin</span></div>
             <div class="section-body">
@@ -718,10 +811,28 @@
             </div>
           </div>
 
+          <div id="recommandExamenSection" hidden style="padding:12px 16px">
+            <div class="exam-switch-card" id="examSwitchCard">
+              <div class="exam-switch-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 2h6"/><path d="M10 2v6.5L4.5 18a2 2 0 0 0 1.8 3h11.4a2 2 0 0 0 1.8-3L14 8.5V2"/><path d="M7.5 14h9"/></svg>
+              </div>
+              <div class="exam-switch-text">
+                <div class="exam-switch-title">Cette consultation nécessite un examen ?</div>
+                <div class="exam-switch-sub" id="examSwitchSub">Génère un bon d'examen lié, pré-rempli avec les informations du patient.</div>
+              </div>
+              <button type="button" class="exam-switch-btn" id="examSwitchBtn" data-mode="create" data-target-id="">
+                <span id="examSwitchBtnLabel">Créer un bon d'examen</span>
+                <svg class="arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+              </button>
+            </div>
+            <button type="button" class="link-btn exam-switch-add" id="examSwitchAddAnother" hidden>+ Créer un autre bon d'examen</button>
+          </div>
+
           <div class="soins-actions">
             <button type="button" class="btn-secondary" id="cancelSoinsBtn">Annuler</button>
             <button type="button" class="btn-primary" id="saveSoinsBtn">Envoyer au médecin</button>
           </div>
+        </div>
         </div>
       </section>
  

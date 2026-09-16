@@ -9,6 +9,7 @@ const state = {
   currentTM: null,        // 'Plein' | 'Plein (ALD)' | 'Exonéré'
   currentMedecin: null,   // objet MEDECINS
   rows: [],
+  examRows: [],           // lignes du tableau "Examens" (bon d'examen)
   soinsMode: "agent",     // 'agent' (création, envoi au médecin) | 'medecin' (validation)
   editingEntryId: null,   // id de l'entrée historique en cours de validation par le médecin
   prestaLocked: true,     // la section Prestations n'est éditable qu'en mode 'medecin'
@@ -31,6 +32,21 @@ state.historique.forEach((h, i) => {
   if (!h.id) { h.id = Date.now() + i; historiqueMigrated = true; }
   if (!h.statut) { h.statut = "Validée"; historiqueMigrated = true; }
   if (!h.ordonnance) { h.ordonnance = []; historiqueMigrated = true; }
+  // Migration douce : avant l'ajout du bon d'examen, les feuilles de type "Examen"
+  // réutilisaient le tableau générique "prestations" — on les bascule vers "examens".
+  if (h.type === "Examen" && !h.examens) {
+    h.examens = (h.prestations || []).map(r => ({ designation: r.designation, cotation: r.montant, tm: r.tm, part: r.part }));
+    h.examNature = h.examNature || "";
+    h.examSituation = h.examSituation || "";
+    h.examCodePraticien = h.examCodePraticien || "";
+    h.examEtablissement = h.examEtablissement || "";
+    h.examCodeEtablissement = h.examCodeEtablissement || "";
+    h.examDate = h.examDate || h.prestaDate || "";
+    h.examMotif = h.examMotif || "";
+    h.examPubSignature = h.examPubSignature || "";
+    h.examSpecialisteSignature = h.examSpecialisteSignature || "";
+    historiqueMigrated = true;
+  }
 });
 if (historiqueMigrated) saveJSON("pec_historique", state.historique);
 
@@ -704,6 +720,18 @@ function openSoins(type) {
   state.editingEntryId = null;
   state.currentType = type;
   state.rows = [emptyRow()];
+  state.examRows = [emptyExamRow()];
+
+  const isExam = type === "Examen";
+  document.getElementById("soinsWrap").classList.toggle("examen-theme", isExam);
+  document.getElementById("prSectionTitle").textContent = isExam ? "Praticien prescripteur" : "Praticien";
+  document.getElementById("prestationsSection").hidden = isExam;
+  document.getElementById("ordonnanceSection").hidden = isExam;
+  document.getElementById("examenSection").hidden = !isExam;
+
+  // La bascule Consultation ⇄ Examen n'a de sens que côté médecin, en validation.
+  document.getElementById("recommandExamenSection").hidden = true;
+  document.getElementById("retourConsultationSection").hidden = true;
 
   const assure = state.currentAssure;
   const patient = state.currentPatient;
@@ -724,9 +752,6 @@ function openSoins(type) {
   document.getElementById("p-matriculePatient").value = patient.matricule;
 
   const isSelf = patient.estAssure;
-  document.getElementById("p-assureNom").value = isSelf ? "" : (assure.prenom + " " + assure.nom);
-  document.getElementById("p-matriculeAssure").value = isSelf ? "" : assure.matricule;
-
   document.getElementById("chk-assure").checked = isSelf;
   document.getElementById("chk-ayant").checked = !isSelf;
   document.getElementById("chk-assure-wrap").classList.toggle("on", isSelf);
@@ -771,18 +796,42 @@ function openSoins(type) {
   document.getElementById("removeOrdoRowBtn").disabled = true;
   state.ordoRows = [emptyOrdoRow()];
 
+  // Le bon d'examen (prestations + examens + volet établissement public) est lui aussi
+  // du ressort du médecin : verrouillé à cette étape, comme Prestations/Ordonnance ci-dessus.
+  document.getElementById("examPrestaHint").hidden = false;
+  document.getElementById("exam-presta-date").value = todayFR();
+  document.getElementById("exam-presta-date").disabled = true;
+  document.getElementById("exam-etablissement").value = "";
+  document.getElementById("exam-etablissement").disabled = true;
+  document.getElementById("exam-code-praticien").value = "";
+  document.getElementById("exam-code-praticien").disabled = true;
+  document.getElementById("exam-code-etablissement").value = "";
+  document.getElementById("exam-code-etablissement").disabled = true;
+  document.getElementById("exam-motif").value = "";
+  document.getElementById("exam-motif").disabled = true;
+  document.getElementById("exam-pub-signature").value = "";
+  document.getElementById("exam-specialiste-signature").value = "";
+  [
+    "exam-nature-radiologie", "exam-nature-biologie", "exam-nature-autre",
+    "exam-situation-hospitalise", "exam-situation-externe"
+  ].forEach(id => { document.getElementById(id).disabled = true; });
+  document.getElementById("addExamRowBtn").disabled = true;
+  document.getElementById("removeExamRowBtn").disabled = true;
+
   document.getElementById("saveSoinsBtn").textContent = "Envoyer au médecin";
 
   drawPseudoQR(document.getElementById("qrCanvas"), patient.matricule + "-" + numero);
 
   renderRows();
   renderOrdoRows();
+  renderExamRows();
   goToView("soins");
 }
 
-function openSoinsForValidation(entryId) {
+function openSoinsForValidation(entryId, opts) {
   const entry = state.historique.find(h => h.id === entryId);
   if (!entry) return;
+  const skipNav = !!(opts && opts.skipNav);
   state.soinsMode = "medecin";
   state.editingEntryId = entryId;
   state.currentType = entry.type;
@@ -799,14 +848,21 @@ function openSoinsForValidation(entryId) {
   document.getElementById("p-patientNom").value = entry.patientNom || "";
   document.getElementById("p-dateNaissance").value = entry.dateNaissance || "";
   document.getElementById("p-matriculePatient").value = entry.matricule || "";
-  document.getElementById("p-assureNom").value = entry.assureNom || "";
-  document.getElementById("p-matriculeAssure").value = entry.matriculeAssure || "";
 
   const isSelf = !!entry.estAssure;
   document.getElementById("chk-assure").checked = isSelf;
   document.getElementById("chk-ayant").checked = !isSelf;
   document.getElementById("chk-assure-wrap").classList.toggle("on", isSelf);
   document.getElementById("chk-ayant-wrap").classList.toggle("on", !isSelf);
+
+  const isExam = entry.type === "Examen";
+  document.getElementById("soinsWrap").classList.toggle("examen-theme", isExam);
+  document.getElementById("prSectionTitle").textContent = isExam ? "Praticien prescripteur" : "Praticien";
+  document.getElementById("prestationsSection").hidden = isExam;
+  document.getElementById("ordonnanceSection").hidden = isExam;
+  document.getElementById("examenSection").hidden = !isExam;
+
+  updateExamSwitchUI(entry);
 
   document.getElementById("pr-nom").value = entry.medecin || "";
   document.getElementById("pr-etab").value = entry.medecinEtab || "";
@@ -854,6 +910,36 @@ function openSoinsForValidation(entryId) {
   document.getElementById("removeOrdoRowBtn").disabled = false;
   state.ordoRows = (entry.ordonnance && entry.ordonnance.length) ? entry.ordonnance.map(r => Object.assign({}, r)) : [emptyOrdoRow()];
 
+  // Le bon d'examen est lui aussi déverrouillé : c'est le travail du médecin.
+  if (isExam) {
+    document.getElementById("examPrestaHint").hidden = true;
+    document.getElementById("exam-presta-date").value = entry.examDate || todayFR();
+    document.getElementById("exam-presta-date").disabled = false;
+    document.getElementById("exam-etablissement").value = entry.examEtablissement || "";
+    document.getElementById("exam-etablissement").disabled = false;
+    document.getElementById("exam-code-praticien").value = entry.examCodePraticien || "";
+    document.getElementById("exam-code-praticien").disabled = false;
+    document.getElementById("exam-code-etablissement").value = entry.examCodeEtablissement || "";
+    document.getElementById("exam-code-etablissement").disabled = false;
+    document.getElementById("exam-motif").value = entry.examMotif || "";
+    document.getElementById("exam-motif").disabled = false;
+    document.getElementById("exam-pub-signature").value = entry.examPubSignature || "";
+    document.getElementById("exam-specialiste-signature").value = entry.examSpecialisteSignature || "";
+
+    document.getElementById("exam-nature-radiologie").checked = entry.examNature === "Radiologie";
+    document.getElementById("exam-nature-biologie").checked = entry.examNature === "Biologie";
+    document.getElementById("exam-nature-autre").checked = entry.examNature === "Autre";
+    document.getElementById("exam-situation-hospitalise").checked = entry.examSituation === "Hospitalisé";
+    document.getElementById("exam-situation-externe").checked = entry.examSituation === "Soins Externes";
+    [
+      "exam-nature-radiologie", "exam-nature-biologie", "exam-nature-autre",
+      "exam-situation-hospitalise", "exam-situation-externe"
+    ].forEach(id => { document.getElementById(id).disabled = false; });
+    document.getElementById("addExamRowBtn").disabled = false;
+    document.getElementById("removeExamRowBtn").disabled = false;
+  }
+  state.examRows = (entry.examens && entry.examens.length) ? entry.examens.map(r => Object.assign({}, r)) : [emptyExamRow()];
+
   document.getElementById("saveSoinsBtn").textContent = "Valider et enregistrer";
 
   state.rows = (entry.prestations && entry.prestations.length) ? entry.prestations.map(r => Object.assign({}, r)) : [emptyRow()];
@@ -862,13 +948,103 @@ function openSoinsForValidation(entryId) {
 
   renderRows();
   renderOrdoRows();
-  goToView("soins");
+  renderExamRows();
+  if (!skipNav) goToView("soins");
 }
 
 document.getElementById("btnConsultation").addEventListener("click", () => openSoins("Consultation"));
 document.getElementById("btnExamen").addEventListener("click", () => openSoins("Examen"));
 document.getElementById("cancelSoinsBtn").addEventListener("click", () => {
   goToView(state.soinsMode === "medecin" ? "medecin" : "nouvelle-pec");
+});
+
+/* ---- Bascule animée Consultation ⇄ Examen (bon d'examen lié) ------------ */
+
+// Met à jour les deux cartes de bascule (vers l'examen depuis une Consultation,
+// vers la consultation depuis un Examen) selon la feuille actuellement affichée.
+function updateExamSwitchUI(entry) {
+  const isExam = entry.type === "Examen";
+  const forwardBox = document.getElementById("recommandExamenSection");
+  const backBox = document.getElementById("retourConsultationSection");
+
+  forwardBox.hidden = isExam;
+  if (!isExam) {
+    const linked = (entry.linkedExamenIds || [])
+      .map(id => state.historique.find(h => h.id === id))
+      .filter(Boolean);
+    const last = linked[linked.length - 1];
+    const btn = document.getElementById("examSwitchBtn");
+    const addAnother = document.getElementById("examSwitchAddAnother");
+    if (last) {
+      document.getElementById("examSwitchBtnLabel").textContent = "Voir le bon d'examen " + last.numero;
+      document.getElementById("examSwitchSub").textContent = "Un examen a déjà été recommandé pour cette consultation.";
+      btn.dataset.mode = "goto";
+      btn.dataset.targetId = String(last.id);
+      addAnother.hidden = false;
+    } else {
+      document.getElementById("examSwitchBtnLabel").textContent = "Créer un bon d'examen";
+      document.getElementById("examSwitchSub").textContent = "Génère un bon d'examen lié, pré-rempli avec les informations du patient.";
+      btn.dataset.mode = "create";
+      btn.dataset.targetId = "";
+      addAnother.hidden = true;
+    }
+  }
+
+  const src = isExam && entry.linkedConsultationId
+    ? state.historique.find(h => h.id === entry.linkedConsultationId)
+    : null;
+  backBox.hidden = !src;
+  if (src) {
+    document.getElementById("retourConsultationSub").textContent = "Lié à la consultation " + src.numero;
+    document.getElementById("retourConsultationBtn").dataset.targetId = String(src.id);
+  }
+}
+
+// Anime la carte (léger flip 3D) puis recharge la feuille demandée à la place,
+// sans quitter la vue — donne l'impression de "retourner" la feuille.
+// La saisie en cours sur la feuille quittée est d'abord sauvegardée (brouillon,
+// statut inchangé) pour ne rien perdre en allant-venant entre les deux bons.
+function flipSoinsTo(entryId) {
+  const current = state.historique.find(h => h.id === state.editingEntryId);
+  if (current) {
+    captureFormIntoEntry(current);
+    saveJSON("pec_historique", state.historique);
+  }
+
+  const wrap = document.getElementById("soinsWrap");
+  wrap.classList.add("flip-leave");
+  window.setTimeout(() => {
+    openSoinsForValidation(entryId, { skipNav: true });
+    wrap.classList.remove("flip-leave");
+    wrap.classList.add("flip-enter");
+    void wrap.offsetWidth; // force le reflow pour que la transition rejoue à la sortie de la classe
+    wrap.classList.remove("flip-enter");
+  }, 260);
+}
+
+function createLinkedExamAndFlip() {
+  const consultEntry = state.historique.find(h => h.id === state.editingEntryId);
+  if (!consultEntry) return;
+  const examEntry = examEntryFromConsultation(consultEntry);
+  consultEntry.linkedExamenIds = (consultEntry.linkedExamenIds || []).concat([examEntry.id]);
+  state.historique.unshift(examEntry);
+  saveJSON("pec_historique", state.historique);
+  refreshPendingBadge();
+  flipSoinsTo(examEntry.id);
+}
+
+document.getElementById("examSwitchBtn").addEventListener("click", () => {
+  const btn = document.getElementById("examSwitchBtn");
+  if (btn.dataset.mode === "goto" && btn.dataset.targetId) {
+    flipSoinsTo(parseInt(btn.dataset.targetId, 10));
+  } else {
+    createLinkedExamAndFlip();
+  }
+});
+document.getElementById("examSwitchAddAnother").addEventListener("click", createLinkedExamAndFlip);
+document.getElementById("retourConsultationBtn").addEventListener("click", () => {
+  const targetId = document.getElementById("retourConsultationBtn").dataset.targetId;
+  if (targetId) flipSoinsTo(parseInt(targetId, 10));
 });
 
 function emptyRow() { return { designation: "", qte: "", montant: "", tm: "", part: "", valide: "" }; }
@@ -915,6 +1091,47 @@ document.getElementById("removeRowBtn").addEventListener("click", () => {
   if (state.prestaLocked) return;
   if (state.rows.length > 1) state.rows.pop();
   renderRows();
+});
+
+/* ---- Examens (tableau du bon d'examen, rempli par le médecin) ---------- */
+
+function emptyExamRow() { return { designation: "", cotation: "", tm: "", part: "" }; }
+
+function renderExamRows() {
+  const body = document.getElementById("examenBody");
+  if (!body) return;
+  body.innerHTML = "";
+  const locked = !!state.prestaLocked;
+  state.examRows.forEach((row, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      cell("designation", row.designation, "text", locked) +
+      cell("cotation", row.cotation, "num", locked) +
+      cell("tm", row.tm, "num", locked) +
+      cell("part", row.part, "num", locked);
+    body.appendChild(tr);
+
+    if (!locked) {
+      ["designation", "cotation", "tm", "part"].forEach(key => {
+        tr.querySelector('[data-key="' + key + '"]').addEventListener("input", e => {
+          state.examRows[i][key] = e.target.value;
+          updateExamTotals();
+        });
+      });
+    }
+  });
+  updateExamTotals();
+}
+
+document.getElementById("addExamRowBtn").addEventListener("click", () => {
+  if (state.prestaLocked) return;
+  state.examRows.push(emptyExamRow());
+  renderExamRows();
+});
+document.getElementById("removeExamRowBtn").addEventListener("click", () => {
+  if (state.prestaLocked) return;
+  if (state.examRows.length > 1) state.examRows.pop();
+  renderExamRows();
 });
 
 /* ---- Ordonnance (médicaments prescrits par le médecin) ----------------- */
@@ -972,6 +1189,12 @@ function updateTotals() {
   document.getElementById("totalTm").value = fmt(sum("tm"));
   document.getElementById("totalPart").value = fmt(sum("part"));
 }
+function updateExamTotals() {
+  const sum = key => state.examRows.reduce((a, r) => a + num(r[key]), 0);
+  document.getElementById("examTotalCotation").value = fmt(sum("cotation"));
+  document.getElementById("examTotalTm").value = fmt(sum("tm"));
+  document.getElementById("examTotalPart").value = fmt(sum("part"));
+}
 
 function submitAgentFeuille() {
   const medecin = state.currentMedecin;
@@ -983,8 +1206,6 @@ function submitAgentFeuille() {
     patientNom: document.getElementById("p-patientNom").value,
     dateNaissance: document.getElementById("p-dateNaissance").value,
     matricule: document.getElementById("p-matriculePatient").value,
-    assureNom: document.getElementById("p-assureNom").value,
-    matriculeAssure: document.getElementById("p-matriculeAssure").value,
     estAssure: document.getElementById("chk-assure").checked,
     fonds: document.getElementById("soinsFonds").value,
     ticketModerateur: state.currentTM,
@@ -1000,6 +1221,16 @@ function submitAgentFeuille() {
     prestaDate: "",
     prestaDomicile: "",
     prestaCode: "",
+    examens: [],
+    examNature: "",
+    examSituation: "",
+    examCodePraticien: "",
+    examEtablissement: "",
+    examCodeEtablissement: "",
+    examDate: "",
+    examMotif: "",
+    examPubSignature: "",
+    examSpecialisteSignature: "",
     totalMontant: "0",
     totalTm: "0",
     totalPart: "0"
@@ -1010,20 +1241,90 @@ function submitAgentFeuille() {
   goToView("dashboard");
 }
 
+// Bon d'examen créé par le médecin depuis la validation d'une Consultation
+// (bouton "Créer un bon d'examen") — reprend les données partagées du
+// patient/praticien, prêt à être complété par un médecin.
+function examEntryFromConsultation(consultEntry) {
+  return {
+    id: Date.now() + 1,
+    numero: nextFeuilleNum(),
+    date: todayFR(),
+    type: "Examen",
+    patientNom: consultEntry.patientNom,
+    dateNaissance: consultEntry.dateNaissance,
+    matricule: consultEntry.matricule,
+    estAssure: consultEntry.estAssure,
+    fonds: consultEntry.fonds,
+    ticketModerateur: consultEntry.ticketModerateur,
+    medecin: consultEntry.medecin,
+    medecinEtab: consultEntry.medecinEtab,
+    medecinCode: consultEntry.medecinCode,
+    medecinType: consultEntry.medecinType,
+    accidentTiers: consultEntry.accidentTiers,
+    grossesse: consultEntry.grossesse,
+    statut: "En attente",
+    prestations: [],
+    ordonnance: [],
+    prestaDate: "",
+    prestaDomicile: "",
+    prestaCode: "",
+    examens: [],
+    examNature: "",
+    examSituation: "",
+    examCodePraticien: "",
+    examEtablissement: "",
+    examCodeEtablissement: "",
+    examDate: "",
+    examMotif: "",
+    examPubSignature: "",
+    examSpecialisteSignature: "",
+    totalMontant: "0",
+    totalTm: "0",
+    totalPart: "0",
+    signature: "",
+    linkedConsultationId: consultEntry.id
+  };
+}
+
+// Recopie l'état actuel du formulaire (Prestations/Ordonnance ou bon d'examen)
+// dans l'entrée d'historique correspondante — sans toucher à son statut.
+// Utilisé à la fois par la validation finale et par la bascule Consultation ⇄ Examen,
+// pour qu'aucune saisie en cours ne soit perdue en changeant de feuille.
+function captureFormIntoEntry(entry) {
+  entry.signature = document.getElementById("pr-signature").value;
+
+  if (entry.type === "Examen") {
+    entry.examens = state.examRows.filter(r => r.designation || r.cotation);
+    entry.examNature = (document.querySelector('input[name=examNature]:checked') || {}).value || "";
+    entry.examSituation = (document.querySelector('input[name=examSituation]:checked') || {}).value || "";
+    entry.examCodePraticien = document.getElementById("exam-code-praticien").value;
+    entry.examEtablissement = document.getElementById("exam-etablissement").value;
+    entry.examCodeEtablissement = document.getElementById("exam-code-etablissement").value;
+    entry.examDate = document.getElementById("exam-presta-date").value;
+    entry.examMotif = document.getElementById("exam-motif").value;
+    entry.examPubSignature = document.getElementById("exam-pub-signature").value;
+    entry.examSpecialisteSignature = document.getElementById("exam-specialiste-signature").value;
+    entry.totalMontant = document.getElementById("examTotalCotation").value;
+    entry.totalTm = document.getElementById("examTotalTm").value;
+    entry.totalPart = document.getElementById("examTotalPart").value;
+  } else {
+    entry.prestations = state.rows.filter(r => r.designation || r.montant);
+    entry.ordonnance = state.ordoRows
+      .filter(r => r.designation && r.quantite)
+      .map(r => ({ designation: r.designation, quantite: r.quantite, posologie: r.posologie || "", statut: "Non servi", servicePar: "", dateService: "", prixUnitaire: "", partAssurance: "", partPatient: "" }));
+    entry.totalMontant = document.getElementById("totalMontant").value;
+    entry.totalTm = document.getElementById("totalTm").value;
+    entry.totalPart = document.getElementById("totalPart").value;
+    entry.prestaDate = document.getElementById("presta-date").value;
+    entry.prestaDomicile = (document.querySelector('input[name=domicile]:checked') || {}).value || "";
+    entry.prestaCode = document.getElementById("presta-code").value;
+  }
+}
+
 function submitMedecinValidation() {
   const entry = state.historique.find(h => h.id === state.editingEntryId);
   if (!entry) return;
-  entry.prestations = state.rows.filter(r => r.designation || r.montant);
-  entry.ordonnance = state.ordoRows
-    .filter(r => r.designation && r.quantite)
-    .map(r => ({ designation: r.designation, quantite: r.quantite, posologie: r.posologie || "", statut: "Non servi", servicePar: "", dateService: "", prixUnitaire: "", partAssurance: "", partPatient: "" }));
-  entry.totalMontant = document.getElementById("totalMontant").value;
-  entry.totalTm = document.getElementById("totalTm").value;
-  entry.totalPart = document.getElementById("totalPart").value;
-  entry.prestaDate = document.getElementById("presta-date").value;
-  entry.prestaDomicile = (document.querySelector('input[name=domicile]:checked') || {}).value || "";
-  entry.prestaCode = document.getElementById("presta-code").value;
-  entry.signature = document.getElementById("pr-signature").value;
+  captureFormIntoEntry(entry);
   entry.statut = "Validée";
   saveJSON("pec_historique", state.historique);
   state.editingEntryId = null;
@@ -1221,12 +1522,46 @@ function previewEntry(id) {
   if (!h) return;
   const pillClass = h.type === "Consultation" ? "consultation" : "examen";
   const statutClass = h.statut === "Validée" ? "validee" : "attente";
-  const rows = (h.prestations || []).filter(r => r.designation || r.montant);
-  const rowsHtml = rows.length
-    ? rows.map(r =>
-        "<tr><td>" + (r.designation || "") + "</td><td>" + (r.qte || "") + "</td><td>" + (r.montant || "") + "</td><td>" + (r.tm || "") + "</td><td>" + (r.part || "") + "</td></tr>"
-      ).join("")
-    : '<tr><td colspan="5" style="text-align:center;color:var(--muted)">Aucune prestation renseignée</td></tr>';
+  const isExam = h.type === "Examen";
+
+  let tableHead, rowsHtml;
+  if (isExam) {
+    const rows = (h.examens || []).filter(r => r.designation || r.cotation);
+    tableHead = "<tr><th>Désignation de l'examen</th><th>Cotation</th><th>TM</th><th>Part CNAMGS</th></tr>";
+    rowsHtml = rows.length
+      ? rows.map(r =>
+          "<tr><td>" + (r.designation || "") + "</td><td>" + (r.cotation || "") + "</td><td>" + (r.tm || "") + "</td><td>" + (r.part || "") + "</td></tr>"
+        ).join("")
+      : '<tr><td colspan="4" style="text-align:center;color:var(--muted)">Aucun examen renseigné</td></tr>';
+  } else {
+    const rows = (h.prestations || []).filter(r => r.designation || r.montant);
+    tableHead = "<tr><th>Désignation</th><th>Qté</th><th>Montant</th><th>TM</th><th>Part CNAMGS</th></tr>";
+    rowsHtml = rows.length
+      ? rows.map(r =>
+          "<tr><td>" + (r.designation || "") + "</td><td>" + (r.qte || "") + "</td><td>" + (r.montant || "") + "</td><td>" + (r.tm || "") + "</td><td>" + (r.part || "") + "</td></tr>"
+        ).join("")
+      : '<tr><td colspan="5" style="text-align:center;color:var(--muted)">Aucune prestation renseignée</td></tr>';
+  }
+
+  const extraGrid = isExam
+    ? "<div><b>Nature de la prestation</b><span>" + (h.examNature || "—") + "</span></div>" +
+      "<div><b>Situation du patient</b><span>" + (h.examSituation || "—") + "</span></div>" +
+      "<div><b>Établissement réalisant l'examen</b><span>" + (h.examEtablissement || "—") + "</span></div>"
+    : "";
+
+  let linkHtml = "";
+  if (isExam && h.linkedConsultationId) {
+    const src = state.historique.find(e => e.id === h.linkedConsultationId);
+    if (src) {
+      linkHtml = '<div class="preview-link">Examen recommandé suite à la feuille <a href="#" data-preview-link="' + src.id + '">' + src.numero + "</a></div>";
+    }
+  } else if (!isExam && h.linkedExamenIds && h.linkedExamenIds.length) {
+    const links = h.linkedExamenIds
+      .map(examId => state.historique.find(e => e.id === examId))
+      .filter(Boolean)
+      .map(ex => '<a href="#" data-preview-link="' + ex.id + '">' + ex.numero + "</a>");
+    if (links.length) linkHtml = '<div class="preview-link">Examen(s) recommandé(s) : ' + links.join(", ") + "</div>";
+  }
 
   document.getElementById("previewBody").innerHTML =
     '<div class="preview-head"><img src="CNAMGS.png" alt="CNAMGS" /><div>' +
@@ -1234,6 +1569,7 @@ function previewEntry(id) {
       '<span class="pill ' + statutClass + '">' + (h.statut || "Validée") + "</span>" +
       '<div class="preview-num">' + h.numero + "</div>" +
     "</div></div>" +
+    linkHtml +
     '<div class="preview-grid">' +
       "<div><b>Patient</b><span>" + (h.patientNom || h.patient || "—") + "</span></div>" +
       "<div><b>Matricule</b><span>" + (h.matricule || "—") + "</span></div>" +
@@ -1243,13 +1579,21 @@ function previewEntry(id) {
       "<div><b>Médecin</b><span>" + (h.medecin || "—") + "</span></div>" +
       "<div><b>Accident causé par un tiers</b><span>" + (h.accidentTiers || "—") + "</span></div>" +
       "<div><b>Soins liés à la grossesse</b><span>" + (h.grossesse || "—") + "</span></div>" +
+      extraGrid +
     "</div>" +
-    '<table class="data-table"><thead><tr><th>Désignation</th><th>Qté</th><th>Montant</th><th>TM</th><th>Part CNAMGS</th></tr></thead><tbody>' + rowsHtml + "</tbody></table>" +
+    '<table class="data-table"><thead>' + tableHead + "</thead><tbody>" + rowsHtml + "</tbody></table>" +
     '<div class="preview-totals">' +
       "<div>Total montant <b>" + h.totalMontant + "</b></div>" +
       "<div>Total TM <b>" + h.totalTm + "</b></div>" +
       "<div>Total CNAMGS <b>" + h.totalPart + "</b></div>" +
     "</div>";
+
+  document.getElementById("previewBody").querySelectorAll('[data-preview-link]').forEach(a => {
+    a.addEventListener("click", e => {
+      e.preventDefault();
+      previewEntry(parseInt(a.dataset.previewLink, 10));
+    });
+  });
 
   document.getElementById("previewModal").hidden = false;
 }

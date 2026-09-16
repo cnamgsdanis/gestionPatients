@@ -197,8 +197,6 @@ function buildHistoriqueSeed() {
       patientNom: assure.prenom + " " + assure.nom,
       dateNaissance: assure.dateNaissance,
       matricule: assure.matricule,
-      assureNom: "",
-      matriculeAssure: "",
       estAssure: true,
       fonds: assure.fonds,
       ticketModerateur: tm === 0 ? "Exonéré" : "Plein",
