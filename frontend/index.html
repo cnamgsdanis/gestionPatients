@@ -101,6 +101,10 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>
         <span class="nav-txt">Tableau de bord</span>
       </button>
+      <button class="nav-item" data-view="rapports" data-tip="Rapports">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="4" height="10" rx="1"/><rect x="10" y="5" width="4" height="15" rx="1"/><rect x="16" y="13" width="4" height="7" rx="1"/></svg>
+        <span class="nav-txt">Rapports</span>
+      </button>
       <button class="nav-item" data-view="nouvelle-pec" data-tip="Nouvelle prise en charge">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h6"/><path d="M7 13h8"/><path d="M7 17h5"/></svg>
         <span class="nav-txt">Nouvelle prise en charge</span>
@@ -122,6 +126,10 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><circle cx="18" cy="8.5" r="2.4"/><path d="M16 14.3c2.8.4 4.7 2.4 4.7 5.7"/></svg>
         <span class="nav-txt">Gestion des utilisateurs</span>
       </button>
+      <button class="nav-item" data-view="permissions" data-tip="Gestion des permissions">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+        <span class="nav-txt">Gestion des permissions</span>
+      </button>
     </div>
  
     <div class="sidebar-spacer"></div>
@@ -139,11 +147,47 @@
         <div class="crumb" id="topbarCrumb">Accueil</div>
       </div>
       <div class="topbar-clock" id="topbarClock"></div>
-      <div class="user-pill">
-        <div class="avatar">AN</div>
-        <div>
-          <div class="name">Alice NDONG</div>
-          <div class="role">Agent de guichet</div>
+
+      <div class="user-menu" id="userMenu">
+        <button type="button" class="user-pill" id="userMenuTrigger" aria-haspopup="true" aria-expanded="false">
+          <div class="avatar">AN</div>
+          <div class="user-pill-text">
+            <div class="name">Alice NDONG</div>
+            <div class="role">Super Admin</div>
+          </div>
+          <svg class="user-menu-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+
+        <div class="user-dropdown" id="userDropdown">
+          <div class="user-dropdown-head">
+            <div class="avatar">AN</div>
+            <div>
+              <div class="name">Alice NDONG</div>
+              <div class="role">Super Admin</div>
+            </div>
+          </div>
+          <div class="user-dropdown-sep"></div>
+          <button type="button" class="user-dropdown-item" id="userMenuProfil">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+            <span>Mon profil</span>
+          </button>
+          <button type="button" class="user-dropdown-item" id="userMenuParams">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V19a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H5a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H11a1.7 1.7 0 0 0 1-1.5V5a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V11a1.7 1.7 0 0 0 1.5 1H19a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+            <span>Paramètres</span>
+          </button>
+          <button type="button" class="user-dropdown-item" id="userMenuNotifs">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>
+            <span>Notifications</span>
+          </button>
+          <button type="button" class="user-dropdown-item" id="userMenuHelp">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.9.4-1.5 1.1-1.5 2.2v.3"/><path d="M12 17.5h.01"/></svg>
+            <span>Aide / Support</span>
+          </button>
+          <div class="user-dropdown-sep"></div>
+          <button type="button" class="user-dropdown-item danger" id="userMenuLogout">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+            <span>Déconnexion</span>
+          </button>
         </div>
       </div>
     </header>
@@ -158,97 +202,210 @@
             <h1>Bienvenue sur l'espace CNAMGS</h1>
             <p>Gestion du circuit de l'assuré — pilotez vos prises en charge en temps réel.</p>
           </div>
-          <button type="button" class="btn-primary hero-cta" id="heroCtaBtn">+ Nouvelle prise en charge</button>
         </div>
- 
-        <div class="stat-row">
-          <div class="stat-card"><div class="num" id="statToday">0</div><div class="lbl">Prises en charge aujourd'hui</div></div>
-          <button type="button" class="stat-card clickable" id="statPendingCard"><div class="num pending" id="statPending">0</div><div class="lbl">En attente de validation médecin</div></button>
-          <div class="stat-card"><div class="num" id="statConsult">0</div><div class="lbl">Consultations enregistrées</div></div>
-          <div class="stat-card"><div class="num" id="statExam">0</div><div class="lbl">Examens enregistrés</div></div>
+
+        <div class="dash-section-head">
+          <h2 class="dash-section-title">Suivi des prestations des pharmacies partenaires</h2>
+          <button type="button" class="btn-secondary btn-sm" data-rapport-tab="pharmacies">Voir le rapport complet</button>
         </div>
- 
-        <div class="card period-card">
-          <div class="card-head">
-            <h3>Période d'analyse</h3>
-            <div class="chip-row" id="periodToggle">
-              <button type="button" class="chip" data-days="7">7 jours</button>
-              <button type="button" class="chip active" data-days="30">30 jours</button>
-              <button type="button" class="chip" data-days="90">3 mois</button>
+
+        <div class="pharma-stat-row">
+          <div class="stat-card"><div class="num" id="pharmaStatCount">0</div><div class="lbl">Pharmacies partenaires</div></div>
+          <div class="stat-card"><div class="num" id="pharmaStatPrestations">0</div><div class="lbl">Prestations réalisées</div></div>
+          <div class="stat-card"><div class="num" id="pharmaStatMontant">0 FCFA</div><div class="lbl">Montant total des prestations</div></div>
+          <div class="stat-card"><div class="num" id="pharmaStatPaye">0 FCFA</div><div class="lbl">Montant déjà payé</div></div>
+          <div class="stat-card"><div class="num pending" id="pharmaStatReste">0 FCFA</div><div class="lbl">Montant restant dû</div></div>
+        </div>
+
+        <div class="evolution-row">
+          <div class="card pharma-evo-card">
+            <div class="card-head"><h3>Évolution des prestations</h3></div>
+            <div class="card-body">
+              <div class="evolution-chart-outer">
+                <div id="pharmaEvoChart" class="evolution-chart-wrap"></div>
+                <div class="ev-tooltip" id="pharmaEvoTooltip" hidden></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card pharma-bar-card">
+            <div class="card-head"><h3>Montant restant dû par pharmacie</h3></div>
+            <div class="card-body">
+              <div class="evolution-chart-outer">
+                <div id="pharmaBarChart" class="evolution-chart-wrap"></div>
+                <div class="ev-tooltip" id="pharmaBarTooltip" hidden></div>
+              </div>
             </div>
           </div>
         </div>
- 
+
+        <div class="dash-section-head">
+          <h2 class="dash-section-title">Suivi des prestations des hôpitaux partenaires</h2>
+          <button type="button" class="btn-secondary btn-sm" data-rapport-tab="hopitaux">Voir le rapport complet</button>
+        </div>
+
+        <div class="hopital-stat-row">
+          <div class="stat-card"><div class="num" id="hospStatCount">0</div><div class="lbl">Hôpitaux partenaires</div></div>
+          <div class="stat-card"><div class="num" id="hospStatPrestations">0</div><div class="lbl">Prestations réalisées</div></div>
+          <div class="stat-card"><div class="num" id="hospStatConsult">0</div><div class="lbl">Consultations</div></div>
+          <div class="stat-card"><div class="num" id="hospStatExam">0</div><div class="lbl">Examens</div></div>
+          <div class="stat-card"><div class="num" id="hospStatMontant">0 FCFA</div><div class="lbl">Montant total des prestations</div></div>
+          <div class="stat-card"><div class="num" id="hospStatPaye">0 FCFA</div><div class="lbl">Montant déjà payé</div></div>
+          <div class="stat-card"><div class="num pending" id="hospStatReste">0 FCFA</div><div class="lbl">Montant restant dû</div></div>
+        </div>
+
         <div class="evolution-row">
-          <div class="card evolution-card">
+          <div class="card hosp-evo-card">
             <div class="card-head">
-              <h3>Évolution des prises en charge</h3>
-              <div class="evolution-legend">
-                <div class="ev-legend-item">
-                  <svg width="28" height="12" viewBox="0 0 28 12" aria-hidden="true">
-                    <line x1="1" y1="6" x2="27" y2="6" class="ev-legend-line ev-legend-line-consultation" />
-                    <circle cx="14" cy="6" r="3" class="ev-legend-marker ev-legend-marker-consultation" />
-                  </svg>
-                  Consultations
-                </div>
-                <div class="ev-legend-item">
-                  <svg width="28" height="12" viewBox="0 0 28 12" aria-hidden="true">
-                    <line x1="1" y1="6" x2="27" y2="6" class="ev-legend-line ev-legend-line-examen" />
-                    <path d="M14,2 L18,6 L14,10 L10,6 Z" class="ev-legend-marker ev-legend-marker-examen" />
-                  </svg>
-                  Examens
-                </div>
+              <h3>Évolution des prestations</h3>
+              <div class="chart-legend">
+                <div class="chart-legend-item"><span class="chart-dot" style="background:var(--green)"></span>Consultations</div>
+                <div class="chart-legend-item"><span class="chart-dot" style="background:var(--blue)"></span>Examens</div>
               </div>
             </div>
             <div class="card-body">
               <div class="evolution-chart-outer">
-                <div id="evolutionChart" class="evolution-chart-wrap"></div>
-                <div class="ev-tooltip" id="evTooltip" hidden></div>
+                <div id="hospEvoChart" class="evolution-chart-wrap"></div>
+                <div class="ev-tooltip" id="hospEvoTooltip" hidden></div>
               </div>
             </div>
           </div>
 
-          <div class="card dash-chart-card">
-            <div class="card-head"><h3>Répartition consultations / examens</h3></div>
+          <div class="card hosp-reste-card">
+            <div class="card-head"><h3>Montant restant dû par hôpital</h3></div>
             <div class="card-body">
-              <div class="donut-wrap">
-                <div class="donut-outer">
-                  <div id="donutChart" class="donut-svg-wrap"></div>
-                  <div class="donut-center"><span id="donutTotal">0</span><small>Total</small></div>
-                  <div class="ev-tooltip" id="donutTooltip" hidden></div>
-                </div>
-                <div class="donut-legend">
-                  <div><span class="dot consultation"></span>Consultations <b id="legendConsult">0</b> <small id="legendConsultPct" class="legend-pct">0%</small></div>
-                  <div><span class="dot examen"></span>Examens <b id="legendExam">0</b> <small id="legendExamPct" class="legend-pct">0%</small></div>
-                </div>
+              <div class="evolution-chart-outer">
+                <div id="hospResteChart" class="evolution-chart-wrap"></div>
+                <div class="ev-tooltip" id="hospResteTooltip" hidden></div>
               </div>
             </div>
-          </div>
-
-          <div class="card rdv-card">
-            <div class="card-head"><h3>Carnet de rendez-vous</h3></div>
-            <div class="card-body" style="padding:0">
-              <ul class="rdv-list" id="rdvList"></ul>
-              <div class="empty-state" id="rdvEmpty" hidden>Aucun rendez-vous à venir.</div>
-            </div>
-          </div>
-        </div>
-
-        <div class="card dash-activity-card">
-          <div class="card-head">
-            <h3>Dernières opérations médicales</h3>
-            <button type="button" class="btn-secondary btn-sm" id="recentViewAllBtn">Voir tout</button>
-          </div>
-          <div class="card-body" style="padding:0">
-            <table class="data-table">
-              <thead><tr><th>Patient</th><th>Prestation</th><th>Montant</th><th>Part assurance</th><th>Part patient</th><th>Date</th><th>Statut</th></tr></thead>
-              <tbody id="recentBody"></tbody>
-            </table>
-            <div class="empty-state" id="recentEmpty">Aucune activité pour le moment.</div>
           </div>
         </div>
       </section>
- 
+
+      <!-- ---------------- RAPPORTS ---------------- -->
+      <section class="view" id="view-rapports" hidden>
+        <div class="card rapports-tabs-card">
+          <div class="card-head">
+            <h3>Rapports</h3>
+            <div class="chip-row" id="rapportsTabToggle">
+              <button type="button" class="chip active" data-tab="hopitaux">Hôpitaux</button>
+              <button type="button" class="chip" data-tab="pharmacies">Pharmacies</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="rapport-hopitaux">
+          <div class="card pharma-filters-card">
+            <div class="card-head"><h3>Filtres</h3></div>
+            <div class="card-body" style="padding-bottom:4px">
+              <div class="filters-row">
+                <div class="field">
+                  <label for="hospFilterFrom">Du</label>
+                  <input type="date" id="hospFilterFrom" />
+                </div>
+                <div class="field">
+                  <label for="hospFilterTo">Au</label>
+                  <input type="date" id="hospFilterTo" />
+                </div>
+                <div class="field">
+                  <label for="hospFilterHopital">Hôpital</label>
+                  <select id="hospFilterHopital"><option value="">Tous les hôpitaux</option></select>
+                </div>
+                <div class="field">
+                  <label for="hospFilterType">Type de prestation</label>
+                  <select id="hospFilterType">
+                    <option value="">Tous les types</option>
+                    <option value="Consultation">Consultation</option>
+                    <option value="Examen">Examen</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="hospFilterStatut">Statut du règlement</label>
+                  <select id="hospFilterStatut">
+                    <option value="">Tous les statuts</option>
+                    <option value="Payé">Payé</option>
+                    <option value="Partiellement payé">Partiellement payé</option>
+                    <option value="Impayé">Impayé</option>
+                  </select>
+                </div>
+                <button type="button" class="btn-secondary" id="hospFilterResetBtn">Réinitialiser</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card hosp-compare-card">
+            <div class="card-head">
+              <h3>Prestations par hôpital</h3>
+              <div class="chart-legend">
+                <div class="chart-legend-item"><span class="chart-dot" style="background:var(--green)"></span>Consultations</div>
+                <div class="chart-legend-item"><span class="chart-dot" style="background:var(--blue)"></span>Examens</div>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="evolution-chart-outer">
+                <div id="hospCompareChart" class="evolution-chart-wrap"></div>
+                <div class="ev-tooltip" id="hospCompareTooltip" hidden></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h3>Détail par hôpital</h3></div>
+            <div class="card-body" style="padding:0">
+              <table class="data-table">
+                <thead><tr><th>Hôpital</th><th>Consultations</th><th>Examens</th><th>Total prestations</th><th>Montant total</th><th>Montant payé</th><th>Reste à payer</th><th>Statut</th><th>Action</th></tr></thead>
+                <tbody id="hospSuiviBody"></tbody>
+              </table>
+              <div class="empty-state" id="hospSuiviEmpty">Aucune prestation trouvée pour ces filtres.</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="rapport-pharmacies" hidden>
+          <div class="card pharma-filters-card">
+            <div class="card-head"><h3>Filtres</h3></div>
+            <div class="card-body" style="padding-bottom:4px">
+              <div class="filters-row">
+                <div class="field">
+                  <label for="pharmaFilterFrom">Du</label>
+                  <input type="date" id="pharmaFilterFrom" />
+                </div>
+                <div class="field">
+                  <label for="pharmaFilterTo">Au</label>
+                  <input type="date" id="pharmaFilterTo" />
+                </div>
+                <div class="field">
+                  <label for="pharmaFilterPharmacie">Pharmacie</label>
+                  <select id="pharmaFilterPharmacie"><option value="">Toutes les pharmacies</option></select>
+                </div>
+                <div class="field">
+                  <label for="pharmaFilterStatut">Statut du règlement</label>
+                  <select id="pharmaFilterStatut">
+                    <option value="">Tous les statuts</option>
+                    <option value="Payé">Payé</option>
+                    <option value="Partiellement payé">Partiellement payé</option>
+                    <option value="Impayé">Impayé</option>
+                  </select>
+                </div>
+                <button type="button" class="btn-secondary" id="pharmaFilterResetBtn">Réinitialiser</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h3>Détail par pharmacie</h3></div>
+            <div class="card-body" style="padding:0">
+              <table class="data-table">
+                <thead><tr><th>Pharmacie</th><th>Nombre de prestations</th><th>Montant total</th><th>Montant payé</th><th>Reste à payer</th><th>Statut</th><th>Action</th></tr></thead>
+                <tbody id="pharmaSuiviBody"></tbody>
+              </table>
+              <div class="empty-state" id="pharmaSuiviEmpty">Aucune prestation trouvée pour ces filtres.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- ---------------- NOUVELLE PRISE EN CHARGE ---------------- -->
       <section class="view" id="view-nouvelle-pec" hidden>
         <div class="card">
@@ -650,9 +807,55 @@
           </div>
         </div>
       </section>
- 
+
+      <!-- ---------------- GESTION DES PERMISSIONS ---------------- -->
+      <section class="view" id="view-permissions" hidden>
+        <div class="card">
+          <div class="card-head">
+            <h3>Gestion des permissions</h3>
+            <div class="permissions-actions">
+              <button type="button" class="btn-secondary btn-sm" id="resetPermissionsBtn">Réinitialiser aux valeurs par défaut</button>
+              <button type="button" class="btn-primary btn-sm" id="savePermissionsBtn">Enregistrer les modifications</button>
+            </div>
+          </div>
+          <div class="card-body" style="padding-bottom:0">
+            <p class="hint" style="margin-top:0">
+              Cochez les vues accessibles à chaque rôle, puis choisissez sa vue d'atterrissage à la connexion.
+              Le <b>Super Admin</b> garde toujours un accès complet (non modifiable ici), pour éviter de
+              verrouiller l'accès à cet écran par erreur. Ceci est une restriction d'affichage côté navigateur —
+              voir la note de sécurité en bas de page.
+            </p>
+          </div>
+          <div class="card-body" style="padding:0; overflow-x:auto">
+            <table class="data-table" id="permissionsTable">
+              <thead>
+                <tr>
+                  <th>Rôle</th>
+                  <th>Tableau de bord</th>
+                  <th>Rapports</th>
+                  <th>Nouvelle PEC</th>
+                  <th>Espace Médecin</th>
+                  <th>Espace Pharmacien</th>
+                  <th>Historique PEC</th>
+                  <th>Utilisateurs</th>
+                  <th>Vue par défaut</th>
+                </tr>
+              </thead>
+              <tbody id="permissionsBody"></tbody>
+            </table>
+          </div>
+          <div class="card-body">
+            <p class="hint" style="margin:0">
+              <b>Important :</b> cette application n'a pas de backend — ces permissions ne contrôlent que
+              l'affichage dans le navigateur (menu et navigation). Elles ne remplacent pas une vérification
+              côté serveur, qui n'existe pas dans ce prototype.
+            </p>
+          </div>
+        </div>
+      </section>
+
     </div>
- 
+
     <footer class="app-footer">
       <div>© 2026 CNAMGS — Plateforme de gestion du circuit de l'assuré</div>
       <div>Prototype front-end · v1.0</div>
@@ -674,6 +877,39 @@
   </div>
 </div>
  
+<!-- ======================= MODALE MON PROFIL ======================= -->
+<div class="modal-overlay" id="profilModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Mon profil</h3>
+      <button class="close-x" id="closeProfilModal">&times;</button>
+    </div>
+    <form class="modal-body" id="profilForm">
+      <div class="field">
+        <label for="profil-nom">Nom et prénom</label>
+        <input type="text" id="profil-nom" required />
+      </div>
+      <div class="field">
+        <label>Adresse e-mail</label>
+        <input type="email" id="profil-email" disabled />
+      </div>
+      <div class="field">
+        <label>Rôle</label>
+        <input type="text" id="profil-role" disabled />
+      </div>
+      <div class="field" id="profil-etab-wrap" hidden>
+        <label>Établissement</label>
+        <input type="text" id="profil-etab" disabled />
+      </div>
+      <p class="hint">L'e-mail et le rôle sont gérés par un administrateur (voir Gestion des utilisateurs).</p>
+    </form>
+    <div class="modal-foot">
+      <button type="button" class="btn-secondary" id="cancelProfilModal">Fermer</button>
+      <button type="submit" form="profilForm" class="btn-primary">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
 <!-- ======================= MODAL AJOUT UTILISATEUR ======================= -->
 <div class="modal-overlay" id="userModal" hidden>
   <div class="modal">
@@ -693,11 +929,12 @@
       <div class="field">
         <label>Rôle</label>
         <select id="u-role">
-          <option>Administrateur</option>
-          <option>Agent de guichet</option>
-          <option>Médecin-conseil</option>
-          <option>Pharmacien</option>
-          <option>Contrôleur</option>
+          <option>Super Admin</option>
+          <option>DG</option>
+          <option>Médecin</option>
+          <option>Agent hospitalier</option>
+          <option>Pharmacie</option>
+          <option>Caisse</option>
         </select>
       </div>
       <div class="field">
@@ -711,7 +948,63 @@
     </div>
   </div>
 </div>
- 
+
+<!-- ======================= MODALE ENREGISTRER UN PAIEMENT (pharmacies) ======================= -->
+<div class="modal-overlay" id="reglementModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Enregistrer un paiement</h3>
+      <button class="close-x" id="closeReglementModal">&times;</button>
+    </div>
+    <form class="modal-body" id="reglementForm">
+      <div class="field">
+        <label>Pharmacie</label>
+        <input type="text" id="reg-pharmacie" readonly disabled />
+      </div>
+      <div class="field">
+        <label for="reg-montant">Montant réglé (FCFA)</label>
+        <input type="number" id="reg-montant" min="1" step="1" required />
+      </div>
+      <div class="field">
+        <label for="reg-note">Référence / note (facultatif)</label>
+        <input type="text" id="reg-note" placeholder="Ex. virement n°..." />
+      </div>
+    </form>
+    <div class="modal-foot">
+      <button type="button" class="btn-secondary" id="cancelReglementModal">Annuler</button>
+      <button type="submit" form="reglementForm" class="btn-primary">Enregistrer le paiement</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= MODALE ENREGISTRER UN PAIEMENT (hôpitaux) ======================= -->
+<div class="modal-overlay" id="reglementHopitalModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Enregistrer un paiement</h3>
+      <button class="close-x" id="closeReglementHopitalModal">&times;</button>
+    </div>
+    <form class="modal-body" id="reglementHopitalForm">
+      <div class="field">
+        <label>Hôpital</label>
+        <input type="text" id="regh-hopital" readonly disabled />
+      </div>
+      <div class="field">
+        <label for="regh-montant">Montant réglé (FCFA)</label>
+        <input type="number" id="regh-montant" min="1" step="1" required />
+      </div>
+      <div class="field">
+        <label for="regh-note">Référence / note (facultatif)</label>
+        <input type="text" id="regh-note" placeholder="Ex. virement n°..." />
+      </div>
+    </form>
+    <div class="modal-foot">
+      <button type="button" class="btn-secondary" id="cancelReglementHopitalModal">Annuler</button>
+      <button type="submit" form="reglementHopitalForm" class="btn-primary">Enregistrer le paiement</button>
+    </div>
+  </div>
+</div>
+
 <script src="data.js"></script>
 <script src="app.js"></script>
 </body>
