@@ -23,7 +23,7 @@ const state = {
   reglements: loadJSON("pec_reglements", []),   // paiements réels enregistrés par l'assurance envers les pharmacies : { id, pharmacie, montant, date, note }
   pharmaSuiviFilters: { from: "", to: "", pharmacie: "", statut: "" },
   reglementsHopitaux: loadJSON("pec_reglements_hopitaux", []), // paiements réels envers les hôpitaux : { id, hopital, montant, date, note }
-  hopitalSuiviFilters: { from: "", to: "", hopital: "", type: "", statut: "" },
+  hopitalSuiviFilters: { from: "", to: "", hopital: "", type: "", statut: "", fonds: "", medecin: "" },
   connexionLog: loadJSON("pec_connexion_log", []),  // { id, email, nom, role, date, heure, statut }
   journalFilters: { search: "", role: "", statut: "", from: "", to: "" },
   apiUsers: null,          // utilisateurs chargés depuis le vrai backend (GET /api/utilisateurs), si joignable
@@ -263,12 +263,19 @@ function getEffectiveViews(role) {
   return views;
 }
 
-// Restreint la barre latérale aux vues autorisées par le rôle de l'utilisateur
-// connecté. Un utilisateur sans rôle reconnu (e-mail non trouvé dans
-// state.users, cas de démo) garde l'accès complet actuel. Seul le Super
-// Admin voit "Gestion des permissions", verrouillé (non présent dans la
-// matrice éditable pour éviter de s'auto-verrouiller l'accès à l'écran).
+// Le cloisonnement par rôle (barre latérale + accès aux vues) est
+// temporairement désactivé : la gestion réelle des rôles/permissions viendra
+// avec le backend. La matrice (state.roleAccess) et l'écran "Gestion des
+// permissions" restent pleinement fonctionnels pour la préparer à l'avance —
+// il suffira de repasser ce drapeau à true pour réactiver l'application
+// des restrictions ci-dessous (dont le verrou du Super Admin sur cet écran).
+const ROLE_ENFORCEMENT_ENABLED = false;
+
 function applyRoleAccess(user) {
+  if (!ROLE_ENFORCEMENT_ENABLED) {
+    document.querySelectorAll(".nav-item[data-view]").forEach(btn => { btn.hidden = false; });
+    return;
+  }
   const isSuperAdmin = !!user && user.role === "Super Admin";
   const views = user ? getEffectiveViews(user.role) : null;
   document.querySelectorAll(".nav-item[data-view]").forEach(btn => {
@@ -281,6 +288,7 @@ function applyRoleAccess(user) {
 // goToView() pour empêcher qu'un appel direct (bouton, raccourci) contourne
 // le cloisonnement visuel de la barre latérale.
 function isViewAllowed(name) {
+  if (!ROLE_ENFORCEMENT_ENABLED) return true;
   if (!state.currentUser) return true;
   if (name === "permissions") return state.currentUser.role === "Super Admin";
   const views = getEffectiveViews(state.currentUser.role);
@@ -644,7 +652,6 @@ document.getElementById("sidebarBrandBtn").addEventListener("keydown", e => {
 function goToRapportTab(tab) {
   goToView("rapports");
   document.querySelectorAll("#rapportsTabToggle .chip").forEach(c => c.classList.toggle("active", c.dataset.tab === tab));
-  document.getElementById("rapport-vue-ensemble").hidden = tab !== "vue-ensemble";
   document.getElementById("rapport-hopitaux").hidden = tab !== "hopitaux";
   document.getElementById("rapport-pharmacies").hidden = tab !== "pharmacies";
 }
@@ -1477,7 +1484,6 @@ function renderDashboardStats() {
 }
 
 function renderRapports() {
-  renderStatistiques();
   renderPharmaRapport();
   renderHopitalRapport();
 }
@@ -2269,6 +2275,8 @@ function renderPharmaDashboard() {
   document.getElementById("pharmaStatMontant").textContent = fmtFCFA(totalMontant);
   document.getElementById("pharmaStatPaye").textContent = fmtFCFA(totalPaye);
   document.getElementById("pharmaStatReste").textContent = fmtFCFA(totalReste);
+
+  renderPharmaOverview();
 }
 
 // Page Rapports (onglet Pharmacies) : tableau détaillé + les 2 graphiques
@@ -2350,7 +2358,7 @@ document.getElementById("reglementForm").addEventListener("submit", e => {
 // l'hôpital (medecinEtab). Montant dû à l'hôpital = totalPart, c'est-à-dire
 // le champ déjà existant "Total à payer par la CNAMGS" (pas le montant total
 // facturé, qui inclut la part du patient).
-const EMPTY_HOPITAL_FILTERS = { from: "", to: "", hopital: "", type: "", statut: "" };
+const EMPTY_HOPITAL_FILTERS = { from: "", to: "", hopital: "", type: "", statut: "", fonds: "", medecin: "" };
 
 function getHopitalSuiviFiltered(filters) {
   const f = filters || EMPTY_HOPITAL_FILTERS;
@@ -2358,6 +2366,8 @@ function getHopitalSuiviFiltered(filters) {
     if (h.statut !== "Validée" || !h.medecinEtab) return false;
     if (f.hopital && h.medecinEtab !== f.hopital) return false;
     if (f.type && h.type !== f.type) return false;
+    if (f.fonds && h.fonds !== f.fonds) return false;
+    if (f.medecin && h.medecin !== f.medecin) return false;
     if (f.from || f.to) {
       const d = parseFRDate(h.date);
       if (!d) return false;
@@ -2506,11 +2516,11 @@ function renderHopitalDashboard() {
 
   document.getElementById("hospStatCount").textContent = getPartnerHospitalCount(null);
   document.getElementById("hospStatPrestations").textContent = totalConsult + totalExam;
-  document.getElementById("hospStatConsult").textContent = totalConsult;
-  document.getElementById("hospStatExam").textContent = totalExam;
   document.getElementById("hospStatMontant").textContent = fmtFCFA(totalMontant);
   document.getElementById("hospStatPaye").textContent = fmtFCFA(totalPaye);
   document.getElementById("hospStatReste").textContent = fmtFCFA(totalReste);
+
+  renderHopitalOverview();
 }
 
 // Page Rapports (onglet Hôpitaux) : tableau détaillé + comparaison
@@ -2534,16 +2544,24 @@ function populateHospFilterOptions() {
   const names = Array.from(new Set(MEDECINS.map(m => m.etablissement).filter(Boolean))).sort();
   sel.innerHTML = '<option value="">Tous les hôpitaux</option>' + names.map(n => '<option value="' + n.replace(/"/g, "&quot;") + '">' + n + "</option>").join("");
   sel.value = current;
+
+  const medSel = document.getElementById("hospFilterMedecin");
+  const currentMed = medSel.value;
+  const medNames = Array.from(new Set(state.historique.map(h => h.medecin).filter(Boolean))).sort();
+  medSel.innerHTML = '<option value="">Tous les médecins</option>' + medNames.map(n => '<option value="' + n.replace(/"/g, "&quot;") + '">' + n + "</option>").join("");
+  medSel.value = currentMed;
 }
 
-["hospFilterFrom", "hospFilterTo", "hospFilterHopital", "hospFilterType", "hospFilterStatut"].forEach(id => {
+["hospFilterFrom", "hospFilterTo", "hospFilterHopital", "hospFilterType", "hospFilterStatut", "hospFilterFonds", "hospFilterMedecin"].forEach(id => {
   document.getElementById(id).addEventListener("input", () => {
     state.hopitalSuiviFilters = {
       from: document.getElementById("hospFilterFrom").value,
       to: document.getElementById("hospFilterTo").value,
       hopital: document.getElementById("hospFilterHopital").value,
       type: document.getElementById("hospFilterType").value,
-      statut: document.getElementById("hospFilterStatut").value
+      statut: document.getElementById("hospFilterStatut").value,
+      fonds: document.getElementById("hospFilterFonds").value,
+      medecin: document.getElementById("hospFilterMedecin").value
     };
     renderHopitalRapport();
   });
@@ -2554,7 +2572,9 @@ document.getElementById("hospFilterResetBtn").addEventListener("click", () => {
   document.getElementById("hospFilterHopital").value = "";
   document.getElementById("hospFilterType").value = "";
   document.getElementById("hospFilterStatut").value = "";
-  state.hopitalSuiviFilters = { from: "", to: "", hopital: "", type: "", statut: "" };
+  document.getElementById("hospFilterFonds").value = "";
+  document.getElementById("hospFilterMedecin").value = "";
+  state.hopitalSuiviFilters = { from: "", to: "", hopital: "", type: "", statut: "", fonds: "", medecin: "" };
   renderHopitalRapport();
 });
 
@@ -2584,49 +2604,17 @@ document.getElementById("reglementHopitalForm").addEventListener("submit", e => 
 });
 
 /* ---------------------------------------------------------------------- */
-/* Statistiques (vue Direction) : agrégats globaux + filtres avancés       */
+/* Dashboard : aperçu Direction (hôpitaux) — agrégats globaux, non filtrés */
 /* ---------------------------------------------------------------------- */
 
-state.statsFilters = { from: "", to: "", type: "", statut: "", fonds: "", medecin: "", search: "" };
-
-function getStatsFiltered() {
-  const f = state.statsFilters;
-  return state.historique.filter(h => {
-    if (f.type && h.type !== f.type) return false;
-    if (f.statut && h.statut !== f.statut) return false;
-    if (f.fonds && h.fonds !== f.fonds) return false;
-    if (f.medecin && h.medecin !== f.medecin) return false;
-    if (f.search) {
-      const hay = ((h.patientNom || "") + " " + (h.matricule || "")).toLowerCase();
-      if (!hay.includes(f.search.toLowerCase())) return false;
-    }
-    if (f.from || f.to) {
-      const d = parseFRDate(h.date);
-      if (!d) return false;
-      if (f.from && d < new Date(f.from)) return false;
-      if (f.to && d > new Date(f.to + "T23:59:59")) return false;
-    }
-    return true;
-  });
-}
-
-function populateStatsMedecinFilter() {
-  const sel = document.getElementById("statsFilterMedecin");
-  const current = sel.value;
-  const names = Array.from(new Set(state.historique.map(h => h.medecin).filter(Boolean))).sort();
-  sel.innerHTML = '<option value="">Tous les médecins</option>' + names.map(n => '<option value="' + n.replace(/"/g, "&quot;") + '">' + n + "</option>").join("");
-  sel.value = current;
-}
-
-// Barre de répartition en pourcentage (segments = [{ label, value, color }]) —
-// utilisée pour Type de prestation et Fonds sur la page Statistiques.
+// Barre de répartition en pourcentage (segments = [{ label, value, color }]).
 function renderSplitBar(barId, legendId, segments) {
   const total = segments.reduce((a, s) => a + s.value, 0);
   const bar = document.getElementById(barId);
   const legend = document.getElementById(legendId);
   if (!total) {
     bar.innerHTML = '<div class="split-bar-empty"></div>';
-    legend.innerHTML = '<div class="empty-state" style="padding:6px 0">Aucune donnée pour ces filtres.</div>';
+    legend.innerHTML = '<div class="empty-state" style="padding:6px 0">Aucune donnée disponible.</div>';
     return;
   }
   bar.innerHTML = segments.filter(s => s.value > 0).map(s => {
@@ -2639,32 +2627,12 @@ function renderSplitBar(barId, legendId, segments) {
   }).join("");
 }
 
-function renderStatistiques() {
-  populateStatsMedecinFilter();
-  const filtered = getStatsFiltered();
-
-  const totalPEC = filtered.length;
-  const uniquePatients = new Set(filtered.map(h => h.matricule).filter(Boolean)).size;
-  const totalMontant = filtered.reduce((a, h) => a + num(h.totalMontant), 0);
-  const totalCharge = filtered.reduce((a, h) => a + num(h.totalPart), 0);
-  const validees = filtered.filter(h => h.statut === "Validée").length;
-  const tauxValidation = totalPEC ? Math.round((validees / totalPEC) * 100) : 0;
-  const consultCount = filtered.filter(h => h.type === "Consultation").length;
-  const examCount = filtered.filter(h => h.type === "Examen").length;
-
-  document.getElementById("statsKpiTotal").textContent = totalPEC;
-  document.getElementById("statsKpiPatients").textContent = uniquePatients;
-  document.getElementById("statsKpiMontant").textContent = fmtFCFA(totalMontant);
-  document.getElementById("statsKpiCharge").textContent = fmtFCFA(totalCharge);
-  document.getElementById("statsKpiValidation").textContent = tauxValidation + "%";
-
-  // Restant dû : agrégats globaux hôpitaux + pharmacies (leurs propres filtres
-  // de période/statut, distincts de ceux de cette page — vision "toutes périodes").
-  const pharmaAgg = getPharmacieAggregates(null);
-  const hopAgg = getHopitalAggregates(null);
-  const pharmaReste = pharmaAgg.reduce((a, p) => a + p.reste, 0);
-  const hopReste = hopAgg.reduce((a, p) => a + p.reste, 0);
-  document.getElementById("statsKpiReste").textContent = fmtFCFA(pharmaReste + hopReste);
+// Compléments de la section hôpitaux du dashboard : répartitions type/fonds,
+// évolution des prises en charge, top établissements.
+function renderHopitalOverview() {
+  const all = state.historique;
+  const consultCount = all.filter(h => h.type === "Consultation").length;
+  const examCount = all.filter(h => h.type === "Examen").length;
 
   renderSplitBar("statsTypeSplit", "statsTypeLegend", [
     { label: "Consultations", value: consultCount, color: "var(--green)" },
@@ -2674,92 +2642,39 @@ function renderStatistiques() {
   const fondsList = ["Fonds Secteur Privé", "Fonds Secteur Public", "Fonds Garantie Sociale"];
   const fondsColors = ["var(--blue)", "var(--green)", "var(--yellow-dark)"];
   renderSplitBar("statsFondsSplit", "statsFondsLegend",
-    fondsList.map((f, i) => ({ label: f.replace("Fonds ", ""), value: filtered.filter(h => h.fonds === f).length, color: fondsColors[i] }))
+    fondsList.map((f, i) => ({ label: f.replace("Fonds ", ""), value: all.filter(h => h.fonds === f).length, color: fondsColors[i] }))
   );
 
-  const monthBuckets = getHopitalEvolutionByMonth(filtered);
+  const monthBuckets = getHopitalEvolutionByMonth(all);
   renderGroupedBarChart("statsEvoChart", "statsEvoTooltip",
     monthBuckets.map(b => ({ label: monthLabel(b), a: b.consult, b: b.exam, montant: b.montant })),
     { tooltip: it => "<b>" + it.label + "</b><br>Consultations : " + it.a + "<br>Examens : " + it.b + "<br>Part CNAMGS : " + fmtFCFA(it.montant) }
   );
 
+  const hopAgg = getHopitalAggregates(null);
   renderBarChart("statsTopHopChart", "statsTopHopTooltip",
     hopAgg.slice(0, 8).map(h => ({ label: h.hopital, value: h.montantTotal })),
     { color: "var(--green)", tooltip: it => "<b>" + it.label + "</b> — " + fmtFCFA(it.value) }
   );
+}
+
+// Complément de la section pharmacies du dashboard : classement par montant.
+function renderPharmaOverview() {
+  const pharmaAgg = getPharmacieAggregates(null);
   renderBarChart("statsTopPharmChart", "statsTopPharmTooltip",
     pharmaAgg.slice(0, 8).map(p => ({ label: p.pharmacie, value: p.montantTotal })),
     { color: "var(--blue)", tooltip: it => "<b>" + it.label + "</b> — " + fmtFCFA(it.value) }
   );
 }
 
-["statsFilterFrom", "statsFilterTo", "statsFilterType", "statsFilterStatut", "statsFilterFonds", "statsFilterMedecin", "statsFilterSearch"].forEach(id => {
-  document.getElementById(id).addEventListener("input", () => {
-    state.statsFilters = {
-      from: document.getElementById("statsFilterFrom").value,
-      to: document.getElementById("statsFilterTo").value,
-      type: document.getElementById("statsFilterType").value,
-      statut: document.getElementById("statsFilterStatut").value,
-      fonds: document.getElementById("statsFilterFonds").value,
-      medecin: document.getElementById("statsFilterMedecin").value,
-      search: document.getElementById("statsFilterSearch").value.trim()
-    };
-    renderStatistiques();
-  });
-});
-document.getElementById("statsFilterResetBtn").addEventListener("click", () => {
-  document.getElementById("statsFilterFrom").value = "";
-  document.getElementById("statsFilterTo").value = "";
-  document.getElementById("statsFilterType").value = "";
-  document.getElementById("statsFilterStatut").value = "";
-  document.getElementById("statsFilterFonds").value = "";
-  document.getElementById("statsFilterMedecin").value = "";
-  document.getElementById("statsFilterSearch").value = "";
-  state.statsFilters = { from: "", to: "", type: "", statut: "", fonds: "", medecin: "", search: "" };
-  renderStatistiques();
-});
-
 // Rapports : pas une capture de la page, mais un vrai document généré à partir
 // des données actuellement affichées (filtres + onglet actif), avec en-tête
 // CNAMGS — imprimé seul, le reste de l'app étant masqué (voir @media print).
 function buildRapportReportHtml(tab) {
   let title, filtersParts, theadHtml, rowsHtml, totals;
-  let kpiLabels = { count: "Établissement(s)", montant: "Montant total", paye: "Montant payé", reste: "Reste à payer" };
+  const kpiLabels = { count: "Établissement(s)", montant: "Montant total", paye: "Montant payé", reste: "Reste à payer" };
 
-  if (tab === "vue-ensemble") {
-    const f = state.statsFilters;
-    const filtered = getStatsFiltered();
-    const totalPEC = filtered.length;
-    const uniquePatients = new Set(filtered.map(h => h.matricule).filter(Boolean)).size;
-    const totalMontant = filtered.reduce((a, h) => a + num(h.totalMontant), 0);
-    const totalCharge = filtered.reduce((a, h) => a + num(h.totalPart), 0);
-    const validees = filtered.filter(h => h.statut === "Validée").length;
-    const tauxValidation = totalPEC ? Math.round((validees / totalPEC) * 100) : 0;
-    const consultCount = filtered.filter(h => h.type === "Consultation").length;
-    const examCount = filtered.filter(h => h.type === "Examen").length;
-    const pharmaAgg = getPharmacieAggregates(null);
-    const hopAgg = getHopitalAggregates(null);
-    const resteTotal = pharmaAgg.reduce((a, p) => a + p.reste, 0) + hopAgg.reduce((a, p) => a + p.reste, 0);
-
-    title = "Rapport — Vue d'ensemble de la Direction";
-    filtersParts = [
-      f.from ? "Du " + f.from : null,
-      f.to ? "au " + f.to : null,
-      f.type ? "Type : " + f.type : null,
-      f.statut ? "Statut : " + f.statut : null,
-      f.fonds ? "Fonds : " + f.fonds : null,
-      f.medecin ? "Médecin : " + f.medecin : null,
-      f.search ? "Recherche : " + f.search : null
-    ];
-    kpiLabels = { count: "Prises en charge", montant: "Montant total engagé", paye: "Part CNAMGS", reste: "Reste dû (hôpitaux + pharmacies)" };
-    totals = { count: totalPEC, montant: totalMontant, paye: totalCharge, reste: resteTotal };
-    theadHtml = "<tr><th>Indicateur</th><th>Valeur</th></tr>";
-    rowsHtml =
-      "<tr><td>Patients uniques</td><td>" + uniquePatients + "</td></tr>" +
-      "<tr><td>Consultations</td><td>" + consultCount + "</td></tr>" +
-      "<tr><td>Examens</td><td>" + examCount + "</td></tr>" +
-      "<tr><td>Taux de validation</td><td>" + tauxValidation + "%</td></tr>";
-  } else if (tab === "pharmacies") {
+  if (tab === "pharmacies") {
     const f = state.pharmaSuiviFilters;
     const list = getPharmacieAggregates(f);
     title = "Rapport — Prestations des pharmacies partenaires";
@@ -2788,7 +2703,9 @@ function buildRapportReportHtml(tab) {
       f.to ? "au " + f.to : null,
       f.hopital ? "Hôpital : " + f.hopital : null,
       f.type ? "Type : " + f.type : null,
-      f.statut ? "Statut : " + f.statut : null
+      f.statut ? "Statut : " + f.statut : null,
+      f.fonds ? "Fonds : " + f.fonds : null,
+      f.medecin ? "Médecin : " + f.medecin : null
     ];
     totals = {
       count: list.length,
@@ -2826,7 +2743,7 @@ function buildRapportReportHtml(tab) {
 
 document.getElementById("rapportsExportBtn").addEventListener("click", () => {
   const activeChip = document.querySelector("#rapportsTabToggle .chip.active");
-  const tab = activeChip ? activeChip.dataset.tab : "vue-ensemble";
+  const tab = activeChip ? activeChip.dataset.tab : "hopitaux";
   document.getElementById("reportPrintArea").innerHTML = buildRapportReportHtml(tab);
   document.body.classList.add("printing-report");
   window.print();

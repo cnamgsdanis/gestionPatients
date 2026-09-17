@@ -223,12 +223,37 @@
           <button type="button" class="btn-secondary btn-sm" data-rapport-tab="pharmacies">Voir le rapport complet</button>
         </div>
 
-        <div class="pharma-stat-row">
-          <div class="stat-card"><div class="num" id="pharmaStatCount">0</div><div class="lbl">Pharmacies partenaires</div></div>
-          <div class="stat-card"><div class="num" id="pharmaStatPrestations">0</div><div class="lbl">Prestations réalisées</div></div>
-          <div class="stat-card"><div class="num" id="pharmaStatMontant">0 FCFA</div><div class="lbl">Montant total des prestations</div></div>
-          <div class="stat-card"><div class="num" id="pharmaStatPaye">0 FCFA</div><div class="lbl">Montant déjà payé</div></div>
-          <div class="stat-card"><div class="num pending" id="pharmaStatReste">0 FCFA</div><div class="lbl">Montant restant dû</div></div>
+        <div class="kpi-row-scroll">
+          <div class="kpi-card accent-a">
+            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8v8"/><path d="M8 12h8"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num" id="pharmaStatCount">0</div><div class="kpi-lbl">Pharmacies partenaires</div></div>
+          </div>
+          <div class="kpi-card accent-b">
+            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h6"/><path d="M7 13h8"/><path d="M7 17h5"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num" id="pharmaStatPrestations">0</div><div class="kpi-lbl">Prestations réalisées</div></div>
+          </div>
+          <div class="kpi-card accent-c">
+            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num" id="pharmaStatMontant">0 FCFA</div><div class="kpi-lbl">Montant total des prestations</div></div>
+          </div>
+          <div class="kpi-card accent-f">
+            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num" id="pharmaStatPaye">0 FCFA</div><div class="kpi-lbl">Montant déjà payé</div></div>
+          </div>
+          <div class="kpi-card accent-e">
+            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num pending" id="pharmaStatReste">0 FCFA</div><div class="kpi-lbl">Montant restant dû</div></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>Top pharmacies — montant</h3></div>
+          <div class="card-body">
+            <div class="evolution-chart-outer">
+              <div id="statsTopPharmChart" class="evolution-chart-wrap"></div>
+              <div class="ev-tooltip" id="statsTopPharmTooltip" hidden></div>
+            </div>
+          </div>
         </div>
 
         <div class="dash-section-head">
@@ -236,14 +261,70 @@
           <button type="button" class="btn-secondary btn-sm" data-rapport-tab="hopitaux">Voir le rapport complet</button>
         </div>
 
-        <div class="hopital-stat-row">
-          <div class="stat-card"><div class="num" id="hospStatCount">0</div><div class="lbl">Hôpitaux partenaires</div></div>
-          <div class="stat-card"><div class="num" id="hospStatPrestations">0</div><div class="lbl">Prestations réalisées</div></div>
-          <div class="stat-card"><div class="num" id="hospStatConsult">0</div><div class="lbl">Consultations</div></div>
-          <div class="stat-card"><div class="num" id="hospStatExam">0</div><div class="lbl">Examens</div></div>
-          <div class="stat-card"><div class="num" id="hospStatMontant">0 FCFA</div><div class="lbl">Montant total des prestations</div></div>
-          <div class="stat-card"><div class="num" id="hospStatPaye">0 FCFA</div><div class="lbl">Montant déjà payé</div></div>
-          <div class="stat-card"><div class="num pending" id="hospStatReste">0 FCFA</div><div class="lbl">Montant restant dû</div></div>
+        <div class="kpi-row-scroll">
+          <div class="kpi-card accent-a">
+            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21V7l8-4 8 4v14"/><path d="M9 21v-6h6v6"/><path d="M9 10h.01M15 10h.01M9 14h.01M15 14h.01"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num" id="hospStatCount">0</div><div class="kpi-lbl">Hôpitaux partenaires</div></div>
+          </div>
+          <div class="kpi-card accent-b">
+            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h6"/><path d="M7 13h8"/><path d="M7 17h5"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num" id="hospStatPrestations">0</div><div class="kpi-lbl">Prestations réalisées</div></div>
+          </div>
+          <div class="kpi-card accent-c">
+            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num" id="hospStatMontant">0 FCFA</div><div class="kpi-lbl">Montant total des prestations</div></div>
+          </div>
+          <div class="kpi-card accent-f">
+            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num" id="hospStatPaye">0 FCFA</div><div class="kpi-lbl">Montant déjà payé</div></div>
+          </div>
+          <div class="kpi-card accent-e">
+            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num pending" id="hospStatReste">0 FCFA</div><div class="kpi-lbl">Montant restant dû</div></div>
+          </div>
+        </div>
+
+        <div class="stats-split-row">
+          <div class="card">
+            <div class="card-head"><h3>Répartition par type de prestation</h3></div>
+            <div class="card-body">
+              <div class="split-bar" id="statsTypeSplit"></div>
+              <div class="split-legend" id="statsTypeLegend"></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Répartition par fonds</h3></div>
+            <div class="card-body">
+              <div class="split-bar" id="statsFondsSplit"></div>
+              <div class="split-legend" id="statsFondsLegend"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>Évolution globale des prises en charge</h3>
+            <div class="chart-legend">
+              <div class="chart-legend-item"><span class="chart-dot" style="background:var(--green)"></span>Consultations</div>
+              <div class="chart-legend-item"><span class="chart-dot" style="background:var(--blue)"></span>Examens</div>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="evolution-chart-outer">
+              <div id="statsEvoChart" class="evolution-chart-wrap"></div>
+              <div class="ev-tooltip" id="statsEvoTooltip" hidden></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>Top établissements — part CNAMGS</h3></div>
+          <div class="card-body">
+            <div class="evolution-chart-outer">
+              <div id="statsTopHopChart" class="evolution-chart-wrap"></div>
+              <div class="ev-tooltip" id="statsTopHopTooltip" hidden></div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -253,7 +334,7 @@
           <div class="page-hero-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="4" height="10" rx="1"/><rect x="10" y="5" width="4" height="15" rx="1"/><rect x="16" y="13" width="4" height="7" rx="1"/></svg></div>
           <div class="page-hero-text">
             <h1>Rapports</h1>
-            <p>Vue d'ensemble, hôpitaux et pharmacies partenaires — filtrez, contrôlez les règlements, exportez.</p>
+            <p>Suivi financier détaillé des hôpitaux et pharmacies partenaires — filtrez, contrôlez les règlements, exportez.</p>
           </div>
         </div>
         <div class="card rapports-tabs-card">
@@ -261,8 +342,7 @@
             <h3>Rapports</h3>
             <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
               <div class="chip-row" id="rapportsTabToggle">
-                <button type="button" class="chip active" data-tab="vue-ensemble">Vue d'ensemble</button>
-                <button type="button" class="chip" data-tab="hopitaux">Hôpitaux</button>
+                <button type="button" class="chip active" data-tab="hopitaux">Hôpitaux</button>
                 <button type="button" class="chip" data-tab="pharmacies">Pharmacies</button>
               </div>
               <button type="button" class="btn-export" id="rapportsExportBtn">
@@ -273,142 +353,7 @@
           </div>
         </div>
 
-        <div id="rapport-vue-ensemble">
-          <div class="card pharma-filters-card">
-            <div class="card-head">
-              <h3>Filtres avancés</h3>
-              <button type="button" class="btn-secondary btn-sm" id="statsFilterResetBtn">Réinitialiser</button>
-            </div>
-            <div class="card-body" style="padding-bottom:4px">
-              <div class="filters-row">
-                <div class="field">
-                  <label for="statsFilterFrom">Du</label>
-                  <input type="date" id="statsFilterFrom" />
-                </div>
-                <div class="field">
-                  <label for="statsFilterTo">Au</label>
-                  <input type="date" id="statsFilterTo" />
-                </div>
-                <div class="field">
-                  <label for="statsFilterType">Type</label>
-                  <select id="statsFilterType">
-                    <option value="">Tous les types</option>
-                    <option value="Consultation">Consultation</option>
-                    <option value="Examen">Examen</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label for="statsFilterStatut">Statut</label>
-                  <select id="statsFilterStatut">
-                    <option value="">Tous les statuts</option>
-                    <option value="En attente">En attente</option>
-                    <option value="Validée">Validée</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label for="statsFilterFonds">Fonds</label>
-                  <select id="statsFilterFonds">
-                    <option value="">Tous les fonds</option>
-                    <option value="Fonds Secteur Privé">Fonds Secteur Privé</option>
-                    <option value="Fonds Secteur Public">Fonds Secteur Public</option>
-                    <option value="Fonds Garantie Sociale">Fonds Garantie Sociale</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label for="statsFilterMedecin">Médecin</label>
-                  <select id="statsFilterMedecin"><option value="">Tous les médecins</option></select>
-                </div>
-                <div class="field">
-                  <label for="statsFilterSearch">Recherche</label>
-                  <input type="text" id="statsFilterSearch" placeholder="Nom du patient ou matricule" />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="kpi-grid">
-            <div class="kpi-card accent-a">
-              <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h6"/><path d="M7 13h8"/><path d="M7 17h5"/></svg></div>
-              <div class="kpi-body"><div class="kpi-num" id="statsKpiTotal">0</div><div class="kpi-lbl">Prises en charge</div></div>
-            </div>
-            <div class="kpi-card accent-b">
-              <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><circle cx="18" cy="8.5" r="2.4"/><path d="M16 14.3c2.8.4 4.7 2.4 4.7 5.7"/></svg></div>
-              <div class="kpi-body"><div class="kpi-num" id="statsKpiPatients">0</div><div class="kpi-lbl">Patients uniques</div></div>
-            </div>
-            <div class="kpi-card accent-c">
-              <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div>
-              <div class="kpi-body"><div class="kpi-num" id="statsKpiMontant">0 FCFA</div><div class="kpi-lbl">Montant total engagé</div></div>
-            </div>
-            <div class="kpi-card accent-d">
-              <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12a8 8 0 1 1-8-8"/><path d="M20 4L12 12"/><path d="M15 4h5v5"/></svg></div>
-              <div class="kpi-body"><div class="kpi-num" id="statsKpiCharge">0 FCFA</div><div class="kpi-lbl">Part CNAMGS</div></div>
-            </div>
-            <div class="kpi-card accent-e">
-              <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
-              <div class="kpi-body"><div class="kpi-num pending" id="statsKpiReste">0 FCFA</div><div class="kpi-lbl">Restant dû (hôpitaux + pharmacies)</div></div>
-            </div>
-            <div class="kpi-card accent-f">
-              <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></div>
-              <div class="kpi-body"><div class="kpi-num" id="statsKpiValidation">0%</div><div class="kpi-lbl">Taux de validation</div></div>
-            </div>
-          </div>
-
-          <div class="stats-split-row">
-            <div class="card">
-              <div class="card-head"><h3>Répartition par type de prestation</h3></div>
-              <div class="card-body">
-                <div class="split-bar" id="statsTypeSplit"></div>
-                <div class="split-legend" id="statsTypeLegend"></div>
-              </div>
-            </div>
-            <div class="card">
-              <div class="card-head"><h3>Répartition par fonds</h3></div>
-              <div class="card-body">
-                <div class="split-bar" id="statsFondsSplit"></div>
-                <div class="split-legend" id="statsFondsLegend"></div>
-              </div>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="card-head">
-              <h3>Évolution globale des prises en charge</h3>
-              <div class="chart-legend">
-                <div class="chart-legend-item"><span class="chart-dot" style="background:var(--green)"></span>Consultations</div>
-                <div class="chart-legend-item"><span class="chart-dot" style="background:var(--blue)"></span>Examens</div>
-              </div>
-            </div>
-            <div class="card-body">
-              <div class="evolution-chart-outer">
-                <div id="statsEvoChart" class="evolution-chart-wrap"></div>
-                <div class="ev-tooltip" id="statsEvoTooltip" hidden></div>
-              </div>
-            </div>
-          </div>
-
-          <div class="stats-split-row">
-            <div class="card">
-              <div class="card-head"><h3>Top établissements — part CNAMGS</h3></div>
-              <div class="card-body">
-                <div class="evolution-chart-outer">
-                  <div id="statsTopHopChart" class="evolution-chart-wrap"></div>
-                  <div class="ev-tooltip" id="statsTopHopTooltip" hidden></div>
-                </div>
-              </div>
-            </div>
-            <div class="card">
-              <div class="card-head"><h3>Top pharmacies — montant</h3></div>
-              <div class="card-body">
-                <div class="evolution-chart-outer">
-                  <div id="statsTopPharmChart" class="evolution-chart-wrap"></div>
-                  <div class="ev-tooltip" id="statsTopPharmTooltip" hidden></div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div id="rapport-hopitaux" hidden>
+        <div id="rapport-hopitaux">
           <div class="card pharma-filters-card">
             <div class="card-head"><h3>Filtres</h3></div>
             <div class="card-body" style="padding-bottom:4px">
@@ -441,6 +386,19 @@
                     <option value="Partiellement payé">Partiellement payé</option>
                     <option value="Impayé">Impayé</option>
                   </select>
+                </div>
+                <div class="field">
+                  <label for="hospFilterFonds">Fonds</label>
+                  <select id="hospFilterFonds">
+                    <option value="">Tous les fonds</option>
+                    <option value="Fonds Secteur Privé">Fonds Secteur Privé</option>
+                    <option value="Fonds Secteur Public">Fonds Secteur Public</option>
+                    <option value="Fonds Garantie Sociale">Fonds Garantie Sociale</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="hospFilterMedecin">Médecin</label>
+                  <select id="hospFilterMedecin"><option value="">Tous les médecins</option></select>
                 </div>
                 <button type="button" class="btn-secondary" id="hospFilterResetBtn">Réinitialiser</button>
               </div>

@@ -502,7 +502,7 @@ a { color: var(--blue); }
   width: 100%; height: 100%; object-fit: contain; border-radius: 8px;
 }
 .sidebar-brand .txt { min-width: 0; overflow: hidden; }
-.sidebar-brand .txt strong { display: block; font-size: 15px; font-weight: 800; letter-spacing: .3px; white-space: nowrap; }
+.sidebar-brand .txt strong { display: block; font-size: 15px; font-weight: 800; letter-spacing: .3px; white-space: nowrap; color: #fff; }
 .sidebar-brand .txt span { display: block; font-size: 10px; color: #9fc4ab; white-space: nowrap; }
 
 .sidebar-collapse-btn {
@@ -818,12 +818,6 @@ a { color: var(--blue); }
   font-size: 12px;
 }
 
-.pharma-stat-row {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 16px;
-  margin-bottom: 18px;
-}
 
 .pharma-bar-wrap { width: 100%; display: flex; align-items: flex-end; gap: 14px; height: 170px; padding: 0 4px; }
 .pharma-bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; min-width: 0; }
@@ -856,13 +850,6 @@ a { color: var(--blue); }
 .chart-legend-item { display: flex; align-items: center; gap: 7px; }
 .chart-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
 
-/* Tableau de bord : suivi des prestations des hôpitaux partenaires */
-.hopital-stat-row {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-  margin-bottom: 18px;
-}
 
 /* Choix Ticket modérateur / Médecin (Nouvelle prise en charge) */
 .choice-group { margin-top: 16px; }
@@ -929,18 +916,6 @@ a { color: var(--blue); }
 }
 .pg-info { font-size: 11.5px; color: var(--muted); }
 .pg-btns { display: flex; gap: 8px; }
-
-/* Cards / stats */
-.stat-card {
-  background: var(--white);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 16px 18px;
-  box-shadow: var(--shadow);
-}
-.stat-card .num { font-size: 24px; font-weight: 800; color: var(--green-dark); }
-.stat-card .num.pending { color: #b5760a; }
-.stat-card .lbl { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
 
 .nav-badge {
   margin-left: auto;
@@ -1159,7 +1134,18 @@ a { color: var(--blue); }
 .kpi-body { min-width: 0; }
 .kpi-num { font-size: 20px; font-weight: 800; color: var(--ink); line-height: 1.15; white-space: nowrap; }
 .kpi-num.pending { color: #b6791f; }
-.kpi-lbl { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.kpi-lbl { font-size: 11px; color: var(--muted); margin-top: 2px; white-space: nowrap; }
+
+/* Ligne de KPI forcée sur une seule ligne, défilement horizontal si l'écran est trop étroit */
+.kpi-row-scroll {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 14px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  margin-bottom: 20px;
+}
+.kpi-row-scroll .kpi-card { flex: 1 1 200px; }
 
 /* Recherche d'assuré : le champ matricule n'a pas besoin de s'étirer sur
    toute la largeur de la carte. */
@@ -1557,8 +1543,6 @@ table.presta select:disabled { color: var(--muted); }
 .exam-switch-remove:hover { opacity: 1; }
 
 @media (max-width: 980px) {
-  .pharma-stat-row { grid-template-columns: repeat(2, 1fr); }
-  .hopital-stat-row { grid-template-columns: repeat(2, 1fr); }
   .sidebar { position: fixed; z-index: 40; transform: translateX(-100%); transition: transform .2s; }
   .sidebar.open { transform: translateX(0); }
 }
