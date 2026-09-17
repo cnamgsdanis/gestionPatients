@@ -10,8 +10,9 @@ public class Utilisateur {
     public String  email;
     public String  telephone;
 
-    public String  role;                  // string libre, validé côté SQL
+    public String  role;
     public int     id_structure;
+    public String  structure_nom;   //  Nom de la structure (rempli par le DAO)
 
     public boolean actif;
     public String  date_creation;
@@ -19,20 +20,11 @@ public class Utilisateur {
 
     public Utilisateur() {}
 
-    /**
-     * Liste des rôles valides côté application.
-     * Doit rester SYNCHRONISÉE avec la contrainte SQL CK_Utilisateur_role.
-     */
     public static final String[] ROLES_VALIDES = {
-        "administrateur",
-        "agent_accueil",
-        "pharmacien",
-        "medecin",
-        "directeur_structure",
-        "caissier_structure"
+        "administrateur", "agent_accueil", "pharmacien",
+        "medecin", "directeur_structure", "caissier_structure"
     };
 
-    /** Retourne une copie sans le hash du mot de passe. */
     public Utilisateur sansMotDePasse() {
         Utilisateur c = new Utilisateur();
         c.id_utilisateur     = this.id_utilisateur;
@@ -43,6 +35,7 @@ public class Utilisateur {
         c.telephone          = this.telephone;
         c.role               = this.role;
         c.id_structure       = this.id_structure;
+        c.structure_nom      = this.structure_nom;   //  Nom de la structure (rempli par le DAO)
         c.actif              = this.actif;
         c.date_creation      = this.date_creation;
         c.derniere_connexion = this.derniere_connexion;

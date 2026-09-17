@@ -23,7 +23,10 @@ public class UtilisateurDAO {
     // ------------------------------------------------------------
     public Utilisateur findByUsername(String username) throws SQLException {
 
-        String sql = "SELECT * FROM Utilisateur WHERE username = ?";
+        String sql = "SELECT u.*, s.raison_sociale AS structure_nom " +
+             "FROM Utilisateur u " +
+             "LEFT JOIN Structure s ON s.id_structure = u.id_structure " +
+             "WHERE u.username = ?";
 
         try (Connection c = Database.getConnection();
              PreparedStatement ps = c.prepareStatement(sql)) {
@@ -38,7 +41,7 @@ public class UtilisateurDAO {
 
     // ------------------------------------------------------------
     // Insère un nouvel utilisateur.
-    // ⚠️ Le mot de passe DOIT être déjà hashé avant d'appeler
+    //  Le mot de passe DOIT être déjà hashé avant d'appeler
     //    cette méthode. Le DAO ne fait AUCUN hashage.
     // Renvoie l'ID auto-généré.
     // ------------------------------------------------------------
@@ -73,7 +76,10 @@ public class UtilisateurDAO {
     // ------------------------------------------------------------
     public Utilisateur findById(int id) throws SQLException {
 
-        String sql = "SELECT * FROM Utilisateur WHERE id_utilisateur = ?";
+        String sql = "SELECT u.*, s.raison_sociale AS structure_nom " +
+             "FROM Utilisateur u " +
+             "LEFT JOIN Structure s ON s.id_structure = u.id_structure " +
+             "WHERE u.id_utilisateur = ?";
 
         try (Connection c = Database.getConnection();
              PreparedStatement ps = c.prepareStatement(sql)) {
@@ -92,7 +98,9 @@ public class UtilisateurDAO {
     public List<Utilisateur> findAll() throws SQLException {
 
         List<Utilisateur> liste = new ArrayList<>();
-        String sql = "SELECT * FROM Utilisateur";
+        String sql = "SELECT u.*, s.raison_sociale AS structure_nom " +
+             "FROM Utilisateur u " +
+             "LEFT JOIN Structure s ON s.id_structure = u.id_structure";
 
         try (Connection c = Database.getConnection();
              Statement st = c.createStatement();
@@ -120,6 +128,22 @@ public class UtilisateurDAO {
         }
     }
 
+
+        // ------------------------------------------------------------
+    // Met à jour le mot de passe d'un utilisateur.
+    //  Le hash doit être déjà calculé (BCrypt).
+    // ------------------------------------------------------------
+    public boolean updatePassword(int id, String hash) throws SQLException {
+        String sql = "UPDATE Utilisateur SET mot_de_passe = ? " +
+                     "WHERE id_utilisateur = ?";
+        try (Connection c = Database.getConnection();
+             PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setString(1, hash);
+            ps.setInt   (2, id);
+            return ps.executeUpdate() > 0;
+        }
+    }
+
     // ------------------------------------------------------------
     // map() : transforme une ligne SQL en objet Utilisateur.
     // ------------------------------------------------------------
@@ -134,6 +158,7 @@ public class UtilisateurDAO {
         u.telephone          = rs.getString("telephone");
         u.role               = rs.getString("role");
         u.id_structure       = rs.getInt("id_structure");
+        u.structure_nom      = rs.getString("structure_nom");
         u.actif              = rs.getBoolean("actif");
         u.date_creation      = rs.getString("date_creation");
         u.derniere_connexion = rs.getString("derniere_connexion");
