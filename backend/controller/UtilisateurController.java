@@ -19,6 +19,7 @@ import com.sun.net.httpserver.HttpExchange;
 import dao.UtilisateurDAO;
 import model.Utilisateur;
 import security.AuthGuard;
+import service.AuthService;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -29,6 +30,7 @@ public class UtilisateurController {
 
     private final UtilisateurDAO dao  = new UtilisateurDAO();
     private final Gson           gson = new Gson();
+    private final AuthService    service = new AuthService();
 
     // ============================================================
     // Point d'entrée : dispatch selon la méthode et le chemin
@@ -48,6 +50,7 @@ public class UtilisateurController {
 
             switch (method) {
                 case "GET"    -> handleGet(ex);
+                case "POST"   -> handlePost(ex);
                 case "PUT"    -> handlePut(ex);
                 case "DELETE" -> handleDelete(ex);
                 default       -> sendJson(ex, 405, "{\"error\":\"Methode non autorisee\"}");
@@ -91,6 +94,57 @@ public class UtilisateurController {
         } else {
             sendJson(ex, 400, "{\"error\":\"Route invalide\"}");
         }
+    }
+
+
+
+
+        // ============================================================
+    // POST /api/utilisateurs      → création par ADMIN
+    // Permission requise : utilisateur.creer
+    // Body : identique à /api/auth/register
+    // ============================================================
+    private void handlePost(HttpExchange ex) throws Exception {
+
+        //  Vérification de la permission
+        if (!AuthGuard.verifierPermission(ex, "utilisateur.creer")) return;
+
+        // 1. Parser le JSON
+        Utilisateur u = gson.fromJson(readBody(ex), Utilisateur.class);
+
+        // 2. Validations
+        if (u == null || u.username == null || u.username.isBlank()) {
+            sendJson(ex, 400, "{\"error\":\"username obligatoire\"}");
+            return;
+        }
+        if (u.mot_de_passe == null || u.mot_de_passe.length() < 4) {
+            sendJson(ex, 400, "{\"error\":\"mot de passe trop court (min 4)\"}");
+            return;
+        }
+        if (u.role == null || u.role.isBlank()) {
+            sendJson(ex, 400, "{\"error\":\"role obligatoire\"}");
+            return;
+        }
+        if (u.id_structure <= 0) {
+            sendJson(ex, 400, "{\"error\":\"id_structure obligatoire\"}");
+            return;
+        }
+
+        // 3. Vérifier que le username n'existe pas
+        if (dao.findByUsername(u.username) != null) {
+            sendJson(ex, 409, "{\"error\":\"Cet username est deja pris\"}");
+            return;
+        }
+
+        // 4. Hasher le mot de passe
+        u.mot_de_passe = service.hash(u.mot_de_passe);
+
+        // 5. Insérer en base
+        int id = dao.insert(u);
+
+        // 6. Renvoyer l'utilisateur créé (sans hash)
+        Utilisateur cree = dao.findById(id);
+        sendJson(ex, 201, gson.toJson(cree.sansMotDePasse()));
     }
 
     // ============================================================

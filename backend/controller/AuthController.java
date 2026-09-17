@@ -15,6 +15,7 @@ import dao.UtilisateurDAO; // Accès BD
 import model.Utilisateur; // Modèle
 import service.AuthService; // Hash/vérification
 import service.JwtService;
+import io.jsonwebtoken.Claims;
 
 import java.io.*; // Streams
 import java.nio.charset.StandardCharsets; // UTF-8
@@ -33,36 +34,38 @@ public class AuthController {
      * Point d'entrée unique pour toutes les routes sous /api/auth/*.
      * Appelée automatiquement par le serveur HTTP.
      */
-    public void handle(HttpExchange ex) throws IOException {
 
-        String method = ex.getRequestMethod(); // GET / POST / PUT / DELETE
-        String path = ex.getRequestURI().getPath(); // ex: /api/auth/login
+   public void handle(HttpExchange ex) throws IOException {
+    String method = ex.getRequestMethod();
+    String path   = ex.getRequestURI().getPath();
 
-        try {
-            // ------------------------------------------------------------
-            // Route : POST /api/auth/register
-            // ------------------------------------------------------------
-            if (path.equals("/api/auth/register") && method.equals("POST")) {
-                register(ex);
-            }
-            // ------------------------------------------------------------
-            // Route : POST /api/auth/login
-            // ------------------------------------------------------------
-            else if (path.equals("/api/auth/login") && method.equals("POST")) {
-                login(ex);
-            }
-            // ------------------------------------------------------------
-            // Route inconnue → 404
-            // ------------------------------------------------------------
-            else {
-                sendJson(ex, 404, "{\"error\":\"Route inconnue\"}");
-            }
-        } catch (Exception e) {
-            // Toute exception inattendue → 500 + log dans la console
-            e.printStackTrace();
-            sendJson(ex, 500, "{\"error\":\"" + escape(e.getMessage()) + "\"}");
+    try {
+        if (path.equals("/api/auth/register") && method.equals("POST")) {
+            register(ex);
         }
+        else if (path.equals("/api/auth/login") && method.equals("POST")) {
+            login(ex);
+        }
+        //  Logout
+        else if (path.equals("/api/auth/logout") && method.equals("POST")) {
+            logout(ex);
+        }
+        //  Changer son mot de passe
+        else if (path.equals("/api/auth/change-password") && method.equals("PUT")) {
+            changePassword(ex);
+        }
+        //  Reset par admin
+        else if (path.equals("/api/auth/reset-password") && method.equals("POST")) {
+            resetPassword(ex);
+        }
+        else {
+            sendJson(ex, 404, "{\"error\":\"Route inconnue\"}");
+        }
+    } catch (Exception e) {
+        e.printStackTrace();
+        sendJson(ex, 500, "{\"error\":\"" + escape(e.getMessage()) + "\"}");
     }
+}
 
     // ============================================================
     // POST /api/auth/register
@@ -176,6 +179,125 @@ public class AuthController {
 
         // 8. Envoyer la réponse 200 OK
         sendJson(ex, 200, reponse);
+    }
+
+
+
+        // ============================================================
+    // POST /api/auth/logout
+    // ------------------------------------------------------------
+    //  Avec JWT, le token ne peut PAS être invalidé côté serveur
+    //    sans blacklist. Donc cette route sert juste à confirmer
+    //    au client qu'il peut supprimer son token (localStorage).
+    // ------------------------------------------------------------
+    private void logout(HttpExchange ex) throws Exception {
+        // Vérifie quand même que la requête a un token valide
+        if (security.AuthGuard.verifier(ex) == null) return;
+
+        sendJson(ex, 200, "{\"message\":\"Deconnecte. Supprimez votre token cote client.\"}");
+    }
+
+    // ============================================================
+    // PUT /api/auth/change-password
+    // ------------------------------------------------------------
+    // L'utilisateur connecté change SON PROPRE mot de passe.
+    // Body : { "ancien": "xxx", "nouveau": "yyy" }
+    // ------------------------------------------------------------
+    @SuppressWarnings("unchecked")
+    private void changePassword(HttpExchange ex) throws Exception {
+
+        // 1. Vérifier le token + récupérer les infos
+        Claims claims = security.AuthGuard.verifier(ex);
+        if (claims == null) return;   // 401 déjà envoyé
+
+        JwtService jwtService = new JwtService();   // si pas déjà un champ de la classe
+// ...
+        int idUtilisateur = jwtService.getIdUtilisateur(claims);
+
+        // 2. Lire le body (Map<String, String> grâce à Gson)
+        String body = readBody(ex);
+        java.util.Map<String, String> data =
+            gson.fromJson(body, java.util.Map.class);
+
+        if (data == null || data.get("ancien") == null || data.get("nouveau") == null) {
+            sendJson(ex, 400, "{\"error\":\"ancien et nouveau obligatoires\"}");
+            return;
+        }
+
+        String ancien  = data.get("ancien");
+        String nouveau = data.get("nouveau");
+
+        if (nouveau.length() < 4) {
+            sendJson(ex, 400, "{\"error\":\"nouveau mot de passe trop court (min 4)\"}");
+            return;
+        }
+
+        // 3. Récupérer l'utilisateur en base
+        model.Utilisateur u = dao.findById(idUtilisateur);
+        if (u == null) {
+            sendJson(ex, 404, "{\"error\":\"Utilisateur introuvable\"}");
+            return;
+        }
+
+        // 4. Vérifier l'ancien mot de passe
+        if (!service.verifier(ancien, u.mot_de_passe)) {
+            sendJson(ex, 401, "{\"error\":\"Ancien mot de passe incorrect\"}");
+            return;
+        }
+
+        // 5. Hasher le nouveau et mettre à jour
+        String nouveauHash = service.hash(nouveau);
+        boolean ok = dao.updatePassword(idUtilisateur, nouveauHash);
+
+        sendJson(ex, ok ? 200 : 500,
+                 ok ? "{\"message\":\"Mot de passe modifie\"}"
+                    : "{\"error\":\"Echec de la mise a jour\"}");
+    }
+
+    // ============================================================
+    // POST /api/auth/reset-password
+    // ------------------------------------------------------------
+    // L'ADMIN réinitialise le mot de passe d'un utilisateur.
+    // Body : { "id_utilisateur": X, "nouveau": "yyy" }
+    // ------------------------------------------------------------
+    private void resetPassword(HttpExchange ex) throws Exception {
+
+        // 1. Vérifier la permission "utilisateur.modifier"
+        if (!security.AuthGuard.verifierPermission(ex, "utilisateur.modifier")) return;
+
+        // 2. Lire le body
+        String body = readBody(ex);
+        java.util.Map<String, Object> data =
+            gson.fromJson(body, java.util.Map.class);
+
+        if (data == null || data.get("id_utilisateur") == null || data.get("nouveau") == null) {
+            sendJson(ex, 400, "{\"error\":\"id_utilisateur et nouveau obligatoires\"}");
+            return;
+        }
+
+        // 3. Convertir les valeurs (Gson renvoie des Double pour les nombres)
+        int idCible = ((Number) data.get("id_utilisateur")).intValue();
+        String nouveau = (String) data.get("nouveau");
+
+        if (nouveau.length() < 4) {
+            sendJson(ex, 400, "{\"error\":\"nouveau mot de passe trop court (min 4)\"}");
+            return;
+        }
+
+        // 4. Vérifier que l'utilisateur cible existe
+        model.Utilisateur cible = dao.findById(idCible);
+        if (cible == null) {
+            sendJson(ex, 404, "{\"error\":\"Utilisateur cible introuvable\"}");
+            return;
+        }
+
+        // 5. Hasher et mettre à jour
+        String nouveauHash = service.hash(nouveau);
+        boolean ok = dao.updatePassword(idCible, nouveauHash);
+
+        sendJson(ex, ok ? 200 : 500,
+                 ok ? "{\"message\":\"Mot de passe reinitialise\"}"
+                    : "{\"error\":\"Echec de la mise a jour\"}");
     }
 
     // ============================================================

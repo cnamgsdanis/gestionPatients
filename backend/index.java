@@ -75,6 +75,6 @@ public class index {
         System.out.println("  POST /api/auth/login");
         System.out.println("  GET/POST/PUT/DELETE /api/patients");
         System.out.println("  GET/PUT/DELETE      /api/utilisateurs (admin)");
-        System.out.println("=================DO BY DANIS@TECH END EVANN===================");
+        System.out.println("================= API DO BY DANIS@TECH END EVANN ===================");
     }
 }

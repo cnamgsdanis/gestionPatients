@@ -119,8 +119,9 @@ public class JwtService {
 
     /** Renvoie l'ID de l'utilisateur contenu dans le token. */
     public int getIdUtilisateur(Claims claims) {
-        return claims.get("id_utilisateur", Integer.class);
-    }
+    Number n = claims.get("id_utilisateur", Number.class);
+    return n == null ? 0 : n.intValue();
+}
 
     /** Renvoie le username contenu dans le token. */
     public String getUsername(Claims claims) {
@@ -134,8 +135,9 @@ public class JwtService {
 
     /** Renvoie l'id_structure contenu dans le token. */
     public int getIdStructure(Claims claims) {
-        return claims.get("id_structure", Integer.class);
-    }
+        Number n = claims.get("id_structure", Number.class);
+    return n == null ? 0 : n.intValue();
+}
 
     /**
      * Vérifie que le token est valide (sans lever d'exception).
