@@ -224,7 +224,7 @@ SELECT * FROM Structure;   -- Note l'id_structure (probablement 1)
 
 Depuis le dossier `backend/` :
 
-```powershell
+```powershell   
 # 1. Se placer dans le dossier backend
 cd backend
 
@@ -237,7 +237,7 @@ javac -cp "lib/mssql-jdbc-13.4.0.jre11.jar;lib/gson-2.10.1.jar;lib/jbcrypt-0.4.j
 
 # 4. Lancer le serveur
 java -cp "out;lib/mssql-jdbc-13.4.0.jre11.jar;lib/gson-2.10.1.jar;lib/jbcrypt-0.4.jar" index
-```
+
 
 ### Étapes (Linux / macOS)
 

@@ -8,7 +8,7 @@ public class Database {
     private static final String URL =
         "jdbc:sqlserver://localhost:1433;databaseName=gestionpatient;encrypt=true;trustServerCertificate=true";
     private static final String USER = "sa";
-    private static final String PASSWORD = "*20Danis@";
+    private static final String PASSWORD = "j@imelecode2026*";
 
     static {
         try {
