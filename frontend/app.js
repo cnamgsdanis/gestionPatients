@@ -695,51 +695,85 @@ function resetSearch() {
   updateActionButtons();
 }
 
-function findAssure(matricule) {
-  return ASSURES.find(a => a.matricule === matricule) || null;
-}
-
-function runSearch(matricule) {
+// Recherche exclusivement dans la vraie base (table Patient, via l'API) —
+// plus aucune donnée générique locale : en production, un matricule qui
+// n'existe pas réellement en base ne doit jamais faire apparaître un
+// assuré fictif.
+async function runSearch(matricule) {
   matricule = (matricule || "").trim();
-  const found = findAssure(matricule);
-  document.getElementById("notFoundMsg").hidden = !!found || !matricule;
-  if (!found) {
-    document.getElementById("assureFound").hidden = true;
+  const notFound = document.getElementById("notFoundMsg");
+  const card = document.getElementById("assureFound");
+  if (!matricule) {
+    notFound.hidden = true;
+    card.hidden = true;
     state.currentAssure = null;
     updateActionButtons();
     return;
   }
-  state.currentAssure = found;
-  showAssureCard(found);
+
+  const btn = document.getElementById("searchBtn");
+  btn.disabled = true;
+  notFound.hidden = true;
+  card.hidden = true;
+
+  try {
+    const found = await findPatientByMatricule(matricule);
+    btn.disabled = false;
+    if (!found) {
+      state.currentAssure = null;
+      notFound.textContent = "Aucun assuré trouvé pour ce matricule.";
+      notFound.hidden = false;
+      updateActionButtons();
+      return;
+    }
+    state.currentAssure = found;
+    showAssureCard(found);
+  } catch (err) {
+    btn.disabled = false;
+    state.currentAssure = null;
+    notFound.textContent = err.isNetworkError
+      ? "Backend injoignable — impossible de rechercher un assuré pour le moment."
+      : "Erreur lors de la recherche : " + err.message;
+    notFound.hidden = false;
+    updateActionButtons();
+  }
 }
 
-// Avatar "photo" d'un assuré : pas de vraie photo dans ce prototype
-// front-end (aucune source d'image), donc un cadre d'initiales à couleur
-// stable (dérivée du nom) tient lieu de section photo dédiée.
+// Avatar d'un assuré : utilise la vraie photo (Patient.photo_url) quand
+// elle est chargeable, sinon un cadre d'initiales à couleur stable (dérivée
+// du nom) comme repli visuel.
 const AVATAR_COLORS = ["#4d9e63", "#14479c", "#b6791f", "#8a3fa0", "#c0392b", "#1f8a8a", "#2f7d45"];
 function avatarColorFor(seed) {
   let h = 0;
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
   return AVATAR_COLORS[h % AVATAR_COLORS.length];
 }
-function setAvatar(el, prenom, nom) {
+function setAvatar(el, prenom, nom, photoUrl) {
   if (!el) return;
-  el.textContent = ((prenom || "").charAt(0) + (nom || "").charAt(0)).toUpperCase();
-  el.style.background = avatarColorFor((prenom || "") + (nom || ""));
+  const initials = ((prenom || "").charAt(0) + (nom || "").charAt(0)).toUpperCase();
+  const color = avatarColorFor((prenom || "") + (nom || ""));
+  el.textContent = initials;
+  el.style.background = color;
+  if (!photoUrl) return;
+  const img = document.createElement("img");
+  img.alt = (prenom || "") + " " + (nom || "");
+  img.style.cssText = "width:100%;height:100%;object-fit:cover;border-radius:inherit;";
+  img.onerror = () => { img.remove(); };
+  img.src = photoUrl;
+  el.appendChild(img);
 }
 
 function showAssureCard(assure) {
   document.getElementById("assureFound").hidden = false;
   document.getElementById("af-nom").textContent = assure.prenom + " " + assure.nom;
-  document.getElementById("af-situation").textContent = assure.nature || "Assuré principal";
-  document.getElementById("af-matricule").textContent = assure.matricule;
-  document.getElementById("af-naissance").textContent = assure.dateNaissance;
-  document.getElementById("af-fonds").textContent = assure.fonds;
-  document.getElementById("af-nature").textContent = assure.nature || "Assuré principal";
-  setAvatar(document.getElementById("af-avatar"), assure.prenom, assure.nom);
+  const statutTxt = assure.statutAssure ? "Assuré" : "Non assuré";
+  document.getElementById("af-situation").textContent = statutTxt;
+  document.getElementById("af-matricule").textContent = assure.matricule || "—";
+  document.getElementById("af-naissance").textContent = assure.dateNaissance || "—";
+  document.getElementById("af-fonds").textContent = assure.fonds != null ? fmtFCFA(num(assure.fonds)) : "—";
+  setAvatar(document.getElementById("af-avatar"), assure.prenom, assure.nom, assure.photoUrl);
 
-  // Le patient de la prise en charge est l'assuré recherché — plus de choix
-  // séparé entre l'assuré principal et ses ayants droit sur cet écran.
+  // Le patient de la prise en charge est l'assuré recherché.
   state.currentPatient = {
     matricule: assure.matricule,
     nom: assure.nom,
@@ -881,7 +915,9 @@ function openSoins(type) {
   const numero = nextFeuilleNum();
   document.getElementById("soinsNum").value = numero;
   document.getElementById("soinsDate").value = todayFR();
-  document.getElementById("soinsFonds").value = assure.fonds;
+  // assure.fonds est désormais un montant réel (table Patient), pas l'un
+  // des 3 fonds nommés du menu ci-dessous : pas de pré-remplissage fiable
+  // possible, l'agent choisit le fonds manuellement.
   document.getElementById("soinsFonds").disabled = false;
 
   document.getElementById("p-patientNom").value = patient.prenom + " " + patient.nom;

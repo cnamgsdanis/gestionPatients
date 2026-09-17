@@ -86,6 +86,16 @@ async function apiFetch(method, path, body) {
   try { data = await res.json(); } catch (e) { /* corps vide (ex: 204) */ }
 
   if (!res.ok) {
+    // 502/503/504 : le proxy CORS (tools/dev-proxy.js) a bien répondu, mais
+    // le vrai backend Java qu'il relaie est injoignable — c'est le même cas
+    // que fetch() qui échoue directement (backend arrêté), pas un vrai
+    // refus de l'API (401/403/...), donc même traitement : repli local.
+    if (res.status === 502 || res.status === 503 || res.status === 504) {
+      const err = new Error((data && data.error) || ("Backend injoignable via le proxy (" + res.status + ")"));
+      err.isNetworkError = true;
+      err.status = res.status;
+      throw err;
+    }
     if (res.status === 401) { apiSession = null; apiSaveSession(null); }
     const err = new Error((data && data.error) || ("Erreur API (" + res.status + ")"));
     err.status = res.status;
@@ -127,13 +137,18 @@ function apiDeleteUtilisateur(id) { return apiFetch("DELETE", "/api/utilisateurs
 function apiSetUtilisateurActif(id, actif) { return apiFetch("PATCH", "/api/utilisateurs/" + id + "/actif", { actif: actif }); }
 
 /* ---- Patients (module 02) ------------------------------------------------
-   Exposées pour un futur branchement de "Nouvelle prise en charge" /
-   "Historique" — non câblées à l'écran pour l'instant : le modèle Patient
-   du backend (id_patient, sex, statut_assure, fonds 1-4, matricule_nag,
-   id_assure_principal) ne recouvre pas le modèle ASSURES du prototype
-   (ayants droit détaillés, fonds nommés, prise en charge, ordonnance,
-   feuille de soins...), qui n'a pas d'équivalent API. Voir le PDF,
-   section "Périmètre connecté".
+   Utilisée par "Nouvelle prise en charge" (recherche par matricule NAG) —
+   voir mapBackendPatient() plus bas. Schéma réel vérifié en base (colonnes
+   effectivement présentes dans Patient, différent par endroits de ce que
+   décrit backend/docs/01-auth.md, qui est en fait la doc du module Patient
+   et pas à jour sur ce point) : id_patient, photo_url, prenom, nom, sex,
+   contact, statut_assure (bit), fonds (decimal — un MONTANT, pas un niveau
+   1-4 comme indiqué dans la doc), matricule_nag. Pas de colonne
+   id_assure_principal ni de date de naissance dans le schéma réel : aucun
+   lien assuré principal / ayant droit n'est donc disponible côté API, et
+   la date de naissance ne peut pas être affichée (voir mapBackendPatient).
+   Pas de route de recherche par matricule : on charge la liste complète et
+   on filtre côté client (findPatientByMatricule).
    -------------------------------------------------------------------- */
 
 function apiListPatients() { return apiFetch("GET", "/api/patients"); }
@@ -141,6 +156,34 @@ function apiGetPatient(id) { return apiFetch("GET", "/api/patients/" + id); }
 function apiCreatePatient(payload) { return apiFetch("POST", "/api/patients", payload); }
 function apiUpdatePatient(id, payload) { return apiFetch("PUT", "/api/patients/" + id, payload); }
 function apiDeletePatient(id) { return apiFetch("DELETE", "/api/patients/" + id); }
+
+// Pas de route GET /api/patients?matricule=... côté backend : on charge la
+// liste complète et on filtre côté client sur matricule_nag.
+async function findPatientByMatricule(matricule) {
+  const list = await apiListPatients();
+  const found = (list || []).find(p => (p.matricule_nag || "") === matricule);
+  return found ? mapBackendPatient(found) : null;
+}
+
+// Convertit un Patient backend vers la forme utilisée par l'écran
+// "Nouvelle prise en charge" (voir showAssureCard() dans app.js). Champs
+// absents du schéma réel (date de naissance, lien assuré principal / ayant
+// droit) sont laissés vides plutôt qu'inventés.
+function mapBackendPatient(p) {
+  if (!p) return null;
+  return {
+    idPatient: p.id_patient,
+    matricule: p.matricule_nag || "",
+    nom: p.nom || "",
+    prenom: p.prenom || "",
+    sexe: p.sex || "",
+    dateNaissance: "",
+    fonds: p.fonds,
+    statutAssure: !!p.statut_assure,
+    photoUrl: p.photo_url || "",
+    telephone: p.contact || ""
+  };
+}
 
 /* ---- Permissions dynamiques, admin (module 04) --------------------------
    Exposées pour un futur branchement de "Gestion des permissions" sur la

@@ -5,6 +5,44 @@ avoir lu l'intégralité du code backend et connecté le frontend à l'API réel
 `GestionPatients - Connexion Frontend-Backend.pdf` pour le détail de cette connexion). Organisé par
 zone, du plus bloquant au plus secondaire.
 
+> **Backend fonctionnel en local, testé de bout en bout le 17/09/2026** (voir §2) : un compte
+> `admin` / `admin123` (rôle `administrateur`) a été créé via `POST /api/auth/register` pour pouvoir
+> tester — à changer ou supprimer avant toute mise en partage/production.
+>
+> **17/09/2026, après remplissage des tables par Lionel** : deux comptes ajoutés directement en base
+> (`j.dupont`, `a.moussavou`) avaient un hash de mot de passe incomplet (56/57 caractères au lieu des
+> 60 attendus par BCrypt — `IllegalArgumentException: Invalid salt revision` à la vérification),
+> probablement collé/tronqué à la main plutôt que généré par le code. Impossible de se connecter avec
+> ces comptes quel que soit le mot de passe essayé. Corrigé en régénérant un vrai hash BCrypt (via la
+> même bibliothèque `jbcrypt` que le backend) : `j.dupont` / `dupont123` et `a.moussavou` /
+> `moussavou123` — **mots de passe temporaires, à changer**. Les deux comptes se connectent maintenant
+> normalement (testé en conditions réelles, JWT + accès aux vues selon le rôle). Vérifié aussi : la
+> matrice de permissions ajoutée en base (35 permissions, `administrateur` en a bien les 35, les 5
+> autres rôles en ont une part cohérente) — rien à corriger de ce côté.
+>
+> **⚠️ 17/09/2026 — Table `Patient` incomplète, bloque "Nouvelle prise en charge" (action requise) :**
+> le front a été branché sur `GET /api/patients` pour rechercher un assuré par matricule (uniquement des
+> données réelles désormais, plus aucune donnée générique — voir §3 mis à jour). Mais la table `Patient`
+> réelle en base n'a pas la colonne `id_assure_principal`, alors que `PatientDAO.java` la lit sur chaque
+> ligne (`rs.getInt("id_assure_principal")`) — conforme à `backend/MPD/gestionpatient.sql` (colonne bien
+> définie dans le script), donc le code Java n'est pas en cause, c'est la table déployée qui a divergé du
+> script. Résultat : `GET /api/patients` échoue actuellement à 100% avec `500 — Le nom de colonne
+> id_assure_principal n'est pas valide`, quel que soit le matricule recherché.
+>
+> Je n'ai pas pu corriger ça moi-même (permission refusée pour modifier la base partagée). À exécuter
+> une fois, par quelqu'un qui a la main sur SQL Server :
+> ```sql
+> ALTER TABLE Patient ADD id_assure_principal INT NULL;
+> ALTER TABLE Patient ADD CONSTRAINT FK_Patient_AssurePrincipal
+>     FOREIGN KEY (id_assure_principal) REFERENCES Patient(id_patient);
+> ```
+> Sans risque pour les données existantes (colonne nullable, purement additive). Autre écart repéré au
+> passage, non corrigé (pas de risque de perte de données identifié, donc pas de correctif proposé) :
+> `fonds` est `DECIMAL` dans la table réelle avec des valeurs qui ressemblent à des montants (150000.00,
+> 45000.50...), alors que le script SQL le définit en `TINYINT` avec `CHECK (fonds IN (1,2,3,4))` (un
+> niveau, pas un montant). Le front affiche la valeur réelle telle quelle (montant formaté), sans
+> supposer laquelle des deux définitions est la bonne — à trancher avec qui a rempli ces données.
+
 ---
 
 ## 1. Backend — modules métier manquants (priorité haute)
@@ -34,12 +72,25 @@ cœur métier de l'application (le frontend l'a déjà entièrement, en local) n
 
 ## 2. Backend — configuration et infrastructure
 
-- [ ] **Port SQL Server** — sur la machine de développement actuelle, SQL Server Express écoute sur un
-      port dynamique (observé : 55463) et non sur le port fixe 1433 attendu par
-      `backend/db/Database.java`. Toute requête qui touche la base échoue actuellement avec une erreur
-      de connexion TCP. Deux solutions (détaillées dans le PDF, §10) : configurer un port fixe côté SQL
-      Server (aucune modification de code), ou adapter l'URL de connexion dans `Database.java` pour
-      utiliser le nom d'instance (`localhost\SQLEXPRESS`, via SQL Browser).
+- [x] **Port SQL Server** — ✅ résolu le 17/09/2026. `backend/db/Database.java` pointait sur
+      `localhost:1433;databaseName=gestionpatient`, alors que l'instance SQL Server Express de cette
+      machine écoute en réalité sur un port dynamique et que la base réelle s'appelle `gestionPatients`
+      (avec majuscule et un "s"). L'URL de connexion a été corrigée pour utiliser le nom d'instance
+      (`localhost\SQLEXPRESS`, résolu via SQL Browser) et le vrai nom de base — seule ligne modifiée
+      dans `Database.java`, aucune autre logique touchée. Le mot de passe du compte SQL `sa` a aussi été
+      aligné sur celui déjà présent dans le code (aucune valeur de code changée). Testé de bout en bout
+      avec un vrai compte (`admin` / `admin123`) : inscription, connexion, JWT, et liste des
+      utilisateurs fonctionnent contre la vraie base SQL Server.
+- [x] **Permission / RolePermission vides** — ✅ trouvé et résolu le 17/09/2026, en marge du point
+      précédent. Ces deux tables sont bien définies dans `backend/MPD/gestionpatient.sql` mais n'ont
+      jamais été peuplées : `PermissionService` chargeait donc un cache totalement vide au démarrage, et
+      **toutes** les routes protégées par permission (y compris pour le rôle `administrateur`)
+      répondaient `403`, même avec un token JWT valide. Un script `tools/seed-database.sql` (nouveau,
+      hors de `backend/`) crée ces deux tables si absentes et les remplit avec les permissions de base
+      et les permissions par défaut déjà documentées dans `backend/docs/04-permission.md` — aucune
+      permission ni règle inventée, uniquement ce qui était déjà écrit dans la documentation du projet.
+      À rejouer sur toute autre base fraîchement créée à partir du script SQL (ex. poste d'un autre
+      développeur).
 - [ ] **CORS** — le backend ne renvoie aucun en-tête `Access-Control-Allow-*` et ne répond pas aux
       requêtes `OPTIONS`. Un proxy de développement (`tools/dev-proxy.js`) contourne le problème sans
       toucher au backend, mais en production il serait plus propre de gérer le CORS nativement dans
@@ -59,8 +110,17 @@ Une fois les modules du §1 disponibles côté backend, il restera à écrire c�
 qui a déjà été fait pour Auth/Utilisateur (fonctions dans `api.js`, adaptation des données, bascule
 avec repli local — voir le PDF pour le patron à suivre) :
 
-- [ ] **Nouvelle prise en charge** — recherche d'assuré, création de PEC, sur `/api/patients` +
-      futur module Prise en charge.
+- [x] **Recherche d'assuré (Nouvelle prise en charge)** — ✅ branchée le 17/09/2026 sur
+      `GET /api/patients` (recherche par `matricule_nag`, filtrage côté front faute de route de
+      recherche dédiée). Plus aucune donnée générique locale : un matricule qui n'existe pas
+      réellement en base n'affiche plus d'assuré fictif. Bloquée en pratique tant que la colonne
+      `id_assure_principal` manque en base (voir l'encart au-dessus) — le code est prêt et attend
+      juste ce correctif SQL pour fonctionner. Champs non disponibles dans le schéma réel de `Patient`
+      (date de naissance, lien assuré principal/ayant droit) affichés en "—" plutôt qu'inventés ; la
+      vraie photo (`photo_url`) est utilisée si elle charge, avec repli sur les initiales sinon.
+- [ ] **Création de la prise en charge elle-même** (ticket modérateur, médecin, type de soins...) —
+      reste sur le futur module Prise en charge, absent de l'API (seule la recherche de l'assuré est
+      branchée pour l'instant).
 - [ ] **Feuille de soins / bon d'examen** — sur les futurs modules Prestation / Examen.
 - [ ] **Ordonnance et Espace Pharmacien** — sur le futur module Ordonnance.
 - [ ] **Historique, Statistiques, Rapports** — tous les trois agrègent des prises en charge ; ils
