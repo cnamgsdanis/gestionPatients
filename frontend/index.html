@@ -526,15 +526,15 @@
             <div class="search-row">
               <div class="field field-matricule">
                 <label for="matriculeInput">Matricule de l'assuré</label>
-                <input type="text" id="matriculeInput" placeholder="10 chiffres" maxlength="10" inputmode="numeric" />
+                <input type="text" id="matriculeInput" placeholder="Matricule (chiffres)" maxlength="15" inputmode="numeric" />
               </div>
               <button type="button" class="btn-primary" id="searchBtn">Rechercher</button>
             </div>
-            <div class="hint">
-              Matricules de test : <code>1234567890</code>, <code>2345678901</code>, <code>3456789012</code>, <code>4567890123</code>, <code>5678901234</code>
-            </div>
 
-            <div id="notFoundMsg" class="hint" style="color:var(--red)" hidden>Aucun assuré trouvé pour ce matricule.</div>
+            <div id="notFoundMsg" class="hint" style="color:var(--red)" hidden>
+              <span id="notFoundText">Aucun assuré trouvé pour ce matricule.</span>
+              <button type="button" class="btn-secondary btn-sm" id="createPatientBtn" style="margin-left:10px" hidden>+ Créer ce patient</button>
+            </div>
 
             <div class="assure-found" id="assureFound" hidden>
               <div class="assure-split">
@@ -548,6 +548,10 @@
                     <div><b id="af-fonds">—</b>Fonds</div>
                   </div>
                   <button type="button" class="btn-secondary btn-sm" id="changeAssureBtn">Changer d'assuré</button>
+                  <div style="display:flex;gap:8px;margin-top:8px">
+                    <button type="button" class="btn-secondary btn-sm" id="editPatientBtn">Modifier</button>
+                    <button type="button" class="btn-secondary btn-sm" id="deletePatientBtn" style="color:var(--red);border-color:var(--red)">Supprimer</button>
+                  </div>
                 </div>
 
                 <div class="assure-pec-col">
@@ -1105,10 +1109,32 @@
           </div>
           <div class="card-body">
             <p class="hint" style="margin:0">
-              <b>Important :</b> cette application n'a pas de backend — ces permissions ne contrôlent que
-              l'affichage dans le navigateur (menu et navigation). Elles ne remplacent pas une vérification
-              côté serveur, qui n'existe pas dans ce prototype.
+              <b>Important :</b> ce tableau ne contrôle que l'affichage dans le navigateur (menu et
+              navigation) — voir « Permissions API » ci-dessous pour les permissions réellement
+              vérifiées côté serveur.
             </p>
+          </div>
+        </div>
+
+        <!-- ---------------- PERMISSIONS API (actions vérifiées côté backend) ---------------- -->
+        <div class="card" id="apiPermissionsCard" style="margin-top:20px">
+          <div class="card-head">
+            <h3>Permissions API <span class="pill" id="apiPermissionsBadge" style="margin-left:8px;vertical-align:middle">—</span></h3>
+            <button type="button" class="btn-secondary btn-sm" id="reloadApiPermissionsBtn">Recharger</button>
+          </div>
+          <div class="card-body">
+            <p class="hint" style="margin-top:0">
+              Ceci pilote les permissions réellement vérifiées par le serveur (table Permission / RolePermission,
+              ex. <code>patient.creer</code>, <code>utilisateur.supprimer</code>…) — distinctes du tableau
+              d'affichage ci-dessus. Nécessite un compte connecté au vrai backend disposant de la permission
+              <code>permission.lire</code> (lecture) et <code>permission.gerer</code> (modification).
+            </p>
+          </div>
+          <div class="card-body" style="padding:0; overflow-x:auto">
+            <table class="data-table" id="apiPermissionsTable">
+              <thead><tr id="apiPermissionsHead"><th>Rôle</th></tr></thead>
+              <tbody id="apiPermissionsBody"></tbody>
+            </table>
           </div>
         </div>
       </section>
@@ -1240,6 +1266,19 @@
         <input type="text" id="profil-etab" disabled />
       </div>
       <p class="hint">L'e-mail et le rôle sont gérés par un administrateur (voir Gestion des utilisateurs).</p>
+
+      <div id="profil-password-wrap" hidden>
+        <hr style="border:none;border-top:1px solid var(--border);margin:14px 0" />
+        <div class="field">
+          <label for="profil-pass-ancien">Mot de passe actuel</label>
+          <input type="password" id="profil-pass-ancien" autocomplete="current-password" />
+        </div>
+        <div class="field">
+          <label for="profil-pass-nouveau">Nouveau mot de passe</label>
+          <input type="password" id="profil-pass-nouveau" autocomplete="new-password" minlength="4" />
+        </div>
+        <p class="hint" id="profil-pass-hint" style="margin-bottom:0">Laissez ces champs vides pour ne pas changer de mot de passe.</p>
+      </div>
     </form>
     <div class="modal-foot">
       <button type="button" class="btn-secondary" id="cancelProfilModal">Fermer</button>
@@ -1248,14 +1287,36 @@
   </div>
 </div>
 
-<!-- ======================= MODAL AJOUT UTILISATEUR ======================= -->
+<!-- ======================= MODAL RÉINITIALISATION MOT DE PASSE (admin) ======================= -->
+<div class="modal-overlay" id="resetPasswordModal" hidden>
+  <div class="modal modal-accent-blue">
+    <div class="modal-head">
+      <h3>Réinitialiser le mot de passe</h3>
+      <button class="close-x" id="closeResetPasswordModal">&times;</button>
+    </div>
+    <form class="modal-body" id="resetPasswordForm">
+      <p class="hint" style="margin-top:0" id="resetPasswordTarget">Utilisateur : —</p>
+      <div class="field">
+        <label for="rp-nouveau">Nouveau mot de passe</label>
+        <input type="password" id="rp-nouveau" required minlength="4" autocomplete="new-password" />
+      </div>
+    </form>
+    <div class="modal-foot">
+      <button type="button" class="btn-secondary" id="cancelResetPasswordModal">Annuler</button>
+      <button type="submit" form="resetPasswordForm" class="btn-primary">Réinitialiser</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= MODAL AJOUT / MODIFICATION UTILISATEUR ======================= -->
 <div class="modal-overlay" id="userModal" hidden>
   <div class="modal modal-accent-blue">
     <div class="modal-head">
-      <h3><span class="modal-head-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><circle cx="18" cy="8.5" r="2.4"/><path d="M16 14.3c2.8.4 4.7 2.4 4.7 5.7"/></svg></span>Ajouter un utilisateur</h3>
+      <h3><span class="modal-head-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><circle cx="18" cy="8.5" r="2.4"/><path d="M16 14.3c2.8.4 4.7 2.4 4.7 5.7"/></svg></span><span id="userModalTitle">Ajouter un utilisateur</span></h3>
       <button class="close-x" id="closeUserModal">&times;</button>
     </div>
     <form class="modal-body" id="userForm">
+      <input type="hidden" id="u-id" />
       <div class="field">
         <label>Nom et prénom</label>
         <input type="text" id="u-nom" required />
@@ -1279,9 +1340,10 @@
         <label>Structure</label>
         <input type="text" id="u-structure" placeholder="Ex. CHU de Libreville, Direction Informatique…" />
       </div>
-      <div class="field">
+      <div class="field" id="u-pass-wrap">
         <label>Mot de passe temporaire</label>
         <input type="password" id="u-pass" placeholder="••••••••" />
+        <p class="hint" id="u-pass-hint" style="margin-bottom:0" hidden>Utilisez « Réinitialiser le mot de passe » depuis la liste pour changer le mot de passe d'un compte existant.</p>
       </div>
       <div class="field">
         <label>Date de création</label>
@@ -1291,6 +1353,63 @@
     <div class="modal-foot">
       <button type="button" class="btn-secondary" id="cancelUserModal">Annuler</button>
       <button type="submit" form="userForm" class="btn-primary">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= MODAL CRÉATION / MODIFICATION PATIENT ======================= -->
+<div class="modal-overlay" id="patientModal" hidden>
+  <div class="modal modal-accent-blue">
+    <div class="modal-head">
+      <h3><span id="patientModalTitle">Créer un patient</span></h3>
+      <button class="close-x" id="closePatientModal">&times;</button>
+    </div>
+    <form class="modal-body" id="patientForm">
+      <input type="hidden" id="p-id" />
+      <input type="hidden" id="p-photo-url" />
+      <div class="field">
+        <label for="p-matricule">Matricule (NAG)</label>
+        <input type="text" id="p-matricule" inputmode="numeric" required />
+      </div>
+      <div class="field">
+        <label for="p-prenom">Prénom</label>
+        <input type="text" id="p-prenom" required />
+      </div>
+      <div class="field">
+        <label for="p-nom">Nom</label>
+        <input type="text" id="p-nom" required />
+      </div>
+      <div class="field">
+        <label for="p-sex">Sexe</label>
+        <select id="p-sex">
+          <option value="M">Masculin</option>
+          <option value="F">Féminin</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="p-contact">Téléphone</label>
+        <input type="text" id="p-contact" />
+      </div>
+      <div class="field">
+        <label for="p-fonds">Fonds</label>
+        <select id="p-fonds">
+          <option value="1">Public</option>
+          <option value="2">Privé</option>
+          <option value="3">GEF</option>
+          <option value="4">Fonds 4</option>
+        </select>
+      </div>
+      <div class="field">
+        <label><input type="checkbox" id="p-statut-assure" /> Assuré</label>
+      </div>
+      <div class="field">
+        <label for="p-id-assure-principal">ID de l'assuré principal (si ayant droit)</label>
+        <input type="number" id="p-id-assure-principal" min="1" placeholder="Laisser vide si patient principal" />
+      </div>
+    </form>
+    <div class="modal-foot">
+      <button type="button" class="btn-secondary" id="cancelPatientModal">Annuler</button>
+      <button type="submit" form="patientForm" class="btn-primary" id="patientModalSubmitBtn">Enregistrer</button>
     </div>
   </div>
 </div>

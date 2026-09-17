@@ -117,12 +117,31 @@ async function apiLogin(username, password) {
   apiSaveSession(apiSession);
   return apiSession;
 }
+// POST /api/auth/logout — le JWT ne peut pas être invalidé côté serveur
+// (pas de blacklist, voir AuthController), donc cet appel est au mieux
+// (best-effort) : la session locale est de toute façon effacée juste après,
+// que le backend réponde ou non.
 function apiLogout() {
+  if (apiIsConnected()) {
+    apiFetch("POST", "/api/auth/logout").catch(() => { /* best-effort */ });
+  }
   apiSession = null;
   apiSaveSession(null);
 }
 function apiRegister(payload) {
   return apiFetch("POST", "/api/auth/register", payload);
+}
+
+// PUT /api/auth/change-password { ancien, nouveau } — l'utilisateur connecté
+// change son propre mot de passe.
+function apiChangePassword(ancien, nouveau) {
+  return apiFetch("PUT", "/api/auth/change-password", { ancien: ancien, nouveau: nouveau });
+}
+// POST /api/auth/reset-password { id_utilisateur, nouveau } — un admin
+// (permission utilisateur.modifier) réinitialise le mot de passe d'un autre
+// utilisateur.
+function apiResetPassword(idUtilisateur, nouveau) {
+  return apiFetch("POST", "/api/auth/reset-password", { id_utilisateur: idUtilisateur, nouveau: nouveau });
 }
 
 /* ---- Utilisateurs, admin (module 03) ------------------------------------
@@ -142,13 +161,15 @@ function apiSetUtilisateurActif(id, actif) { return apiFetch("PATCH", "/api/util
    effectivement présentes dans Patient, différent par endroits de ce que
    décrit backend/docs/01-auth.md, qui est en fait la doc du module Patient
    et pas à jour sur ce point) : id_patient, photo_url, prenom, nom, sex,
-   contact, statut_assure (bit), fonds (decimal — un MONTANT, pas un niveau
-   1-4 comme indiqué dans la doc), matricule_nag. Pas de colonne
-   id_assure_principal ni de date de naissance dans le schéma réel : aucun
-   lien assuré principal / ayant droit n'est donc disponible côté API, et
-   la date de naissance ne peut pas être affichée (voir mapBackendPatient).
-   Pas de route de recherche par matricule : on charge la liste complète et
-   on filtre côté client (findPatientByMatricule).
+   contact, statut_assure (bit), fonds (INT — un CODE DE CATÉGORIE, 1=Public
+   2=Privé 3=GEF 4="Fonds 4" et rien d'autre, voir FONDS_LABELS dans app.js ;
+   toute autre valeur est une erreur de donnée à corriger en base, pas un
+   cas à gérer côté front), matricule_nag (INT — chiffres uniquement).
+   Pas de colonne id_assure_principal ni de date de naissance dans le schéma
+   réel : aucun lien assuré principal / ayant droit n'est donc disponible
+   côté API, et la date de naissance ne peut pas être affichée (voir
+   mapBackendPatient). Pas de route de recherche par matricule : on charge
+   la liste complète et on filtre côté client (findPatientByMatricule).
    -------------------------------------------------------------------- */
 
 function apiListPatients() { return apiFetch("GET", "/api/patients"); }
@@ -161,8 +182,27 @@ function apiDeletePatient(id) { return apiFetch("DELETE", "/api/patients/" + id)
 // liste complète et on filtre côté client sur matricule_nag.
 async function findPatientByMatricule(matricule) {
   const list = await apiListPatients();
-  const found = (list || []).find(p => (p.matricule_nag || "") === matricule);
+  // matricule_nag est un INT côté API (JSON number) ; la saisie utilisateur
+  // est toujours une chaîne — on compare donc en texte des deux côtés.
+  const target = String(matricule).trim();
+  const found = (list || []).find(p => p.matricule_nag != null && String(p.matricule_nag) === target);
   return found ? mapBackendPatient(found) : null;
+}
+
+// Patient.photo_url est un chemin Windows local (ex:
+// "\backend\media\patients\patient_101.jpg", tel que stocké en base),
+// injouable tel quel par un navigateur. Le proxy CORS (tools/dev-proxy.js)
+// sert désormais ces fichiers sous /media/<chemin> — voir "Sert aussi les
+// fichiers de backend/media/" dans dev-proxy.js — donc on ne garde que la
+// partie du chemin après "backend/media/" (ou "backend\media\") et on la
+// fait pointer vers l'API_BASE_URL courante (le proxy).
+function toPhotoUrl(rawPath) {
+  if (!rawPath) return "";
+  const normalized = rawPath.replace(/\\/g, "/");
+  const marker = "backend/media/";
+  const idx = normalized.toLowerCase().indexOf(marker);
+  const relative = idx >= 0 ? normalized.slice(idx + marker.length) : normalized.replace(/^\/+/, "");
+  return API_BASE_URL + "/media/" + relative;
 }
 
 // Convertit un Patient backend vers la forme utilisée par l'écran
@@ -180,7 +220,7 @@ function mapBackendPatient(p) {
     dateNaissance: "",
     fonds: p.fonds,
     statutAssure: !!p.statut_assure,
-    photoUrl: p.photo_url || "",
+    photoUrl: toPhotoUrl(p.photo_url),
     telephone: p.contact || ""
   };
 }

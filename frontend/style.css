@@ -1171,6 +1171,7 @@ a { color: var(--blue); }
   letter-spacing: .5px;
   box-shadow: 0 8px 22px rgba(20, 40, 25, .26);
   margin-bottom: 6px;
+  overflow: hidden;
 }
 .assure-photo-col .idname {
   font-size: 17px; font-weight: 800; letter-spacing: .2px;

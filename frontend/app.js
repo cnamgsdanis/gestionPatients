@@ -514,6 +514,12 @@ function openProfilModal() {
   } else {
     etabWrap.hidden = true;
   }
+  // Le changement de mot de passe (PUT /api/auth/change-password) n'a de
+  // sens que pour un compte réellement authentifié auprès du backend — un
+  // compte de démonstration local n'a pas de mot de passe côté serveur.
+  document.getElementById("profil-password-wrap").hidden = !apiIsConnected();
+  document.getElementById("profil-pass-ancien").value = "";
+  document.getElementById("profil-pass-nouveau").value = "";
   document.getElementById("profilModal").hidden = false;
 }
 document.getElementById("userMenuProfil").addEventListener("click", () => { setUserMenuOpen(false); openProfilModal(); });
@@ -529,6 +535,16 @@ document.getElementById("profilForm").addEventListener("submit", e => {
   u.nom = parts.join(" ") || "";
   saveJSON("pec_users", state.users);
   updateUserPill(u, u.email);
+
+  const ancien = document.getElementById("profil-pass-ancien").value;
+  const nouveau = document.getElementById("profil-pass-nouveau").value;
+  if (apiIsConnected() && (ancien || nouveau)) {
+    apiChangePassword(ancien, nouveau).then(() => {
+      document.getElementById("profilModal").hidden = true;
+      showInfoModal("Mot de passe modifié", "<p>Votre mot de passe a été mis à jour.</p>");
+    }).catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
+    return;
+  }
   document.getElementById("profilModal").hidden = true;
 });
 
@@ -618,7 +634,7 @@ function goToView(name) {
   if (name === "medecin") renderMedecinQueue();
   if (name === "pharmacie") resetPharmaSearch();
   if (name === "rapports") renderRapports();
-  if (name === "permissions") renderPermissions();
+  if (name === "permissions") { renderPermissions(); loadApiPermissions(); }
   if (name === "journalisation") renderJournalisation();
 }
 
@@ -702,9 +718,12 @@ function resetSearch() {
 async function runSearch(matricule) {
   matricule = (matricule || "").trim();
   const notFound = document.getElementById("notFoundMsg");
+  const notFoundText = document.getElementById("notFoundText");
+  const createBtn = document.getElementById("createPatientBtn");
   const card = document.getElementById("assureFound");
   if (!matricule) {
     notFound.hidden = true;
+    createBtn.hidden = true;
     card.hidden = true;
     state.currentAssure = null;
     updateActionButtons();
@@ -714,6 +733,7 @@ async function runSearch(matricule) {
   const btn = document.getElementById("searchBtn");
   btn.disabled = true;
   notFound.hidden = true;
+  createBtn.hidden = true;
   card.hidden = true;
 
   try {
@@ -721,7 +741,11 @@ async function runSearch(matricule) {
     btn.disabled = false;
     if (!found) {
       state.currentAssure = null;
-      notFound.textContent = "Aucun assuré trouvé pour ce matricule.";
+      // NB : le texte va dans #notFoundText (un <span> dédié), jamais dans
+      // notFound.textContent directement — sinon ça efface le bouton
+      // "+ Créer ce patient" qui est un enfant de notFound.
+      notFoundText.textContent = "Aucun assuré trouvé pour ce matricule.";
+      createBtn.hidden = false;
       notFound.hidden = false;
       updateActionButtons();
       return;
@@ -731,9 +755,12 @@ async function runSearch(matricule) {
   } catch (err) {
     btn.disabled = false;
     state.currentAssure = null;
-    notFound.textContent = err.isNetworkError
+    notFoundText.textContent = err.isNetworkError
       ? "Backend injoignable — impossible de rechercher un assuré pour le moment."
       : "Erreur lors de la recherche : " + err.message;
+    // Pas de proposition de création tant qu'on ne sait même pas si le
+    // patient existe déjà (erreur réseau ou refus de l'API).
+    createBtn.hidden = true;
     notFound.hidden = false;
     updateActionButtons();
   }
@@ -752,15 +779,32 @@ function setAvatar(el, prenom, nom, photoUrl) {
   if (!el) return;
   const initials = ((prenom || "").charAt(0) + (nom || "").charAt(0)).toUpperCase();
   const color = avatarColorFor((prenom || "") + (nom || ""));
-  el.textContent = initials;
+  el.innerHTML = "";
   el.style.background = color;
-  if (!photoUrl) return;
+  if (!photoUrl) {
+    el.textContent = initials;
+    return;
+  }
+  // Pas de texte pendant que la photo est tentée : évite l'affichage des
+  // deux à la fois pendant le chargement. Si la photo échoue (fichier
+  // absent, cas fréquent pour les données de test), on retombe sur les
+  // initiales seulement à ce moment-là.
   const img = document.createElement("img");
   img.alt = (prenom || "") + " " + (nom || "");
-  img.style.cssText = "width:100%;height:100%;object-fit:cover;border-radius:inherit;";
-  img.onerror = () => { img.remove(); };
+  img.style.cssText = "width:100%;height:100%;object-fit:cover;border-radius:inherit;display:block;";
+  img.onerror = () => { img.remove(); el.textContent = initials; };
   img.src = photoUrl;
   el.appendChild(img);
+}
+
+// Fonds (Patient.fonds, désormais INT en base) : un code de catégorie,
+// exactement 4 valeurs valides. Toute autre valeur est signalée comme une
+// erreur de donnée plutôt que masquée ou affichée comme si elle était valide.
+const FONDS_LABELS = { 1: "Public", 2: "Privé", 3: "GEF", 4: "Fonds 4" };
+function fondsLabel(fonds) {
+  if (fonds == null) return "—";
+  const key = Math.round(num(fonds));
+  return FONDS_LABELS[key] || ("Erreur (valeur " + fonds + ")");
 }
 
 function showAssureCard(assure) {
@@ -770,7 +814,7 @@ function showAssureCard(assure) {
   document.getElementById("af-situation").textContent = statutTxt;
   document.getElementById("af-matricule").textContent = assure.matricule || "—";
   document.getElementById("af-naissance").textContent = assure.dateNaissance || "—";
-  document.getElementById("af-fonds").textContent = assure.fonds != null ? fmtFCFA(num(assure.fonds)) : "—";
+  document.getElementById("af-fonds").textContent = fondsLabel(assure.fonds);
   setAvatar(document.getElementById("af-avatar"), assure.prenom, assure.nom, assure.photoUrl);
 
   // Le patient de la prise en charge est l'assuré recherché.
@@ -802,6 +846,110 @@ function updateActionButtons() {
 document.getElementById("searchBtn").addEventListener("click", () => runSearch(document.getElementById("matriculeInput").value));
 document.getElementById("matriculeInput").addEventListener("keydown", e => { if (e.key === "Enter") runSearch(e.target.value); });
 document.getElementById("changeAssureBtn").addEventListener("click", resetSearch);
+
+/* ---------------------------------------------------------------------- */
+/* Créer / modifier / supprimer un patient (table Patient, via l'API)     */
+/* ---------------------------------------------------------------------- */
+
+const patientModal = document.getElementById("patientModal");
+let editingPatientId = null; // id_patient en cours de modification, null = création
+
+function fillPatientForm(p) {
+  document.getElementById("p-id").value = p.id_patient || "";
+  document.getElementById("p-photo-url").value = p.photo_url || "";
+  document.getElementById("p-matricule").value = p.matricule_nag || "";
+  document.getElementById("p-prenom").value = p.prenom || "";
+  document.getElementById("p-nom").value = p.nom || "";
+  document.getElementById("p-sex").value = p.sex || "M";
+  document.getElementById("p-contact").value = p.contact || "";
+  document.getElementById("p-fonds").value = p.fonds != null ? String(p.fonds) : "1";
+  document.getElementById("p-statut-assure").checked = !!p.statut_assure;
+  document.getElementById("p-id-assure-principal").value = p.id_assure_principal != null ? p.id_assure_principal : "";
+}
+
+// photo_url est repris tel quel (champ caché) : aucune UI d'upload de photo
+// n'existe, donc on ne l'écrase jamais — le PUT backend réécrit TOUTES les
+// colonnes (voir PatientDAO.update), un champ omis serait sinon mis à NULL.
+function readPatientForm() {
+  const idAssurePrincipal = document.getElementById("p-id-assure-principal").value.trim();
+  return {
+    photo_url: document.getElementById("p-photo-url").value || null,
+    prenom: document.getElementById("p-prenom").value.trim(),
+    nom: document.getElementById("p-nom").value.trim(),
+    sex: document.getElementById("p-sex").value,
+    contact: document.getElementById("p-contact").value.trim(),
+    statut_assure: document.getElementById("p-statut-assure").checked,
+    fonds: parseInt(document.getElementById("p-fonds").value, 10),
+    matricule_nag: document.getElementById("p-matricule").value.trim(),
+    id_assure_principal: idAssurePrincipal ? parseInt(idAssurePrincipal, 10) : null
+  };
+}
+
+function openPatientModalCreate(matricule) {
+  editingPatientId = null;
+  document.getElementById("patientForm").reset();
+  document.getElementById("p-id").value = "";
+  document.getElementById("p-photo-url").value = "";
+  document.getElementById("p-matricule").value = matricule || "";
+  document.getElementById("patientModalTitle").textContent = "Créer un patient";
+  patientModal.hidden = false;
+}
+
+function openPatientModalEdit(p) {
+  editingPatientId = p.id_patient;
+  fillPatientForm(p);
+  document.getElementById("patientModalTitle").textContent = "Modifier le patient";
+  patientModal.hidden = false;
+}
+
+function closePatientModal() {
+  patientModal.hidden = true;
+  editingPatientId = null;
+}
+document.getElementById("closePatientModal").addEventListener("click", closePatientModal);
+document.getElementById("cancelPatientModal").addEventListener("click", closePatientModal);
+
+document.getElementById("createPatientBtn").addEventListener("click", () => {
+  openPatientModalCreate(document.getElementById("matriculeInput").value.trim());
+});
+
+document.getElementById("editPatientBtn").addEventListener("click", () => {
+  if (!state.currentAssure || state.currentAssure.idPatient == null) return;
+  // GET /api/patients/{id} : on relit la fiche complète depuis la base
+  // plutôt que de réutiliser l'objet déjà mappé pour l'affichage (qui a
+  // perdu photo_url brut / id_assure_principal — voir mapBackendPatient).
+  apiGetPatient(state.currentAssure.idPatient).then(p => openPatientModalEdit(p))
+    .catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
+});
+
+document.getElementById("deletePatientBtn").addEventListener("click", () => {
+  if (!state.currentAssure || state.currentAssure.idPatient == null) return;
+  const id = state.currentAssure.idPatient;
+  askConfirm("Le patient " + state.currentAssure.prenom + " " + state.currentAssure.nom + " sera définitivement supprimé.", () => {
+    apiDeletePatient(id).then(() => {
+      resetSearch();
+      showInfoModal("Patient supprimé", "<p>Le patient a été supprimé.</p>");
+    }).catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
+  }, { title: "Supprimer ce patient ?" });
+});
+
+document.getElementById("patientForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const payload = readPatientForm();
+  const action = editingPatientId != null
+    ? apiUpdatePatient(editingPatientId, payload)
+    : apiCreatePatient(payload);
+
+  action.then(res => {
+    const id = editingPatientId != null ? editingPatientId : res.id_patient;
+    closePatientModal();
+    return apiGetPatient(id);
+  }).then(p => {
+    document.getElementById("matriculeInput").value = p.matricule_nag || "";
+    state.currentAssure = mapBackendPatient(p);
+    showAssureCard(state.currentAssure);
+  }).catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
+});
 
 document.querySelectorAll("#tmChoices .chip").forEach(chip => {
   chip.addEventListener("click", () => {
@@ -1769,6 +1917,12 @@ function iconToggle() {
 function iconTrash() {
   return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg>';
 }
+function iconEdit() {
+  return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>';
+}
+function iconKey() {
+  return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.9 12.1L19 4"/><path d="M15 9l3 3"/><path d="M18 6l3 3"/></svg>';
+}
 
 /* ---------------------------------------------------------------------- */
 /* Gestion des utilisateurs                                               */
@@ -1811,6 +1965,7 @@ function renderUsersSourceBadge() {
 function renderUsersTable(list) {
   const body = document.getElementById("usersBody");
   body.innerHTML = "";
+  const isApi = state.usersSource === "api";
   list.forEach(u => {
     const tr = document.createElement("tr");
     const statutClass = u.statut === "Actif" ? "actif" : "inactif";
@@ -1822,12 +1977,28 @@ function renderUsersTable(list) {
       "<td>" + (u.dateCreation || "—") + "</td>" +
       '<td><span class="pill ' + statutClass + '">' + u.statut + "</span></td>" +
       '<td class="row-actions">' +
+        (isApi ? '<button class="icon-btn" data-action="edit" data-id="' + u.id + '" title="Modifier">' + iconEdit() + "</button>" : "") +
+        (isApi ? '<button class="icon-btn" data-action="reset-pass" data-id="' + u.id + '" title="Réinitialiser le mot de passe">' + iconKey() + "</button>" : "") +
         '<button class="icon-btn" data-action="toggle" data-id="' + u.id + '" title="Activer / désactiver">' + iconToggle() + "</button>" +
         '<button class="icon-btn danger" data-action="delete" data-id="' + u.id + '" title="Supprimer">' + iconTrash() + "</button>" +
       "</td>";
     body.appendChild(tr);
   });
 
+  body.querySelectorAll('[data-action="edit"]').forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = parseInt(btn.dataset.id, 10);
+      apiGetUtilisateur(id).then(u => openUserModalForEdit(u))
+        .catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
+    });
+  });
+  body.querySelectorAll('[data-action="reset-pass"]').forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = parseInt(btn.dataset.id, 10);
+      const u = state.apiUsers.find(x => x.id === id);
+      openResetPasswordModal(id, u ? (u.prenom + " " + u.nom) : ("#" + id));
+    });
+  });
   body.querySelectorAll('[data-action="toggle"]').forEach(btn => {
     btn.addEventListener("click", () => {
       const id = parseInt(btn.dataset.id, 10);
@@ -1863,12 +2034,48 @@ function renderUsersTable(list) {
 }
 
 const userModal = document.getElementById("userModal");
+let editingUserId = null; // id_utilisateur en cours de modification (mode édition), null = création
+
+function setUserModalMode(editing) {
+  document.getElementById("userModalTitle").textContent = editing ? "Modifier l'utilisateur" : "Ajouter un utilisateur";
+  document.getElementById("u-pass-wrap").hidden = editing;
+  document.getElementById("u-pass-hint").hidden = !editing;
+  // PUT /api/utilisateurs/{id} ne modifie pas la structure (pas de champ
+  // dédié côté backend pour ça) : la rendre non éditable évite de laisser
+  // croire qu'un changement ici serait enregistré.
+  document.getElementById("u-structure").disabled = editing;
+}
+
 document.getElementById("addUserBtn").addEventListener("click", () => {
+  editingUserId = null;
+  document.getElementById("userForm").reset();
+  document.getElementById("u-id").value = "";
   document.getElementById("u-date-creation").value = todayFR();
+  setUserModalMode(false);
   userModal.hidden = false;
 });
-document.getElementById("closeUserModal").addEventListener("click", () => { userModal.hidden = true; });
-document.getElementById("cancelUserModal").addEventListener("click", () => { userModal.hidden = true; });
+
+// GET /api/utilisateurs/{id} a déjà chargé l'utilisateur (voir data-action="edit"
+// dans renderUsersTable) ; on ne fait ici que préremplir le formulaire.
+function openUserModalForEdit(u) {
+  editingUserId = u.id_utilisateur;
+  document.getElementById("u-id").value = u.id_utilisateur;
+  document.getElementById("u-nom").value = u.nom || "";
+  document.getElementById("u-email").value = u.email || "";
+  document.getElementById("u-role").value = API_ROLE_TO_FRONT_ROLE[u.role] || u.role;
+  document.getElementById("u-structure").value = u.structure_nom || "";
+  document.getElementById("u-pass").value = "";
+  document.getElementById("u-date-creation").value = apiFormatDate(u.date_creation);
+  setUserModalMode(true);
+  userModal.hidden = false;
+}
+
+function closeUserModal() {
+  userModal.hidden = true;
+  editingUserId = null;
+}
+document.getElementById("closeUserModal").addEventListener("click", closeUserModal);
+document.getElementById("cancelUserModal").addEventListener("click", closeUserModal);
 
 document.getElementById("userForm").addEventListener("submit", e => {
   e.preventDefault();
@@ -1878,6 +2085,20 @@ document.getElementById("userForm").addEventListener("submit", e => {
   const nom = parts.join(" ") || "";
   const email = document.getElementById("u-email").value.trim();
   const role = document.getElementById("u-role").value;
+
+  if (editingUserId != null) {
+    // PUT /api/utilisateurs/{id} — pas de champ mot de passe ici (le backend
+    // ne le modifie pas sur cette route) ; voir "Réinitialiser le mot de passe".
+    apiUpdateUtilisateur(editingUserId, {
+      nom: nomComplet,
+      email: email,
+      role: FRONT_ROLE_TO_API_ROLE[role] || role
+    }).then(() => {
+      closeUserModal();
+      renderUsers();
+    }).catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
+    return;
+  }
 
   if (state.usersSource === "api") {
     // POST /api/auth/register — id_structure vaut 1 par défaut, faute d'un
@@ -1915,6 +2136,31 @@ document.getElementById("userForm").addEventListener("submit", e => {
   document.getElementById("userForm").reset();
   userModal.hidden = true;
   renderUsers();
+});
+
+/* ---- Réinitialisation du mot de passe (admin) : POST /api/auth/reset-password ---- */
+const resetPasswordModal = document.getElementById("resetPasswordModal");
+let resetPasswordTargetId = null;
+function openResetPasswordModal(id, label) {
+  resetPasswordTargetId = id;
+  document.getElementById("resetPasswordTarget").textContent = "Utilisateur : " + label;
+  document.getElementById("resetPasswordForm").reset();
+  resetPasswordModal.hidden = false;
+}
+function closeResetPasswordModal() {
+  resetPasswordModal.hidden = true;
+  resetPasswordTargetId = null;
+}
+document.getElementById("closeResetPasswordModal").addEventListener("click", closeResetPasswordModal);
+document.getElementById("cancelResetPasswordModal").addEventListener("click", closeResetPasswordModal);
+document.getElementById("resetPasswordForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const nouveau = document.getElementById("rp-nouveau").value;
+  if (resetPasswordTargetId == null) { closeResetPasswordModal(); return; }
+  apiResetPassword(resetPasswordTargetId, nouveau).then(() => {
+    closeResetPasswordModal();
+    showInfoModal("Mot de passe réinitialisé", "<p>Le nouveau mot de passe a été enregistré.</p>");
+  }).catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
 });
 
 /* ---------------------------------------------------------------------- */
@@ -2923,6 +3169,83 @@ document.getElementById("resetPermissionsBtn").addEventListener("click", () => {
   applyRoleAccess(state.currentUser);
   renderPermissions();
 });
+
+/* ---------------------------------------------------------------------- */
+/* Permissions API (actions vérifiées côté backend, table Permission /     */
+/* RolePermission) — distinctes du tableau d'affichage ci-dessus.          */
+/* ---------------------------------------------------------------------- */
+
+let apiPermissionsCatalog = []; // [{ id_permission, code, description }] — GET /api/permissions
+let apiPermissionsMatrix = {};  // { role: [codes] }             — GET /api/permissions/matrix
+
+function setApiPermissionsBadge(text, cls) {
+  const el = document.getElementById("apiPermissionsBadge");
+  if (!el) return;
+  el.textContent = text;
+  el.className = "pill " + cls;
+}
+
+function loadApiPermissions() {
+  const body = document.getElementById("apiPermissionsBody");
+  body.innerHTML = '<tr><td colspan="99" style="text-align:center;color:var(--muted)">Chargement…</td></tr>';
+  setApiPermissionsBadge("Chargement…", "attente");
+
+  Promise.all([apiListPermissions(), apiGetPermissionMatrix()]).then(([codes, matrix]) => {
+    apiPermissionsCatalog = codes;
+    apiPermissionsMatrix = matrix;
+    setApiPermissionsBadge("Connecté à l'API", "validee");
+    renderApiPermissionsTable();
+  }).catch(err => {
+    setApiPermissionsBadge(err.isNetworkError ? "Backend injoignable" : "Accès refusé", "inactif");
+    body.innerHTML = '<tr><td colspan="99" style="color:var(--red)">' + escapeHtml(err.message || "Impossible de charger les permissions API.") + "</td></tr>";
+  });
+}
+
+function renderApiPermissionsTable() {
+  const head = document.getElementById("apiPermissionsHead");
+  head.innerHTML = "<th>Rôle</th>" + apiPermissionsCatalog.map(p =>
+    '<th title="' + escapeHtml(p.description || "") + '">' + escapeHtml(p.code) + "</th>"
+  ).join("");
+
+  const body = document.getElementById("apiPermissionsBody");
+  body.innerHTML = "";
+  Object.keys(apiPermissionsMatrix).sort().forEach(role => {
+    const tr = document.createElement("tr");
+    const codes = new Set(apiPermissionsMatrix[role] || []);
+    let tds = "<td><b>" + escapeHtml(role) + "</b></td>";
+    apiPermissionsCatalog.forEach(p => {
+      const checked = codes.has(p.code);
+      tds += '<td style="text-align:center"><input type="checkbox" data-role="' + role + '" data-code="' + p.code + '"' + (checked ? " checked" : "") + " /></td>";
+    });
+    tr.innerHTML = tds;
+    body.appendChild(tr);
+  });
+
+  body.querySelectorAll('input[type="checkbox"][data-role]').forEach(cb => {
+    cb.addEventListener("change", () => {
+      const role = cb.dataset.role;
+      const code = cb.dataset.code;
+      const wasChecked = cb.checked;
+      cb.disabled = true;
+      const action = wasChecked ? apiGrantPermission(role, code) : apiRevokePermission(role, code);
+      action
+        // GET /api/permissions/role/{role} : on relit juste ce rôle plutôt
+        // que de recharger toute la matrice après chaque bascule.
+        .then(() => apiGetRolePermissions(role))
+        .then(res => {
+          apiPermissionsMatrix[role] = Array.from(res.permissions || []);
+          cb.disabled = false;
+        })
+        .catch(err => {
+          cb.checked = !wasChecked;
+          cb.disabled = false;
+          showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>");
+        });
+    });
+  });
+}
+
+document.getElementById("reloadApiPermissionsBtn").addEventListener("click", loadApiPermissions);
 
 /* ---------------------------------------------------------------------- */
 /* Initialisation                                                          */
