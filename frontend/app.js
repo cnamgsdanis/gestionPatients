@@ -23,7 +23,11 @@ const state = {
   reglements: loadJSON("pec_reglements", []),   // paiements réels enregistrés par l'assurance envers les pharmacies : { id, pharmacie, montant, date, note }
   pharmaSuiviFilters: { from: "", to: "", pharmacie: "", statut: "" },
   reglementsHopitaux: loadJSON("pec_reglements_hopitaux", []), // paiements réels envers les hôpitaux : { id, hopital, montant, date, note }
-  hopitalSuiviFilters: { from: "", to: "", hopital: "", type: "", statut: "" }
+  hopitalSuiviFilters: { from: "", to: "", hopital: "", type: "", statut: "" },
+  connexionLog: loadJSON("pec_connexion_log", []),  // { id, email, nom, role, date, heure, statut }
+  journalFilters: { search: "", role: "", statut: "", from: "", to: "" },
+  apiUsers: null,          // utilisateurs chargés depuis le vrai backend (GET /api/utilisateurs), si joignable
+  usersSource: "local"     // "api" | "local" — quelle source alimente actuellement "Gestion des utilisateurs"
 };
 
 // Migration douce : les entrées enregistrées avant l'ajout des actions/du statut avaient des champs manquants.
@@ -167,10 +171,30 @@ function setFieldError(inputId, errorId, message) {
 
 // TODO: remplacer par un véritable appel à l'API d'authentification quand elle sera disponible.
 // La signature (retourne une Promise) est conçue pour être compatible avec un futur fetch()/API réelle.
-function mockAuthenticate(email, password) {
+function mockAuthenticate(username, password) {
   return new Promise(resolve => {
     setTimeout(() => resolve({ ok: true }), 800);
   });
+}
+
+// Transition animée, rapide, entre l'écran de connexion et l'application —
+// le logo pulse avec un anneau qui tourne le temps du chargement, puis
+// s'efface pour révéler l'app déjà sur la bonne vue (callback).
+function playLoginTransition(callback) {
+  const overlay = document.getElementById("loginTransition");
+  document.getElementById("view-login").hidden = true;
+  overlay.hidden = false;
+  requestAnimationFrame(() => overlay.classList.add("active"));
+  window.setTimeout(() => {
+    overlay.classList.add("leaving");
+    window.setTimeout(() => {
+      overlay.hidden = true;
+      overlay.classList.remove("active", "leaving");
+      document.getElementById("appShell").hidden = false;
+      stopLoginDna();
+      callback();
+    }, 350);
+  }, 650);
 }
 
 // Gestion des accès par rôle : purement côté front (protection d'affichage
@@ -185,22 +209,44 @@ function mockAuthenticate(email, password) {
 // bloc ne fournit que les valeurs par défaut ("réinitialiser").
 const PERMISSION_VIEWS = [
   { key: "dashboard", label: "Tableau de bord" },
+  { key: "statistiques", label: "Statistiques" },
   { key: "rapports", label: "Rapports" },
   { key: "nouvelle-pec", label: "Nouvelle prise en charge" },
   { key: "medecin", label: "Espace Médecin" },
   { key: "pharmacie", label: "Espace Pharmacien" },
   { key: "historique", label: "Historique PEC" },
-  { key: "users", label: "Gestion des utilisateurs" }
+  { key: "users", label: "Gestion des utilisateurs" },
+  { key: "journalisation", label: "Journalisation" }
 ];
 const ROLE_ACCESS_DEFAULT = {
-  "Super Admin": { views: ["dashboard", "rapports", "nouvelle-pec", "medecin", "pharmacie", "historique", "users"], landing: "dashboard" },
-  "DG": { views: ["dashboard", "rapports"], landing: "dashboard" },
+  "Super Admin": { views: ["dashboard", "statistiques", "rapports", "nouvelle-pec", "medecin", "pharmacie", "historique", "users", "journalisation"], landing: "dashboard" },
+  "DG": { views: ["dashboard", "statistiques", "rapports", "journalisation"], landing: "dashboard" },
   "Médecin": { views: ["medecin"], landing: "medecin" },
   "Agent hospitalier": { views: ["nouvelle-pec", "historique"], landing: "nouvelle-pec" },
   "Pharmacie": { views: ["pharmacie"], landing: "pharmacie" },
-  "Caisse": { views: ["dashboard", "rapports"], landing: "rapports" }
+  "Caisse": { views: ["dashboard", "statistiques", "rapports"], landing: "rapports" }
 };
 state.roleAccess = loadJSON("pec_role_access", JSON.parse(JSON.stringify(ROLE_ACCESS_DEFAULT)));
+// Migrations douces, une seule fois chacune : les permissions déjà
+// enregistrées dans le navigateur avant l'ajout d'une vue ne l'ont pas — on
+// l'ajoute aux rôles qui l'ont par défaut, sans revenir dessus si un admin
+// la décoche ensuite volontairement (drapeaux pec_*_view_migrated).
+if (!loadJSON("pec_journal_view_migrated", false)) {
+  ["Super Admin", "DG"].forEach(role => {
+    const access = state.roleAccess[role];
+    if (access && !access.views.includes("journalisation")) access.views.push("journalisation");
+  });
+  saveJSON("pec_role_access", state.roleAccess);
+  saveJSON("pec_journal_view_migrated", true);
+}
+if (!loadJSON("pec_stats_view_migrated", false)) {
+  ["Super Admin", "DG", "Caisse"].forEach(role => {
+    const access = state.roleAccess[role];
+    if (access && !access.views.includes("statistiques")) access.views.push("statistiques");
+  });
+  saveJSON("pec_role_access", state.roleAccess);
+  saveJSON("pec_stats_view_migrated", true);
+}
 
 // "soins" (feuille de soins) n'a pas d'item de sidebar propre : on y accède
 // depuis "nouvelle-pec" (agent) ou "medecin" (validation) — donc autorisé
@@ -261,23 +307,37 @@ function updateUserPill(user, email) {
   avatarEls.forEach(el => { el.textContent = initials; });
 }
 
+// Journalisation : une entrée par tentative de connexion (succès ou échec —
+// "échec" ici veut dire e-mail non reconnu dans state.users, ce prototype
+// front-end n'ayant pas de vrai mot de passe à vérifier côté serveur).
+function logConnexion(user, email, statut) {
+  const d = new Date();
+  state.connexionLog.unshift({
+    id: Date.now(),
+    email: user ? user.email : email,
+    nom: user ? (user.prenom + " " + user.nom) : "—",
+    role: user ? user.role : "Inconnu",
+    date: todayFR(),
+    heure: pad(d.getHours()) + ":" + pad(d.getMinutes()),
+    statut: statut
+  });
+  saveJSON("pec_connexion_log", state.connexionLog);
+}
+
 let loginSubmitting = false;
 document.getElementById("loginForm").addEventListener("submit", function (e) {
   e.preventDefault();
   if (loginSubmitting) return;
 
-  const email = document.getElementById("loginEmail").value.trim();
+  const username = document.getElementById("loginUsername").value.trim();
   const password = document.getElementById("loginPass").value;
   let valid = true;
 
-  if (!email) {
-    setFieldError("loginEmail", "loginEmailError", "L'adresse e-mail est obligatoire.");
-    valid = false;
-  } else if (!isValidEmail(email)) {
-    setFieldError("loginEmail", "loginEmailError", "Veuillez saisir une adresse e-mail valide.");
+  if (!username) {
+    setFieldError("loginUsername", "loginUsernameError", "Le nom d'utilisateur est obligatoire.");
     valid = false;
   } else {
-    setFieldError("loginEmail", "loginEmailError", "");
+    setFieldError("loginUsername", "loginUsernameError", "");
   }
 
   if (!password) {
@@ -295,26 +355,55 @@ document.getElementById("loginForm").addEventListener("submit", function (e) {
   btn.classList.add("loading");
   btn.querySelector(".btn-label").textContent = "Connexion...";
 
-  mockAuthenticate(email, password).then(() => {
+  authenticate(username, password).then(result => {
     loginSubmitting = false;
     btn.disabled = false;
     btn.classList.remove("loading");
     btn.querySelector(".btn-label").textContent = "Se connecter";
-    document.getElementById("view-login").hidden = true;
-    document.getElementById("appShell").hidden = false;
-    stopLoginDna();
 
-    state.currentUser = state.users.find(u => u.email.toLowerCase() === email.toLowerCase()) || null;
-    applyRoleAccess(state.currentUser);
-    updateUserPill(state.currentUser, email);
-    const access = state.currentUser ? state.roleAccess[state.currentUser.role] : null;
-    if (access && access.landing !== "dashboard") {
-      goToView(access.landing);
-    } else {
-      renderDashboardStats();
+    if (result.error) {
+      // Le backend a répondu et a refusé la connexion (identifiants
+      // invalides, compte désactivé...) : échec réel, pas de repli local.
+      setFieldError("loginPass", "loginPassError", result.error);
+      logConnexion(null, username, "Échec");
+      return;
     }
+
+    state.currentUser = result.user;
+    logConnexion(state.currentUser, username, state.currentUser ? "Succès" : "Échec");
+    applyRoleAccess(state.currentUser);
+    updateUserPill(state.currentUser, username);
+    const access = state.currentUser ? state.roleAccess[state.currentUser.role] : null;
+
+    playLoginTransition(() => {
+      if (access && access.landing !== "dashboard") {
+        goToView(access.landing);
+      } else {
+        renderDashboardStats();
+      }
+    });
   });
 });
+
+// Authentifie d'abord contre le vrai backend (POST /api/auth/login). Si le
+// backend est injoignable (Java/SQL Server arrêtés, CORS non configuré —
+// voir le PDF de documentation), bascule sur les comptes de démonstration
+// locaux (USERS_SEED / pec_users) pour ne pas casser le prototype quand
+// l'API n'est pas lancée. Si le backend répond mais refuse les identifiants,
+// l'échec est réel : pas de repli silencieux vers le mode démo.
+async function authenticate(username, password) {
+  try {
+    const session = await apiLogin(username, password);
+    return { user: mapBackendUser(session.user) };
+  } catch (err) {
+    if (err.isNetworkError) {
+      console.warn("[API] " + err.message + " — bascule sur les comptes de demonstration locaux.");
+      const u = state.users.find(x => (x.username || "").toLowerCase() === username.toLowerCase()) || null;
+      return { user: u };
+    }
+    return { error: err.message || "Identifiants invalides." };
+  }
+}
 
 document.getElementById("togglePass").addEventListener("click", function () {
   const input = document.getElementById("loginPass");
@@ -326,6 +415,14 @@ document.getElementById("togglePass").addEventListener("click", function () {
   this.querySelector(".eye-off").hidden = !show;
 });
 
+// Échappe un texte avant de l'insérer dans un innerHTML (ex : message
+// d'erreur API affiché tel quel dans showInfoModal).
+function escapeHtml(s) {
+  const div = document.createElement("div");
+  div.textContent = s == null ? "" : String(s);
+  return div.innerHTML;
+}
+
 // Panneau d'information générique (mot de passe oublié / création de compte / mentions légales).
 // Prêt à être remplacé par une vraie navigation si un système de routage est introduit.
 function showInfoModal(title, bodyHtml) {
@@ -336,15 +433,34 @@ function showInfoModal(title, bodyHtml) {
 document.getElementById("closeInfoModal").addEventListener("click", () => { document.getElementById("infoModal").hidden = true; });
 document.getElementById("closeInfoModalBtn").addEventListener("click", () => { document.getElementById("infoModal").hidden = true; });
 
-document.getElementById("forgotPassBtn").addEventListener("click", () => {
-  showInfoModal("Mot de passe oublié", "<p>Contactez votre administrateur pour réinitialiser votre mot de passe. La réinitialisation en libre-service sera ajoutée prochainement.</p>");
+// Modale de confirmation (suppressions) à accent rouge — remplace les confirm()
+// natifs du navigateur pour rester cohérent avec le design de l'application.
+let confirmModalCallback = null;
+function askConfirm(message, onConfirm, opts) {
+  document.getElementById("confirmModalTitle").textContent = (opts && opts.title) || "Confirmer la suppression";
+  document.getElementById("confirmModalBody").textContent = message;
+  document.getElementById("confirmModalBtn").textContent = (opts && opts.confirmLabel) || "Supprimer";
+  confirmModalCallback = onConfirm;
+  document.getElementById("confirmModal").hidden = false;
+}
+function closeConfirmModal() {
+  document.getElementById("confirmModal").hidden = true;
+  confirmModalCallback = null;
+}
+document.getElementById("closeConfirmModal").addEventListener("click", closeConfirmModal);
+document.getElementById("cancelConfirmModal").addEventListener("click", closeConfirmModal);
+document.getElementById("confirmModalBtn").addEventListener("click", () => {
+  const cb = confirmModalCallback;
+  closeConfirmModal();
+  if (cb) cb();
 });
 
 function performLogout() {
+  apiLogout();
   document.getElementById("appShell").hidden = true;
   document.getElementById("view-login").hidden = false;
   document.getElementById("loginForm").reset();
-  setFieldError("loginEmail", "loginEmailError", "");
+  setFieldError("loginUsername", "loginUsernameError", "");
   setFieldError("loginPass", "loginPassError", "");
   resetSearch();
   state.currentUser = null;
@@ -459,6 +575,7 @@ setInterval(updateClock, 30000);
 
 const VIEW_META = {
   dashboard: { title: "Tableau de bord", crumb: "Accueil" },
+  statistiques: { title: "Statistiques", crumb: "Accueil / Statistiques" },
   "nouvelle-pec": { title: "Nouvelle prise en charge", crumb: "Accueil / Nouvelle prise en charge" },
   medecin: { title: "Espace Médecin", crumb: "Accueil / Espace Médecin" },
   soins: { title: "Feuille de soins", crumb: "Accueil / Feuille de soins" },
@@ -466,7 +583,8 @@ const VIEW_META = {
   users: { title: "Gestion des utilisateurs", crumb: "Accueil / Utilisateurs" },
   pharmacie: { title: "Espace Pharmacien", crumb: "Accueil / Espace Pharmacien" },
   rapports: { title: "Rapports", crumb: "Accueil / Rapports" },
-  permissions: { title: "Gestion des permissions", crumb: "Accueil / Permissions" }
+  permissions: { title: "Gestion des permissions", crumb: "Accueil / Permissions" },
+  journalisation: { title: "Journalisation", crumb: "Accueil / Journalisation" }
 };
 
 function goToView(name) {
@@ -482,7 +600,8 @@ function goToView(name) {
 
   const meta = VIEW_META[name];
   document.getElementById("topbarTitle").textContent = meta.title;
-  document.getElementById("topbarCrumb").textContent = meta.crumb;
+  document.getElementById("topbarBackBtn").hidden = name === "dashboard";
+  renderCrumb(meta);
 
   if (name === "historique") renderHistorique();
   if (name === "users") renderUsers();
@@ -491,7 +610,34 @@ function goToView(name) {
   if (name === "pharmacie") resetPharmaSearch();
   if (name === "rapports") renderRapports();
   if (name === "permissions") renderPermissions();
+  if (name === "journalisation") renderJournalisation();
+  if (name === "statistiques") renderStatistiques();
 }
+
+// "Accueil" (racine du fil d'Ariane) est cliquable et ramène au tableau de
+// bord ; le segment courant reste du texte simple — motif standard de
+// breadcrumb, cohérent avec le bouton retour à côté du titre.
+function renderCrumb(meta) {
+  const el = document.getElementById("topbarCrumb");
+  const parts = meta.crumb.split(" / ");
+  if (parts.length === 1) {
+    el.innerHTML = '<span class="crumb-current">' + parts[0] + "</span>";
+    return;
+  }
+  el.innerHTML =
+    '<button type="button" class="crumb-link" id="crumbHomeBtn">' + parts[0] + "</button>" +
+    '<span class="crumb-sep">/</span>' +
+    '<span class="crumb-current">' + parts.slice(1).join(" / ") + "</span>";
+  document.getElementById("crumbHomeBtn").addEventListener("click", () => goToView("dashboard"));
+}
+document.getElementById("topbarBackBtn").addEventListener("click", () => goToView("dashboard"));
+
+// La marque "CNAMGS / Circuit de l'assuré" en haut de la sidebar agit comme
+// un lien vers l'accueil, comme le logo de la plupart des apps pro.
+document.getElementById("sidebarBrandBtn").addEventListener("click", () => goToView("dashboard"));
+document.getElementById("sidebarBrandBtn").addEventListener("keydown", e => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); goToView("dashboard"); }
+});
 
 // Ouvre la page Rapports directement sur l'onglet demandé (utilisé par les
 // boutons "Voir le rapport complet" du tableau de bord).
@@ -559,62 +705,47 @@ function runSearch(matricule) {
   showAssureCard(found);
 }
 
+// Avatar "photo" d'un assuré : pas de vraie photo dans ce prototype
+// front-end (aucune source d'image), donc un cadre d'initiales à couleur
+// stable (dérivée du nom) tient lieu de section photo dédiée.
+const AVATAR_COLORS = ["#4d9e63", "#14479c", "#b6791f", "#8a3fa0", "#c0392b", "#1f8a8a", "#2f7d45"];
+function avatarColorFor(seed) {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+}
+function setAvatar(el, prenom, nom) {
+  if (!el) return;
+  el.textContent = ((prenom || "").charAt(0) + (nom || "").charAt(0)).toUpperCase();
+  el.style.background = avatarColorFor((prenom || "") + (nom || ""));
+}
+
 function showAssureCard(assure) {
   document.getElementById("assureFound").hidden = false;
   document.getElementById("af-nom").textContent = assure.prenom + " " + assure.nom;
-  document.getElementById("af-situation").textContent = assure.situation;
+  document.getElementById("af-situation").textContent = assure.nature || "Assuré principal";
   document.getElementById("af-matricule").textContent = assure.matricule;
   document.getElementById("af-naissance").textContent = assure.dateNaissance;
   document.getElementById("af-fonds").textContent = assure.fonds;
-  document.getElementById("af-employeur").textContent = assure.employeur;
+  document.getElementById("af-nature").textContent = assure.nature || "Assuré principal";
+  setAvatar(document.getElementById("af-avatar"), assure.prenom, assure.nom);
 
-  const select = document.getElementById("patientSelect");
-  select.innerHTML = "";
-  const optAssure = document.createElement("option");
-  optAssure.value = "assure";
-  optAssure.textContent = assure.prenom + " " + assure.nom + " (Assuré principal)";
-  select.appendChild(optAssure);
-  (assure.ayantsDroit || []).forEach((ad, i) => {
-    const opt = document.createElement("option");
-    opt.value = "ad-" + i;
-    opt.textContent = ad.prenom + " " + ad.nom + " (" + ad.lien + ")";
-    select.appendChild(opt);
-  });
-  select.value = "assure";
-  updatePatientSelection();
+  // Le patient de la prise en charge est l'assuré recherché — plus de choix
+  // séparé entre l'assuré principal et ses ayants droit sur cet écran.
+  state.currentPatient = {
+    matricule: assure.matricule,
+    nom: assure.nom,
+    prenom: assure.prenom,
+    dateNaissance: assure.dateNaissance,
+    sexe: assure.sexe,
+    estAssure: true
+  };
+  updateActionButtons();
 
   state.currentTM = null;
   state.currentMedecin = null;
   document.querySelectorAll("#tmChoices .chip").forEach(c => c.classList.remove("active"));
   document.getElementById("medecinSelect").value = "";
-  updateActionButtons();
-}
-
-function updatePatientSelection() {
-  const select = document.getElementById("patientSelect");
-  const assure = state.currentAssure;
-  if (!assure) return;
-  if (select.value === "assure") {
-    state.currentPatient = {
-      matricule: assure.matricule,
-      nom: assure.nom,
-      prenom: assure.prenom,
-      dateNaissance: assure.dateNaissance,
-      sexe: assure.sexe,
-      estAssure: true
-    };
-  } else {
-    const idx = parseInt(select.value.split("-")[1], 10);
-    const ad = assure.ayantsDroit[idx];
-    state.currentPatient = {
-      matricule: ad.matricule,
-      nom: ad.nom,
-      prenom: ad.prenom,
-      dateNaissance: ad.dateNaissance,
-      sexe: ad.sexe,
-      estAssure: false
-    };
-  }
   updateActionButtons();
 }
 
@@ -626,7 +757,6 @@ function updateActionButtons() {
   if (hint) hint.hidden = ready;
 }
 
-document.getElementById("patientSelect").addEventListener("change", updatePatientSelection);
 document.getElementById("searchBtn").addEventListener("click", () => runSearch(document.getElementById("matriculeInput").value));
 document.getElementById("matriculeInput").addEventListener("keydown", e => { if (e.key === "Enter") runSearch(e.target.value); });
 document.getElementById("changeAssureBtn").addEventListener("click", resetSearch);
@@ -719,7 +849,6 @@ function openSoins(type) {
   state.soinsMode = "agent";
   state.editingEntryId = null;
   state.currentType = type;
-  state.rows = [emptyRow()];
   state.examRows = [emptyExamRow()];
 
   const isExam = type === "Examen";
@@ -786,8 +915,12 @@ function openSoins(type) {
   document.getElementById("presta-code").disabled = true;
   document.getElementById("presta-domicile-oui").disabled = true;
   document.getElementById("presta-domicile-non").disabled = true;
-  document.getElementById("addRowBtn").disabled = true;
-  document.getElementById("removeRowBtn").disabled = true;
+  document.getElementById("totalMontant").value = "0";
+  document.getElementById("totalTm").value = "0";
+  document.getElementById("totalPart").value = "0";
+  document.getElementById("totalMontant").disabled = true;
+  document.getElementById("totalTm").disabled = true;
+  document.getElementById("totalPart").disabled = true;
 
   // L'ordonnance (médicaments prescrits) est elle aussi du ressort du médecin.
   state.ordoLocked = true;
@@ -822,7 +955,6 @@ function openSoins(type) {
 
   drawPseudoQR(document.getElementById("qrCanvas"), patient.matricule + "-" + numero);
 
-  renderRows();
   renderOrdoRows();
   renderExamRows();
   goToView("soins");
@@ -900,8 +1032,12 @@ function openSoinsForValidation(entryId, opts) {
   document.getElementById("presta-domicile-non").checked = entry.prestaDomicile === "Non";
   document.getElementById("presta-domicile-oui").disabled = false;
   document.getElementById("presta-domicile-non").disabled = false;
-  document.getElementById("addRowBtn").disabled = false;
-  document.getElementById("removeRowBtn").disabled = false;
+  document.getElementById("totalMontant").value = entry.totalMontant || "0";
+  document.getElementById("totalTm").value = entry.totalTm || "0";
+  document.getElementById("totalPart").value = entry.totalPart || "0";
+  document.getElementById("totalMontant").disabled = false;
+  document.getElementById("totalTm").disabled = false;
+  document.getElementById("totalPart").disabled = false;
 
   // L'ordonnance est déverrouillée : le médecin prescrit désignation + quantité (pas de montant).
   state.ordoLocked = false;
@@ -942,11 +1078,8 @@ function openSoinsForValidation(entryId, opts) {
 
   document.getElementById("saveSoinsBtn").textContent = "Valider et enregistrer";
 
-  state.rows = (entry.prestations && entry.prestations.length) ? entry.prestations.map(r => Object.assign({}, r)) : [emptyRow()];
-
   drawPseudoQR(document.getElementById("qrCanvas"), (entry.matricule || "") + "-" + entry.numero);
 
-  renderRows();
   renderOrdoRows();
   renderExamRows();
   if (!skipNav) goToView("soins");
@@ -975,18 +1108,23 @@ function updateExamSwitchUI(entry) {
     const last = linked[linked.length - 1];
     const btn = document.getElementById("examSwitchBtn");
     const addAnother = document.getElementById("examSwitchAddAnother");
+    const removeBtn = document.getElementById("examSwitchRemove");
     if (last) {
       document.getElementById("examSwitchBtnLabel").textContent = "Voir le bon d'examen " + last.numero;
       document.getElementById("examSwitchSub").textContent = "Un examen a déjà été recommandé pour cette consultation.";
       btn.dataset.mode = "goto";
       btn.dataset.targetId = String(last.id);
       addAnother.hidden = false;
+      removeBtn.hidden = false;
+      removeBtn.dataset.targetId = String(last.id);
     } else {
       document.getElementById("examSwitchBtnLabel").textContent = "Créer un bon d'examen";
       document.getElementById("examSwitchSub").textContent = "Génère un bon d'examen lié, pré-rempli avec les informations du patient.";
       btn.dataset.mode = "create";
       btn.dataset.targetId = "";
       addAnother.hidden = true;
+      removeBtn.hidden = true;
+      removeBtn.dataset.targetId = "";
     }
   }
 
@@ -1042,56 +1180,40 @@ document.getElementById("examSwitchBtn").addEventListener("click", () => {
   }
 });
 document.getElementById("examSwitchAddAnother").addEventListener("click", createLinkedExamAndFlip);
+
+// Retire (supprime) un bon d'examen lié à la consultation actuellement affichée —
+// délie les deux feuilles et retire l'examen de l'historique / de la file médecin.
+function removeLinkedExam(examId) {
+  const consultEntry = state.historique.find(h => h.id === state.editingEntryId);
+  if (!consultEntry) return;
+  const examEntry = state.historique.find(h => h.id === examId);
+  askConfirm(
+    "Le bon d'examen " + (examEntry ? examEntry.numero : "") + " lié à cette consultation sera définitivement supprimé.",
+    () => {
+      state.historique = state.historique.filter(h => h.id !== examId);
+      consultEntry.linkedExamenIds = (consultEntry.linkedExamenIds || []).filter(id => id !== examId);
+      saveJSON("pec_historique", state.historique);
+      refreshPendingBadge();
+      updateExamSwitchUI(consultEntry);
+    },
+    { title: "Retirer ce bon d'examen ?" }
+  );
+}
+document.getElementById("examSwitchRemove").addEventListener("click", () => {
+  const targetId = document.getElementById("examSwitchRemove").dataset.targetId;
+  if (targetId) removeLinkedExam(parseInt(targetId, 10));
+});
+
 document.getElementById("retourConsultationBtn").addEventListener("click", () => {
   const targetId = document.getElementById("retourConsultationBtn").dataset.targetId;
   if (targetId) flipSoinsTo(parseInt(targetId, 10));
 });
-
-function emptyRow() { return { designation: "", qte: "", montant: "", tm: "", part: "", valide: "" }; }
-
-function renderRows() {
-  const body = document.getElementById("prestaBody");
-  body.innerHTML = "";
-  const locked = !!state.prestaLocked;
-  state.rows.forEach((row, i) => {
-    const tr = document.createElement("tr");
-    tr.innerHTML =
-      cell("designation", row.designation, "text", locked) +
-      cell("qte", row.qte, "num", locked) +
-      cell("montant", row.montant, "num", locked) +
-      cell("tm", row.tm, "num", locked) +
-      cell("part", row.part, "num", locked) +
-      cell("valide", row.valide, "num", locked);
-    body.appendChild(tr);
-
-    if (!locked) {
-      ["designation", "qte", "montant", "tm", "part", "valide"].forEach(key => {
-        tr.querySelector('[data-key="' + key + '"]').addEventListener("input", e => {
-          state.rows[i][key] = e.target.value;
-          updateTotals();
-        });
-      });
-    }
-  });
-  updateTotals();
-}
 
 function cell(key, value, kind, disabled) {
   const cls = kind === "num" ? "num" : "";
   const val = value ? String(value).replace(/"/g, "&quot;") : "";
   return '<td><input type="text" class="' + cls + '" data-key="' + key + '" value="' + val + '"' + (disabled ? " disabled" : "") + " /></td>";
 }
-
-document.getElementById("addRowBtn").addEventListener("click", () => {
-  if (state.prestaLocked) return;
-  state.rows.push(emptyRow());
-  renderRows();
-});
-document.getElementById("removeRowBtn").addEventListener("click", () => {
-  if (state.prestaLocked) return;
-  if (state.rows.length > 1) state.rows.pop();
-  renderRows();
-});
 
 /* ---- Examens (tableau du bon d'examen, rempli par le médecin) ---------- */
 
@@ -1182,12 +1304,6 @@ function num(v) {
 function fmt(n) {
   if (!n) return "0";
   return Math.round(n).toLocaleString("fr-FR");
-}
-function updateTotals() {
-  const sum = key => state.rows.reduce((a, r) => a + num(r[key]), 0);
-  document.getElementById("totalMontant").value = fmt(sum("montant"));
-  document.getElementById("totalTm").value = fmt(sum("tm"));
-  document.getElementById("totalPart").value = fmt(sum("part"));
 }
 function updateExamTotals() {
   const sum = key => state.examRows.reduce((a, r) => a + num(r[key]), 0);
@@ -1308,7 +1424,6 @@ function captureFormIntoEntry(entry) {
     entry.totalTm = document.getElementById("examTotalTm").value;
     entry.totalPart = document.getElementById("examTotalPart").value;
   } else {
-    entry.prestations = state.rows.filter(r => r.designation || r.montant);
     entry.ordonnance = state.ordoRows
       .filter(r => r.designation && r.quantite)
       .map(r => ({ designation: r.designation, quantite: r.quantite, posologie: r.posologie || "", statut: "Non servi", servicePar: "", dateService: "", prixUnitaire: "", partAssurance: "", partPatient: "" }));
@@ -1464,13 +1579,14 @@ function renderHistorique() {
   });
   body.querySelectorAll('[data-action="delete-hist"]').forEach(btn => {
     btn.addEventListener("click", () => {
-      if (!confirm("Supprimer cette feuille de l'historique ?")) return;
       const id = parseInt(btn.dataset.id, 10);
-      state.historique = state.historique.filter(h => h.id !== id);
-      saveJSON("pec_historique", state.historique);
-      renderHistorique();
-      renderDashboardStats();
-      refreshPendingBadge();
+      askConfirm("Cette prise en charge sera définitivement supprimée de l'historique. Cette action est irréversible.", () => {
+        state.historique = state.historique.filter(h => h.id !== id);
+        saveJSON("pec_historique", state.historique);
+        renderHistorique();
+        renderDashboardStats();
+        refreshPendingBadge();
+      }, { title: "Supprimer cette prise en charge ?" });
     });
   });
 
@@ -1614,16 +1730,52 @@ function iconTrash() {
 /* Gestion des utilisateurs                                               */
 /* ---------------------------------------------------------------------- */
 
+// "Gestion des utilisateurs" essaie d'abord le vrai backend
+// (GET /api/utilisateurs, nécessite le token JWT obtenu à la connexion).
+// S'il est injoignable ou refuse (pas connecté via le backend, permission
+// manquante...), la page retombe sur les comptes de démonstration locaux —
+// state.usersSource indique laquelle des deux sources est active, et une
+// puce dans l'en-tête le rappelle visuellement (voir renderUsersSourceBadge).
 function renderUsers() {
   const body = document.getElementById("usersBody");
+  body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted)">Chargement…</td></tr>';
+
+  apiListUtilisateurs().then(list => {
+    state.apiUsers = list.map(mapBackendUser);
+    state.usersSource = "api";
+    renderUsersTable(state.apiUsers);
+    renderUsersSourceBadge();
+  }).catch(err => {
+    state.usersSource = "local";
+    renderUsersTable(state.users);
+    renderUsersSourceBadge();
+  });
+}
+
+function renderUsersSourceBadge() {
+  const el = document.getElementById("usersSourceBadge");
+  if (!el) return;
+  if (state.usersSource === "api") {
+    el.textContent = "Connecté à l'API";
+    el.className = "pill validee";
+  } else {
+    el.textContent = "Mode démo local (backend injoignable)";
+    el.className = "pill attente";
+  }
+}
+
+function renderUsersTable(list) {
+  const body = document.getElementById("usersBody");
   body.innerHTML = "";
-  state.users.forEach(u => {
+  list.forEach(u => {
     const tr = document.createElement("tr");
     const statutClass = u.statut === "Actif" ? "actif" : "inactif";
     tr.innerHTML =
       "<td>" + u.prenom + " " + u.nom + "</td>" +
       "<td>" + u.email + "</td>" +
       "<td>" + u.role + "</td>" +
+      "<td>" + (u.structure || "—") + "</td>" +
+      "<td>" + (u.dateCreation || "—") + "</td>" +
       '<td><span class="pill ' + statutClass + '">' + u.statut + "</span></td>" +
       '<td class="row-actions">' +
         '<button class="icon-btn" data-action="toggle" data-id="' + u.id + '" title="Activer / désactiver">' + iconToggle() + "</button>" +
@@ -1635,6 +1787,12 @@ function renderUsers() {
   body.querySelectorAll('[data-action="toggle"]').forEach(btn => {
     btn.addEventListener("click", () => {
       const id = parseInt(btn.dataset.id, 10);
+      if (state.usersSource === "api") {
+        const u = state.apiUsers.find(x => x.id === id);
+        apiSetUtilisateurActif(id, u.statut !== "Actif").then(() => renderUsers())
+          .catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
+        return;
+      }
       const u = state.users.find(x => x.id === id);
       u.statut = u.statut === "Actif" ? "Inactif" : "Actif";
       saveJSON("pec_users", state.users);
@@ -1644,16 +1802,27 @@ function renderUsers() {
   body.querySelectorAll('[data-action="delete"]').forEach(btn => {
     btn.addEventListener("click", () => {
       const id = parseInt(btn.dataset.id, 10);
-      if (!confirm("Supprimer cet utilisateur ?")) return;
-      state.users = state.users.filter(x => x.id !== id);
-      saveJSON("pec_users", state.users);
-      renderUsers();
+      const source = state.usersSource === "api" ? state.apiUsers : state.users;
+      const u = source.find(x => x.id === id);
+      askConfirm("Le compte de " + (u ? u.prenom + " " + u.nom : "cet utilisateur") + " sera définitivement supprimé et perdra tout accès à la plateforme.", () => {
+        if (state.usersSource === "api") {
+          apiDeleteUtilisateur(id).then(() => renderUsers())
+            .catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
+          return;
+        }
+        state.users = state.users.filter(x => x.id !== id);
+        saveJSON("pec_users", state.users);
+        renderUsers();
+      }, { title: "Supprimer cet utilisateur ?" });
     });
   });
 }
 
 const userModal = document.getElementById("userModal");
-document.getElementById("addUserBtn").addEventListener("click", () => { userModal.hidden = false; });
+document.getElementById("addUserBtn").addEventListener("click", () => {
+  document.getElementById("u-date-creation").value = todayFR();
+  userModal.hidden = false;
+});
 document.getElementById("closeUserModal").addEventListener("click", () => { userModal.hidden = true; });
 document.getElementById("cancelUserModal").addEventListener("click", () => { userModal.hidden = true; });
 
@@ -1663,12 +1832,38 @@ document.getElementById("userForm").addEventListener("submit", e => {
   const parts = nomComplet.split(" ");
   const prenom = parts.shift() || nomComplet;
   const nom = parts.join(" ") || "";
+  const email = document.getElementById("u-email").value.trim();
+  const role = document.getElementById("u-role").value;
+
+  if (state.usersSource === "api") {
+    // POST /api/auth/register — id_structure vaut 1 par défaut, faute d'un
+    // module "Structure" exposé par l'API pour choisir la vraie structure
+    // (voir le PDF, "Périmètre connecté").
+    apiRegister({
+      username: (email.split("@")[0] || "").toLowerCase(),
+      mot_de_passe: document.getElementById("u-pass").value || "changeme123",
+      nom: nomComplet,
+      email: email,
+      telephone: "",
+      role: FRONT_ROLE_TO_API_ROLE[role] || role,
+      id_structure: 1
+    }).then(() => {
+      document.getElementById("userForm").reset();
+      userModal.hidden = true;
+      renderUsers();
+    }).catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
+    return;
+  }
+
   const newUser = {
     id: Date.now(),
     nom: nom,
     prenom: prenom,
-    email: document.getElementById("u-email").value.trim(),
-    role: document.getElementById("u-role").value,
+    email: email,
+    username: (email.split("@")[0] || "").toLowerCase(),
+    role: role,
+    structure: document.getElementById("u-structure").value.trim(),
+    dateCreation: todayFR(),
     statut: "Actif"
   };
   state.users.push(newUser);
@@ -1676,6 +1871,92 @@ document.getElementById("userForm").addEventListener("submit", e => {
   document.getElementById("userForm").reset();
   userModal.hidden = true;
   renderUsers();
+});
+
+/* ---------------------------------------------------------------------- */
+/* Journalisation : filtres + tableau des connexions                       */
+/* ---------------------------------------------------------------------- */
+
+function populateJournalRoleFilter() {
+  const sel = document.getElementById("logFilterRole");
+  const current = sel.value;
+  const roles = Array.from(new Set(state.connexionLog.map(l => l.role).filter(Boolean))).sort();
+  sel.innerHTML = '<option value="">Tous les rôles</option>' + roles.map(r => '<option value="' + r.replace(/"/g, "&quot;") + '">' + r + "</option>").join("");
+  sel.value = current;
+}
+
+function getFilteredJournal() {
+  const f = state.journalFilters;
+  return state.connexionLog.filter(l => {
+    if (f.role && l.role !== f.role) return false;
+    if (f.statut && l.statut !== f.statut) return false;
+    if (f.search) {
+      const hay = ((l.nom || "") + " " + (l.email || "")).toLowerCase();
+      if (!hay.includes(f.search.toLowerCase())) return false;
+    }
+    if (f.from || f.to) {
+      const d = parseFRDate(l.date);
+      if (!d) return false;
+      if (f.from && d < new Date(f.from)) return false;
+      if (f.to && d > new Date(f.to + "T23:59:59")) return false;
+    }
+    return true;
+  });
+}
+
+function renderJournalisation() {
+  populateJournalRoleFilter();
+  const list = getFilteredJournal();
+
+  const todayStr = todayFR();
+  const since30 = new Date();
+  since30.setDate(since30.getDate() - 30);
+  const recent = state.connexionLog.filter(l => {
+    const d = parseFRDate(l.date);
+    return d && d >= since30;
+  });
+  document.getElementById("logKpiToday").textContent = state.connexionLog.filter(l => l.date === todayStr && l.statut === "Succès").length;
+  document.getElementById("logKpiUniques").textContent = new Set(recent.filter(l => l.statut === "Succès").map(l => l.email)).size;
+  document.getElementById("logKpiEchecs").textContent = recent.filter(l => l.statut === "Échec").length;
+  document.getElementById("logKpiDerniere").textContent = state.connexionLog.length ? (state.connexionLog[0].date + " " + state.connexionLog[0].heure) : "—";
+
+  const body = document.getElementById("journalBody");
+  const empty = document.getElementById("journalEmpty");
+  body.innerHTML = "";
+  empty.hidden = list.length > 0;
+  list.forEach(l => {
+    const tr = document.createElement("tr");
+    const statutClass = l.statut === "Succès" ? "actif" : "inactif";
+    tr.innerHTML =
+      "<td>" + (l.nom || "—") + " <span style=\"color:var(--muted)\">(" + (l.email || "—") + ")</span></td>" +
+      "<td>" + (l.role || "—") + "</td>" +
+      "<td>" + l.date + "</td>" +
+      "<td>" + l.heure + "</td>" +
+      '<td><span class="pill ' + statutClass + '">' + l.statut + "</span></td>";
+    body.appendChild(tr);
+  });
+}
+
+["logFilterSearch", "logFilterRole", "logFilterStatut", "logFilterFrom", "logFilterTo"].forEach(id => {
+  document.getElementById(id).addEventListener("input", () => {
+    state.journalFilters = {
+      search: document.getElementById("logFilterSearch").value.trim(),
+      role: document.getElementById("logFilterRole").value,
+      statut: document.getElementById("logFilterStatut").value,
+      from: document.getElementById("logFilterFrom").value,
+      to: document.getElementById("logFilterTo").value
+    };
+    renderJournalisation();
+  });
+});
+document.getElementById("logFilterResetBtn").addEventListener("click", () => {
+  document.getElementById("logFilterSearch").value = "";
+  document.getElementById("logFilterRole").value = "";
+  document.getElementById("logFilterStatut").value = "";
+  document.getElementById("logFilterFrom").value = "";
+  document.getElementById("logFilterTo").value = "";
+  state.journalFilters = { search: "", role: "", statut: "", from: "", to: "" };
+  renderJournalisation();
 });
 
 /* ---------------------------------------------------------------------- */
@@ -1694,22 +1975,55 @@ function medicamentPrix(designation) {
 
 function resetPharmaSearch() {
   document.getElementById("pharmaNagInput").value = "";
+  document.getElementById("pharmaDateInput").value = "";
   document.getElementById("pharmaNotFound").hidden = true;
+  document.getElementById("pharmaAssureCard").hidden = true;
   document.getElementById("pharmaResults").innerHTML = "";
 }
 
-function runPharmaSearch(nag) {
+function isSameDay(d1, d2) {
+  return d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
+}
+
+// L'identité s'affiche dès que le NAG correspond à une consultation connue,
+// même si la date renseignée ne donne aucune ordonnance — le pharmacien voit
+// alors que le patient existe bien, seule la prestation recherchée manque.
+function findPharmaIdentity(nag) {
+  return state.historique.find(h => h.type === "Consultation" && h.matricule === nag && h.patientNom) || null;
+}
+
+function renderPharmaAssureCard(identity) {
+  const card = document.getElementById("pharmaAssureCard");
+  if (!identity) { card.hidden = true; return; }
+  card.hidden = false;
+  document.getElementById("pa-nom").textContent = identity.patientNom || "—";
+  document.getElementById("pa-matricule").textContent = identity.matricule || "—";
+  document.getElementById("pa-naissance").textContent = identity.dateNaissance || "—";
+  document.getElementById("pa-fonds").textContent = identity.fonds || "—";
+  const parts = (identity.patientNom || "").split(" ");
+  setAvatar(document.getElementById("pa-avatar"), parts[0], parts.slice(1).join(" "));
+}
+
+function runPharmaSearch(nag, dateStr) {
   nag = (nag || "").trim();
-  const entries = state.historique.filter(h =>
-    h.type === "Consultation" && h.statut === "Validée" &&
-    h.matricule === nag && (h.ordonnance || []).length > 0
-  );
+  const targetDate = dateStr ? new Date(dateStr + "T00:00:00") : null;
+  const entries = state.historique.filter(h => {
+    if (h.type !== "Consultation" || h.statut !== "Validée") return false;
+    if (h.matricule !== nag) return false;
+    if (!(h.ordonnance || []).length) return false;
+    if (targetDate) {
+      const d = parseFRDate(h.date);
+      if (!d || !isSameDay(d, targetDate)) return false;
+    }
+    return true;
+  });
   document.getElementById("pharmaNotFound").hidden = !nag || entries.length > 0;
+  renderPharmaAssureCard(nag ? findPharmaIdentity(nag) : null);
   renderPharmaResults(entries);
 }
 
 document.getElementById("pharmaSearchBtn").addEventListener("click", () => {
-  runPharmaSearch(document.getElementById("pharmaNagInput").value);
+  runPharmaSearch(document.getElementById("pharmaNagInput").value, document.getElementById("pharmaDateInput").value);
 });
 
 function renderPharmaResults(entries) {
@@ -1776,7 +2090,7 @@ function renderPharmaResults(entries) {
         med.partPatient = String(prix - pa);
 
         saveJSON("pec_historique", state.historique);
-        runPharmaSearch(document.getElementById("pharmaNagInput").value);
+        runPharmaSearch(document.getElementById("pharmaNagInput").value, document.getElementById("pharmaDateInput").value);
       });
     });
   });
@@ -2266,6 +2580,274 @@ document.getElementById("reglementHopitalForm").addEventListener("submit", e => 
   saveJSON("pec_reglements_hopitaux", state.reglementsHopitaux);
   document.getElementById("reglementHopitalModal").hidden = true;
   renderHopitalRapport();
+});
+
+/* ---------------------------------------------------------------------- */
+/* Statistiques (vue Direction) : agrégats globaux + filtres avancés       */
+/* ---------------------------------------------------------------------- */
+
+state.statsFilters = { from: "", to: "", type: "", statut: "", fonds: "", medecin: "", search: "" };
+
+function getStatsFiltered() {
+  const f = state.statsFilters;
+  return state.historique.filter(h => {
+    if (f.type && h.type !== f.type) return false;
+    if (f.statut && h.statut !== f.statut) return false;
+    if (f.fonds && h.fonds !== f.fonds) return false;
+    if (f.medecin && h.medecin !== f.medecin) return false;
+    if (f.search) {
+      const hay = ((h.patientNom || "") + " " + (h.matricule || "")).toLowerCase();
+      if (!hay.includes(f.search.toLowerCase())) return false;
+    }
+    if (f.from || f.to) {
+      const d = parseFRDate(h.date);
+      if (!d) return false;
+      if (f.from && d < new Date(f.from)) return false;
+      if (f.to && d > new Date(f.to + "T23:59:59")) return false;
+    }
+    return true;
+  });
+}
+
+function populateStatsMedecinFilter() {
+  const sel = document.getElementById("statsFilterMedecin");
+  const current = sel.value;
+  const names = Array.from(new Set(state.historique.map(h => h.medecin).filter(Boolean))).sort();
+  sel.innerHTML = '<option value="">Tous les médecins</option>' + names.map(n => '<option value="' + n.replace(/"/g, "&quot;") + '">' + n + "</option>").join("");
+  sel.value = current;
+}
+
+// Barre de répartition en pourcentage (segments = [{ label, value, color }]) —
+// utilisée pour Type de prestation et Fonds sur la page Statistiques.
+function renderSplitBar(barId, legendId, segments) {
+  const total = segments.reduce((a, s) => a + s.value, 0);
+  const bar = document.getElementById(barId);
+  const legend = document.getElementById(legendId);
+  if (!total) {
+    bar.innerHTML = '<div class="split-bar-empty"></div>';
+    legend.innerHTML = '<div class="empty-state" style="padding:6px 0">Aucune donnée pour ces filtres.</div>';
+    return;
+  }
+  bar.innerHTML = segments.filter(s => s.value > 0).map(s => {
+    const pct = (s.value / total) * 100;
+    return '<div class="split-seg" style="width:' + pct + '%;background:' + s.color + '" title="' + s.label + " — " + Math.round(pct) + '%"></div>';
+  }).join("");
+  legend.innerHTML = segments.map(s => {
+    const pct = total ? Math.round((s.value / total) * 100) : 0;
+    return '<div class="split-legend-item"><span class="split-dot" style="background:' + s.color + '"></span>' + s.label + " <b>" + s.value + "</b> <span class=\"split-pct\">(" + pct + "%)</span></div>";
+  }).join("");
+}
+
+function renderStatistiques() {
+  populateStatsMedecinFilter();
+  const filtered = getStatsFiltered();
+
+  const totalPEC = filtered.length;
+  const uniquePatients = new Set(filtered.map(h => h.matricule).filter(Boolean)).size;
+  const totalMontant = filtered.reduce((a, h) => a + num(h.totalMontant), 0);
+  const totalCharge = filtered.reduce((a, h) => a + num(h.totalPart), 0);
+  const validees = filtered.filter(h => h.statut === "Validée").length;
+  const tauxValidation = totalPEC ? Math.round((validees / totalPEC) * 100) : 0;
+  const consultCount = filtered.filter(h => h.type === "Consultation").length;
+  const examCount = filtered.filter(h => h.type === "Examen").length;
+
+  document.getElementById("statsKpiTotal").textContent = totalPEC;
+  document.getElementById("statsKpiPatients").textContent = uniquePatients;
+  document.getElementById("statsKpiMontant").textContent = fmtFCFA(totalMontant);
+  document.getElementById("statsKpiCharge").textContent = fmtFCFA(totalCharge);
+  document.getElementById("statsKpiValidation").textContent = tauxValidation + "%";
+
+  // Restant dû : agrégats globaux hôpitaux + pharmacies (leurs propres filtres
+  // de période/statut, distincts de ceux de cette page — vision "toutes périodes").
+  const pharmaAgg = getPharmacieAggregates(null);
+  const hopAgg = getHopitalAggregates(null);
+  const pharmaReste = pharmaAgg.reduce((a, p) => a + p.reste, 0);
+  const hopReste = hopAgg.reduce((a, p) => a + p.reste, 0);
+  document.getElementById("statsKpiReste").textContent = fmtFCFA(pharmaReste + hopReste);
+
+  renderSplitBar("statsTypeSplit", "statsTypeLegend", [
+    { label: "Consultations", value: consultCount, color: "var(--green)" },
+    { label: "Examens", value: examCount, color: "var(--blue)" }
+  ]);
+
+  const fondsList = ["Fonds Secteur Privé", "Fonds Secteur Public", "Fonds Garantie Sociale"];
+  const fondsColors = ["var(--blue)", "var(--green)", "var(--yellow-dark)"];
+  renderSplitBar("statsFondsSplit", "statsFondsLegend",
+    fondsList.map((f, i) => ({ label: f.replace("Fonds ", ""), value: filtered.filter(h => h.fonds === f).length, color: fondsColors[i] }))
+  );
+
+  const monthBuckets = getHopitalEvolutionByMonth(filtered);
+  renderGroupedBarChart("statsEvoChart", "statsEvoTooltip",
+    monthBuckets.map(b => ({ label: monthLabel(b), a: b.consult, b: b.exam, montant: b.montant })),
+    { tooltip: it => "<b>" + it.label + "</b><br>Consultations : " + it.a + "<br>Examens : " + it.b + "<br>Part CNAMGS : " + fmtFCFA(it.montant) }
+  );
+
+  renderBarChart("statsTopHopChart", "statsTopHopTooltip",
+    hopAgg.slice(0, 8).map(h => ({ label: h.hopital, value: h.montantTotal })),
+    { color: "var(--green)", tooltip: it => "<b>" + it.label + "</b> — " + fmtFCFA(it.value) }
+  );
+  renderBarChart("statsTopPharmChart", "statsTopPharmTooltip",
+    pharmaAgg.slice(0, 8).map(p => ({ label: p.pharmacie, value: p.montantTotal })),
+    { color: "var(--blue)", tooltip: it => "<b>" + it.label + "</b> — " + fmtFCFA(it.value) }
+  );
+}
+
+["statsFilterFrom", "statsFilterTo", "statsFilterType", "statsFilterStatut", "statsFilterFonds", "statsFilterMedecin", "statsFilterSearch"].forEach(id => {
+  document.getElementById(id).addEventListener("input", () => {
+    state.statsFilters = {
+      from: document.getElementById("statsFilterFrom").value,
+      to: document.getElementById("statsFilterTo").value,
+      type: document.getElementById("statsFilterType").value,
+      statut: document.getElementById("statsFilterStatut").value,
+      fonds: document.getElementById("statsFilterFonds").value,
+      medecin: document.getElementById("statsFilterMedecin").value,
+      search: document.getElementById("statsFilterSearch").value.trim()
+    };
+    renderStatistiques();
+  });
+});
+document.getElementById("statsFilterResetBtn").addEventListener("click", () => {
+  document.getElementById("statsFilterFrom").value = "";
+  document.getElementById("statsFilterTo").value = "";
+  document.getElementById("statsFilterType").value = "";
+  document.getElementById("statsFilterStatut").value = "";
+  document.getElementById("statsFilterFonds").value = "";
+  document.getElementById("statsFilterMedecin").value = "";
+  document.getElementById("statsFilterSearch").value = "";
+  state.statsFilters = { from: "", to: "", type: "", statut: "", fonds: "", medecin: "", search: "" };
+  renderStatistiques();
+});
+document.getElementById("statsExportBtn").addEventListener("click", () => { window.print(); });
+
+// Rapports : pas une capture de la page, mais un vrai document généré à partir
+// des données actuellement affichées (filtres + onglet actif), avec en-tête
+// CNAMGS — imprimé seul, le reste de l'app étant masqué (voir @media print).
+function buildRapportReportHtml(tab) {
+  let title, filtersParts, theadHtml, rowsHtml, totals;
+
+  if (tab === "pharmacies") {
+    const f = state.pharmaSuiviFilters;
+    const list = getPharmacieAggregates(f);
+    title = "Rapport — Prestations des pharmacies partenaires";
+    filtersParts = [
+      f.from ? "Du " + f.from : null,
+      f.to ? "au " + f.to : null,
+      f.pharmacie ? "Pharmacie : " + f.pharmacie : null,
+      f.statut ? "Statut : " + f.statut : null
+    ];
+    totals = {
+      count: list.length,
+      montant: list.reduce((a, p) => a + p.montantTotal, 0),
+      paye: list.reduce((a, p) => a + p.paye, 0),
+      reste: list.reduce((a, p) => a + p.reste, 0)
+    };
+    theadHtml = "<tr><th>Pharmacie</th><th>Prestations</th><th>Montant total</th><th>Montant payé</th><th>Reste à payer</th><th>Statut</th></tr>";
+    rowsHtml = list.length
+      ? list.map(p => "<tr><td>" + p.pharmacie + "</td><td>" + p.count + "</td><td>" + fmtFCFA(p.montantTotal) + "</td><td>" + fmtFCFA(p.paye) + "</td><td>" + fmtFCFA(p.reste) + "</td><td>" + p.statut + "</td></tr>").join("")
+      : '<tr><td colspan="6" style="text-align:center">Aucune donnée pour ces filtres.</td></tr>';
+  } else {
+    const f = state.hopitalSuiviFilters;
+    const list = getHopitalAggregates(f);
+    title = "Rapport — Prestations des hôpitaux partenaires";
+    filtersParts = [
+      f.from ? "Du " + f.from : null,
+      f.to ? "au " + f.to : null,
+      f.hopital ? "Hôpital : " + f.hopital : null,
+      f.type ? "Type : " + f.type : null,
+      f.statut ? "Statut : " + f.statut : null
+    ];
+    totals = {
+      count: list.length,
+      montant: list.reduce((a, p) => a + p.montantTotal, 0),
+      paye: list.reduce((a, p) => a + p.paye, 0),
+      reste: list.reduce((a, p) => a + p.reste, 0)
+    };
+    theadHtml = "<tr><th>Hôpital</th><th>Consultations</th><th>Examens</th><th>Total</th><th>Montant total</th><th>Montant payé</th><th>Reste à payer</th><th>Statut</th></tr>";
+    rowsHtml = list.length
+      ? list.map(p => "<tr><td>" + p.hopital + "</td><td>" + p.consult + "</td><td>" + p.exam + "</td><td>" + p.count + "</td><td>" + fmtFCFA(p.montantTotal) + "</td><td>" + fmtFCFA(p.paye) + "</td><td>" + fmtFCFA(p.reste) + "</td><td>" + p.statut + "</td></tr>").join("")
+      : '<tr><td colspan="8" style="text-align:center">Aucune donnée pour ces filtres.</td></tr>';
+  }
+
+  const filtersSummary = filtersParts.filter(Boolean).join(" · ") || "Toutes périodes, tous établissements";
+
+  return '<div class="report-doc">' +
+    '<div class="report-head">' +
+      '<img src="CNAMGS.png" alt="CNAMGS" />' +
+      '<div><h1>' + title + '</h1><p>Caisse Nationale d’Assurance Maladie et de Garantie Sociale</p></div>' +
+    "</div>" +
+    '<div class="report-meta">' +
+      "<div><b>Filtres appliqués</b><span>" + filtersSummary + "</span></div>" +
+      "<div><b>Généré le</b><span>" + todayFR() + "</span></div>" +
+    "</div>" +
+    '<div class="report-kpis">' +
+      "<div><b>" + totals.count + "</b><span>Établissement(s)</span></div>" +
+      "<div><b>" + fmtFCFA(totals.montant) + "</b><span>Montant total</span></div>" +
+      "<div><b>" + fmtFCFA(totals.paye) + "</b><span>Montant payé</span></div>" +
+      "<div><b>" + fmtFCFA(totals.reste) + "</b><span>Reste à payer</span></div>" +
+    "</div>" +
+    '<table class="report-table"><thead>' + theadHtml + "</thead><tbody>" + rowsHtml + "</tbody></table>" +
+    '<div class="report-footer">CNAMGS — Plateforme de gestion du circuit de l’assuré · Rapport généré automatiquement (prototype front-end)</div>' +
+  "</div>";
+}
+
+document.getElementById("rapportsExportBtn").addEventListener("click", () => {
+  const activeChip = document.querySelector("#rapportsTabToggle .chip.active");
+  const tab = activeChip ? activeChip.dataset.tab : "hopitaux";
+  document.getElementById("reportPrintArea").innerHTML = buildRapportReportHtml(tab);
+  document.body.classList.add("printing-report");
+  window.print();
+  document.body.classList.remove("printing-report");
+});
+
+// Export de l'historique complet (selon les filtres actifs) : mêmes règles
+// d'impression que Rapports/Statistiques, tableau classé par feuille.
+function buildHistoriqueReportHtml() {
+  const f = state.historiqueFilters;
+  const list = getFilteredHistorique();
+  const filtersParts = [
+    f.from ? "Du " + f.from : null,
+    f.to ? "au " + f.to : null,
+    f.type ? "Type : " + f.type : null,
+    f.statut ? "Statut : " + f.statut : null,
+    f.search ? "Recherche : " + f.search : null
+  ];
+  const filtersSummary = filtersParts.filter(Boolean).join(" · ") || "Toutes périodes, tous types, tous statuts";
+  const totals = {
+    count: list.length,
+    montant: list.reduce((a, h) => a + num(h.totalMontant), 0),
+    part: list.reduce((a, h) => a + num(h.totalPart), 0)
+  };
+
+  const rowsHtml = list.length
+    ? list.map(h =>
+        "<tr><td>" + h.numero + "</td><td>" + h.date + "</td><td>" + (h.patientNom || h.patient || "") + "</td><td>" +
+        (h.matricule || "") + "</td><td>" + h.type + "</td><td>" + (h.statut || "Validée") + "</td><td>" + fmt(num(h.totalMontant)) + "</td></tr>"
+      ).join("")
+    : '<tr><td colspan="7" style="text-align:center">Aucune prise en charge pour ces filtres.</td></tr>';
+
+  return '<div class="report-doc">' +
+    '<div class="report-head">' +
+      '<img src="CNAMGS.png" alt="CNAMGS" />' +
+      '<div><h1>Rapport — Historique des prises en charge</h1><p>Caisse Nationale d’Assurance Maladie et de Garantie Sociale</p></div>' +
+    "</div>" +
+    '<div class="report-meta">' +
+      "<div><b>Filtres appliqués</b><span>" + filtersSummary + "</span></div>" +
+      "<div><b>Généré le</b><span>" + todayFR() + "</span></div>" +
+    "</div>" +
+    '<div class="report-kpis">' +
+      "<div><b>" + totals.count + "</b><span>Prise(s) en charge</span></div>" +
+      "<div><b>" + fmtFCFA(totals.montant) + "</b><span>Montant total</span></div>" +
+      "<div><b>" + fmtFCFA(totals.part) + "</b><span>Part CNAMGS</span></div>" +
+    "</div>" +
+    '<table class="report-table"><thead><tr><th>N° feuille</th><th>Date</th><th>Patient</th><th>Matricule</th><th>Type</th><th>Statut</th><th>Montant total</th></tr></thead><tbody>' + rowsHtml + "</tbody></table>" +
+    '<div class="report-footer">CNAMGS — Plateforme de gestion du circuit de l’assuré · Rapport généré automatiquement (prototype front-end)</div>' +
+  "</div>";
+}
+document.getElementById("historiqueExportBtn").addEventListener("click", () => {
+  document.getElementById("reportPrintArea").innerHTML = buildHistoriqueReportHtml();
+  document.body.classList.add("printing-report");
+  window.print();
+  document.body.classList.remove("printing-report");
 });
 
 /* ---------------------------------------------------------------------- */

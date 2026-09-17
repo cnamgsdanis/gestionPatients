@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>PEC — Gestion du circuit de l'assuré</title>
+<link rel="icon" href="logo.jpg" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -22,6 +23,7 @@
  
   <div class="login-center">
     <div class="welcome-inner centered">
+      <img src="logo.jpg" alt="GPC" class="login-logo" />
       <h1>Bienvenue</h1>
       <p class="welcome-sub">Heureux de vous revoir</p>
       <p class="welcome-text">Accédez à votre espace personnel et retrouvez tous vos services au même endroit.</p>
@@ -36,9 +38,9 @@
       </div>
  
       <div class="field">
-        <label for="loginEmail">Adresse e-mail</label>
-        <input type="email" id="loginEmail" name="email" placeholder="Entrez votre adresse e-mail" required autocomplete="username" aria-describedby="loginEmailError" />
-        <p class="field-error" id="loginEmailError" role="alert" hidden></p>
+        <label for="loginUsername">Nom d'utilisateur</label>
+        <input type="text" id="loginUsername" name="username" placeholder="Entrez votre nom d'utilisateur" required autocomplete="username" aria-describedby="loginUsernameError" />
+        <p class="field-error" id="loginUsernameError" role="alert" hidden></p>
       </div>
  
       <div class="field">
@@ -51,11 +53,6 @@
           </button>
         </div>
         <p class="field-error" id="loginPassError" role="alert" hidden></p>
-      </div>
- 
-      <div class="login-row">
-        <label><input type="checkbox" id="rememberMe" /> Se souvenir de moi</label>
-        <button type="button" class="link-btn" id="forgotPassBtn">Mot de passe oublié ?</button>
       </div>
  
       <button type="submit" class="btn-login" id="loginSubmitBtn"><span class="btn-label">Se connecter</span></button>
@@ -77,19 +74,27 @@
     </div>
   </div>
 </div>
- 
+
+<!-- ======================= TRANSITION DE CONNEXION ======================= -->
+<div class="login-transition" id="loginTransition" hidden>
+  <div class="login-transition-inner">
+    <div class="login-transition-logo-ring"><img src="logo.jpg" alt="GPC" /></div>
+    <div class="login-transition-text">Connexion en cours…</div>
+  </div>
+</div>
+
 <!-- ======================= APPLICATION ======================= -->
 <div class="app-shell" id="appShell" hidden>
  
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-top">
-      <div class="sidebar-brand">
-        <div class="mark logo-mark"><img src="CNAMGS.png" alt="CNAMGS" /></div>
+      <button type="button" class="sidebar-brand" id="sidebarBrandBtn">
+        <div class="mark logo-mark"><img src="logo.jpg" alt="GPC" /></div>
         <div class="txt">
-          <strong>CNAMGS</strong>
+          <strong>GPC</strong>
           <span>Circuit de l'assuré</span>
         </div>
-      </div>
+      </button>
       <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" title="Réduire le menu" data-tip="Étendre le menu">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 5l-7 7 7 7"/></svg>
       </button>
@@ -100,6 +105,10 @@
       <button class="nav-item active" data-view="dashboard" data-tip="Tableau de bord">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>
         <span class="nav-txt">Tableau de bord</span>
+      </button>
+      <button class="nav-item" data-view="statistiques" data-tip="Statistiques">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 15l4-6 3 4 5-8"/></svg>
+        <span class="nav-txt">Statistiques</span>
       </button>
       <button class="nav-item" data-view="rapports" data-tip="Rapports">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="4" height="10" rx="1"/><rect x="10" y="5" width="4" height="15" rx="1"/><rect x="16" y="13" width="4" height="7" rx="1"/></svg>
@@ -130,6 +139,10 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
         <span class="nav-txt">Gestion des permissions</span>
       </button>
+      <button class="nav-item" data-view="journalisation" data-tip="Journalisation">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/><path d="M3.5 9.5 2 8"/><path d="M20.5 9.5 22 8"/></svg>
+        <span class="nav-txt">Journalisation</span>
+      </button>
     </div>
  
     <div class="sidebar-spacer"></div>
@@ -143,7 +156,12 @@
   <div class="main">
     <header class="topbar">
       <div>
-        <h2 id="topbarTitle">Tableau de bord</h2>
+        <div class="topbar-title-row">
+          <button type="button" class="topbar-back-btn" id="topbarBackBtn" title="Retour au tableau de bord" hidden>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+          </button>
+          <h2 id="topbarTitle">Tableau de bord</h2>
+        </div>
         <div class="crumb" id="topbarCrumb">Accueil</div>
       </div>
       <div class="topbar-clock" id="topbarClock"></div>
@@ -283,14 +301,174 @@
         </div>
       </section>
 
+      <!-- ---------------- STATISTIQUES (vue Direction) ---------------- -->
+      <section class="view" id="view-statistiques" hidden>
+        <div class="page-hero">
+          <div class="page-hero-text">
+            <h1>Vue d'ensemble de la Direction</h1>
+            <p>Activité consolidée du circuit de l'assuré — hôpitaux et pharmacies partenaires, tous statuts confondus.</p>
+          </div>
+          <button type="button" class="btn-export" id="statsExportBtn">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+            Exporter en PDF
+          </button>
+        </div>
+
+        <div class="card pharma-filters-card">
+          <div class="card-head">
+            <h3>Filtres avancés</h3>
+            <button type="button" class="btn-secondary btn-sm" id="statsFilterResetBtn">Réinitialiser</button>
+          </div>
+          <div class="card-body" style="padding-bottom:4px">
+            <div class="filters-row">
+              <div class="field">
+                <label for="statsFilterFrom">Du</label>
+                <input type="date" id="statsFilterFrom" />
+              </div>
+              <div class="field">
+                <label for="statsFilterTo">Au</label>
+                <input type="date" id="statsFilterTo" />
+              </div>
+              <div class="field">
+                <label for="statsFilterType">Type</label>
+                <select id="statsFilterType">
+                  <option value="">Tous les types</option>
+                  <option value="Consultation">Consultation</option>
+                  <option value="Examen">Examen</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="statsFilterStatut">Statut</label>
+                <select id="statsFilterStatut">
+                  <option value="">Tous les statuts</option>
+                  <option value="En attente">En attente</option>
+                  <option value="Validée">Validée</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="statsFilterFonds">Fonds</label>
+                <select id="statsFilterFonds">
+                  <option value="">Tous les fonds</option>
+                  <option value="Fonds Secteur Privé">Fonds Secteur Privé</option>
+                  <option value="Fonds Secteur Public">Fonds Secteur Public</option>
+                  <option value="Fonds Garantie Sociale">Fonds Garantie Sociale</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="statsFilterMedecin">Médecin</label>
+                <select id="statsFilterMedecin"><option value="">Tous les médecins</option></select>
+              </div>
+              <div class="field">
+                <label for="statsFilterSearch">Recherche</label>
+                <input type="text" id="statsFilterSearch" placeholder="Nom du patient ou matricule" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="kpi-grid">
+          <div class="kpi-card accent-a">
+            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h6"/><path d="M7 13h8"/><path d="M7 17h5"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num" id="statsKpiTotal">0</div><div class="kpi-lbl">Prises en charge</div></div>
+          </div>
+          <div class="kpi-card accent-b">
+            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><circle cx="18" cy="8.5" r="2.4"/><path d="M16 14.3c2.8.4 4.7 2.4 4.7 5.7"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num" id="statsKpiPatients">0</div><div class="kpi-lbl">Patients uniques</div></div>
+          </div>
+          <div class="kpi-card accent-c">
+            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num" id="statsKpiMontant">0 FCFA</div><div class="kpi-lbl">Montant total engagé</div></div>
+          </div>
+          <div class="kpi-card accent-d">
+            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12a8 8 0 1 1-8-8"/><path d="M20 4L12 12"/><path d="M15 4h5v5"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num" id="statsKpiCharge">0 FCFA</div><div class="kpi-lbl">Part CNAMGS</div></div>
+          </div>
+          <div class="kpi-card accent-e">
+            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num pending" id="statsKpiReste">0 FCFA</div><div class="kpi-lbl">Restant dû (hôpitaux + pharmacies)</div></div>
+          </div>
+          <div class="kpi-card accent-f">
+            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num" id="statsKpiValidation">0%</div><div class="kpi-lbl">Taux de validation</div></div>
+          </div>
+        </div>
+
+        <div class="stats-split-row">
+          <div class="card">
+            <div class="card-head"><h3>Répartition par type de prestation</h3></div>
+            <div class="card-body">
+              <div class="split-bar" id="statsTypeSplit"></div>
+              <div class="split-legend" id="statsTypeLegend"></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Répartition par fonds</h3></div>
+            <div class="card-body">
+              <div class="split-bar" id="statsFondsSplit"></div>
+              <div class="split-legend" id="statsFondsLegend"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>Évolution globale des prises en charge</h3>
+            <div class="chart-legend">
+              <div class="chart-legend-item"><span class="chart-dot" style="background:var(--green)"></span>Consultations</div>
+              <div class="chart-legend-item"><span class="chart-dot" style="background:var(--blue)"></span>Examens</div>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="evolution-chart-outer">
+              <div id="statsEvoChart" class="evolution-chart-wrap"></div>
+              <div class="ev-tooltip" id="statsEvoTooltip" hidden></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="stats-split-row">
+          <div class="card">
+            <div class="card-head"><h3>Top établissements — part CNAMGS</h3></div>
+            <div class="card-body">
+              <div class="evolution-chart-outer">
+                <div id="statsTopHopChart" class="evolution-chart-wrap"></div>
+                <div class="ev-tooltip" id="statsTopHopTooltip" hidden></div>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Top pharmacies — montant</h3></div>
+            <div class="card-body">
+              <div class="evolution-chart-outer">
+                <div id="statsTopPharmChart" class="evolution-chart-wrap"></div>
+                <div class="ev-tooltip" id="statsTopPharmTooltip" hidden></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- ---------------- RAPPORTS ---------------- -->
       <section class="view" id="view-rapports" hidden>
+        <div class="page-hero">
+          <div class="page-hero-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="4" height="10" rx="1"/><rect x="10" y="5" width="4" height="15" rx="1"/><rect x="16" y="13" width="4" height="7" rx="1"/></svg></div>
+          <div class="page-hero-text">
+            <h1>Rapports</h1>
+            <p>Suivi financier détaillé des hôpitaux et pharmacies partenaires — filtrez, contrôlez les règlements, exportez.</p>
+          </div>
+        </div>
         <div class="card rapports-tabs-card">
           <div class="card-head">
             <h3>Rapports</h3>
-            <div class="chip-row" id="rapportsTabToggle">
-              <button type="button" class="chip active" data-tab="hopitaux">Hôpitaux</button>
-              <button type="button" class="chip" data-tab="pharmacies">Pharmacies</button>
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <div class="chip-row" id="rapportsTabToggle">
+                <button type="button" class="chip active" data-tab="hopitaux">Hôpitaux</button>
+                <button type="button" class="chip" data-tab="pharmacies">Pharmacies</button>
+              </div>
+              <button type="button" class="btn-export" id="rapportsExportBtn">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+                Exporter en PDF
+              </button>
             </div>
           </div>
         </div>
@@ -408,79 +586,86 @@
 
       <!-- ---------------- NOUVELLE PRISE EN CHARGE ---------------- -->
       <section class="view" id="view-nouvelle-pec" hidden>
+        <div class="page-hero">
+          <div class="page-hero-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h6"/><path d="M7 13h8"/><path d="M7 17h5"/></svg></div>
+          <div class="page-hero-text">
+            <h1>Nouvelle prise en charge</h1>
+            <p>Recherchez l'assuré, choisissez le patient et le médecin, puis ouvrez la feuille de soins ou le bon d'examen.</p>
+          </div>
+        </div>
         <div class="card">
           <div class="card-head">
-            <h3>Nouvelle prise en charge</h3>
+            <h3>Rechercher un assuré</h3>
           </div>
           <div class="card-body">
             <div class="search-row">
-              <div class="field">
+              <div class="field field-matricule">
                 <label for="matriculeInput">Matricule de l'assuré</label>
-                <input type="text" id="matriculeInput" placeholder="Saisir les 10 chiffres du matricule" maxlength="10" inputmode="numeric" />
+                <input type="text" id="matriculeInput" placeholder="10 chiffres" maxlength="10" inputmode="numeric" />
               </div>
               <button type="button" class="btn-primary" id="searchBtn">Rechercher</button>
             </div>
             <div class="hint">
               Matricules de test : <code>1234567890</code>, <code>2345678901</code>, <code>3456789012</code>, <code>4567890123</code>, <code>5678901234</code>
             </div>
- 
+
             <div id="notFoundMsg" class="hint" style="color:var(--red)" hidden>Aucun assuré trouvé pour ce matricule.</div>
- 
+
             <div class="assure-found" id="assureFound" hidden>
-              <div class="row1">
-                <div class="idname" id="af-nom">—</div>
-                <div style="display:flex;align-items:center;gap:10px">
-                  <span class="badge" id="af-situation">Assuré</span>
-                  <button type="button" class="link-btn" id="changeAssureBtn">Changer d'assuré</button>
+              <div class="assure-split">
+                <div class="assure-photo-col">
+                  <div class="assure-photo-frame" id="af-avatar"></div>
+                  <div class="idname" id="af-nom">—</div>
+                  <span class="badge" id="af-situation">Assuré principal</span>
+                  <div class="assure-meta assure-meta-vert">
+                    <div><b id="af-matricule">—</b>Matricule</div>
+                    <div><b id="af-naissance">—</b>Date de naissance</div>
+                    <div><b id="af-fonds">—</b>Fonds</div>
+                    <div><b id="af-nature">—</b>Nature</div>
+                  </div>
+                  <button type="button" class="btn-secondary btn-sm" id="changeAssureBtn">Changer d'assuré</button>
                 </div>
-              </div>
-              <div class="assure-meta">
-                <div><b id="af-matricule">—</b>Matricule</div>
-                <div><b id="af-naissance">—</b>Date de naissance</div>
-                <div><b id="af-fonds">—</b>Fonds</div>
-                <div><b id="af-employeur">—</b>Employeur</div>
-              </div>
- 
-              <div class="patient-picker">
-                <label for="patientSelect">Qui est le patient ?</label>
-                <select id="patientSelect"></select>
-              </div>
- 
-              <div class="choice-group">
-                <label>Ticket modérateur</label>
-                <div class="chip-row" id="tmChoices">
-                  <button type="button" class="chip" data-tm="Plein">Plein</button>
-                  <button type="button" class="chip" data-tm="Plein (ALD)">Plein (ALD)</button>
-                  <button type="button" class="chip" data-tm="Exonéré">Exonéré</button>
+
+                <div class="assure-pec-col">
+                  <div class="assure-pec-label">Informations relatives à la prise en charge</div>
+
+                  <div class="choice-group">
+                    <label>Ticket modérateur</label>
+                    <div class="chip-row" id="tmChoices">
+                      <button type="button" class="chip" data-tm="Plein">Plein</button>
+                      <button type="button" class="chip" data-tm="Plein (ALD)">Plein (ALD)</button>
+                      <button type="button" class="chip" data-tm="Exonéré">Exonéré</button>
+                    </div>
+                  </div>
+
+                  <div class="choice-group">
+                    <label for="medecinSelect">Médecin</label>
+                    <select id="medecinSelect"></select>
+                  </div>
+
+                  <div class="hint" id="readyHint">Sélectionnez un patient, un ticket modérateur et un médecin pour continuer.</div>
+
+                  <div class="type-buttons">
+                    <button type="button" class="type-btn" id="btnConsultation" disabled>
+                      <span class="ic">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v6a4 4 0 0 0 8 0V3"/><path d="M10 15v2a4 4 0 0 0 8 0v-2"/><circle cx="19" cy="8" r="1.6"/></svg>
+                      </span>
+                      <span>
+                        <span class="tt">Consultation</span>
+                        <span class="ds">Ouvrir la feuille de soins</span>
+                      </span>
+                    </button>
+                    <button type="button" class="type-btn" id="btnExamen" disabled>
+                      <span class="ic">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 2h6"/><path d="M10 2v6.5L4.5 18a2 2 0 0 0 1.8 3h11.4a2 2 0 0 0 1.8-3L14 8.5V2"/><path d="M7.5 14h9"/></svg>
+                      </span>
+                      <span>
+                        <span class="tt">Examen</span>
+                        <span class="ds">Ouvrir le bon d'examen</span>
+                      </span>
+                    </button>
+                  </div>
                 </div>
-              </div>
- 
-              <div class="choice-group">
-                <label for="medecinSelect">Médecin</label>
-                <select id="medecinSelect"></select>
-              </div>
- 
-              <div class="hint" id="readyHint">Sélectionnez un patient, un ticket modérateur et un médecin pour continuer.</div>
- 
-              <div class="type-buttons">
-                <button type="button" class="type-btn" id="btnConsultation" disabled>
-                  <span class="ic">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v6a4 4 0 0 0 8 0V3"/><path d="M10 15v2a4 4 0 0 0 8 0v-2"/><circle cx="19" cy="8" r="1.6"/></svg>
-                  </span>
-                  <span>
-                    <span class="tt">Consultation</span>
-                    <span class="ds">Ouvrir la feuille de soins</span>
-                  </span>
-                </button>
-                <button type="button" class="type-btn" id="btnExamen" disabled>
-                  <span class="ic">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 2h6"/><path d="M10 2v6.5L4.5 18a2 2 0 0 0 1.8 3h11.4a2 2 0 0 0 1.8-3L14 8.5V2"/><path d="M7.5 14h9"/></svg>
-                  </span>
-                  <span>
-                    <span class="tt">Examen</span>
-                    <span class="ds">Ouvrir le bon d'examen</span>
-                  </span>
-                </button>
               </div>
             </div>
           </div>
@@ -489,6 +674,13 @@
  
       <!-- ---------------- ESPACE MÉDECIN (file d'attente de validation) ---------------- -->
       <section class="view" id="view-medecin" hidden>
+        <div class="page-hero">
+          <div class="page-hero-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v6a4 4 0 0 0 8 0V3"/><path d="M10 15v2a4 4 0 0 0 8 0v-2"/><circle cx="19" cy="8" r="1.6"/></svg></div>
+          <div class="page-hero-text">
+            <h1>Espace Médecin</h1>
+            <p>File d'attente des feuilles de soins à valider — consultations et bons d'examen envoyés par les agents.</p>
+          </div>
+        </div>
         <div class="card">
           <div class="card-head">
             <h3>Feuilles de soins à valider</h3>
@@ -515,6 +707,13 @@
 
       <!-- ---------------- ESPACE PHARMACIEN ---------------- -->
       <section class="view" id="view-pharmacie" hidden>
+        <div class="page-hero">
+          <div class="page-hero-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8v8"/><path d="M8 12h8"/></svg></div>
+          <div class="page-hero-text">
+            <h1>Espace Pharmacien</h1>
+            <p>Retrouvez une ordonnance par matricule et date, puis enregistrez la délivrance des médicaments.</p>
+          </div>
+        </div>
         <div class="card">
           <div class="card-head">
             <h3>Rechercher une ordonnance</h3>
@@ -525,12 +724,30 @@
                 <label for="pharmaNagInput">NAG (matricule du patient)</label>
                 <input type="text" id="pharmaNagInput" placeholder="Saisir les 10 chiffres du NAG" maxlength="10" inputmode="numeric" />
               </div>
+              <div class="field">
+                <label for="pharmaDateInput">Date de la prestation <span style="font-weight:400;color:var(--muted)">(optionnel)</span></label>
+                <input type="date" id="pharmaDateInput" />
+              </div>
               <button type="button" class="btn-primary" id="pharmaSearchBtn">Rechercher</button>
             </div>
             <div class="hint">
               NAG de test avec ordonnance : <code>2345678901</code>, <code>4567890123</code>
             </div>
-            <div id="pharmaNotFound" class="hint" style="color:var(--red)" hidden>Aucune ordonnance en attente trouvée pour ce NAG.</div>
+            <div id="pharmaNotFound" class="hint" style="color:var(--red)" hidden>Aucune ordonnance en attente trouvée pour ce NAG et cette date.</div>
+          </div>
+        </div>
+
+        <div class="assure-found" id="pharmaAssureCard" hidden>
+          <div class="assure-split">
+            <div class="assure-photo-col">
+              <div class="assure-photo-frame" id="pa-avatar"></div>
+              <div class="idname" id="pa-nom">—</div>
+              <div class="assure-meta assure-meta-vert">
+                <div><b id="pa-matricule">—</b>Matricule</div>
+                <div><b id="pa-naissance">—</b>Date de naissance</div>
+                <div><b id="pa-fonds">—</b>Fonds</div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -663,29 +880,10 @@
                 <div class="grp">Code affection <input type="text" id="presta-code" /></div>
               </div>
  
-              <table class="presta">
-                <thead>
-                  <tr>
-                    <th style="width:24%">Désignation</th>
-                    <th style="width:10%">Quantité</th>
-                    <th style="width:12%">Montant</th>
-                    <th style="width:18%">Ticket modérateur</th>
-                    <th style="width:18%">Part CNAMGS (réclamé)</th>
-                    <th>Montant validé</th>
-                  </tr>
-                </thead>
-                <tbody id="prestaBody"></tbody>
-              </table>
- 
-              <div class="row-btns">
-                <button type="button" id="addRowBtn">+ Ajouter une ligne</button>
-                <button type="button" id="removeRowBtn">− Supprimer la dernière</button>
-              </div>
- 
               <div class="totals">
-                <div class="t-row"><span>Total montant</span><input type="text" id="totalMontant" readonly value="0" /></div>
-                <div class="t-row"><span>Total ticket modérateur</span><input type="text" id="totalTm" readonly value="0" /></div>
-                <div class="t-row"><span>Total à payer par la CNAMGS</span><input type="text" id="totalPart" readonly value="0" /></div>
+                <div class="t-row"><span>Total montant</span><input type="text" id="totalMontant" value="0" /></div>
+                <div class="t-row"><span>Total ticket modérateur</span><input type="text" id="totalTm" value="0" /></div>
+                <div class="t-row"><span>Total à payer par la CNAMGS</span><input type="text" id="totalPart" value="0" /></div>
               </div>
             </div>
           </div>
@@ -825,7 +1023,10 @@
                 <svg class="arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
               </button>
             </div>
-            <button type="button" class="link-btn exam-switch-add" id="examSwitchAddAnother" hidden>+ Créer un autre bon d'examen</button>
+            <div class="exam-switch-links">
+              <button type="button" class="link-btn exam-switch-add" id="examSwitchAddAnother" hidden>+ Créer un autre bon d'examen</button>
+              <button type="button" class="link-btn exam-switch-remove" id="examSwitchRemove" hidden>Retirer le bon d'examen</button>
+            </div>
           </div>
 
           <div class="soins-actions">
@@ -838,6 +1039,17 @@
  
       <!-- ---------------- HISTORIQUE ---------------- -->
       <section class="view" id="view-historique" hidden>
+        <div class="page-hero">
+          <div class="page-hero-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
+          <div class="page-hero-text">
+            <h1>Historique PEC</h1>
+            <p>Toutes les prises en charge enregistrées — recherchez, filtrez, consultez les feuilles de soins.</p>
+          </div>
+          <button type="button" class="btn-export" id="historiqueExportBtn">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+            Exporter en PDF
+          </button>
+        </div>
         <div class="card">
           <div class="card-head"><h3>Historique des prises en charge</h3></div>
           <div class="card-body" style="padding-bottom:4px">
@@ -897,9 +1109,16 @@
  
       <!-- ---------------- GESTION DES UTILISATEURS ---------------- -->
       <section class="view" id="view-users" hidden>
+        <div class="page-hero">
+          <div class="page-hero-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><circle cx="18" cy="8.5" r="2.4"/><path d="M16 14.3c2.8.4 4.7 2.4 4.7 5.7"/></svg></div>
+          <div class="page-hero-text">
+            <h1>Gestion des utilisateurs</h1>
+            <p>Comptes de la plateforme — rôles, structures de rattachement et statuts d'accès.</p>
+          </div>
+        </div>
         <div class="card">
           <div class="card-head">
-            <h3>Gestion des utilisateurs</h3>
+            <h3>Gestion des utilisateurs <span class="pill" id="usersSourceBadge" style="margin-left:8px;vertical-align:middle">—</span></h3>
             <button type="button" class="btn-primary" id="addUserBtn">+ Ajouter un utilisateur</button>
           </div>
           <div class="card-body" style="padding:0">
@@ -909,6 +1128,8 @@
                   <th>Nom</th>
                   <th>Email</th>
                   <th>Rôle</th>
+                  <th>Structure</th>
+                  <th>Date de création</th>
                   <th>Statut</th>
                   <th>Actions</th>
                 </tr>
@@ -943,12 +1164,14 @@
                 <tr>
                   <th>Rôle</th>
                   <th>Tableau de bord</th>
+                  <th>Statistiques</th>
                   <th>Rapports</th>
                   <th>Nouvelle PEC</th>
                   <th>Espace Médecin</th>
                   <th>Espace Pharmacien</th>
                   <th>Historique PEC</th>
                   <th>Utilisateurs</th>
+                  <th>Journalisation</th>
                   <th>Vue par défaut</th>
                 </tr>
               </thead>
@@ -965,6 +1188,85 @@
         </div>
       </section>
 
+      <!-- ---------------- JOURNALISATION (audit des connexions) ---------------- -->
+      <section class="view" id="view-journalisation" hidden>
+        <div class="page-hero">
+          <div class="page-hero-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
+          <div class="page-hero-text">
+            <h1>Journalisation</h1>
+            <p>Historique des connexions à la plateforme — qui s'est connecté, quand, et avec quel résultat.</p>
+          </div>
+        </div>
+
+        <div class="kpi-grid">
+          <div class="kpi-card accent-a">
+            <div class="kpi-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num" id="logKpiToday">0</div><div class="kpi-lbl">Connexions aujourd'hui</div></div>
+          </div>
+          <div class="kpi-card accent-b">
+            <div class="kpi-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><circle cx="18" cy="8.5" r="2.4"/><path d="M16 14.3c2.8.4 4.7 2.4 4.7 5.7"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num" id="logKpiUniques">0</div><div class="kpi-lbl">Utilisateurs uniques (30j)</div></div>
+          </div>
+          <div class="kpi-card accent-e">
+            <div class="kpi-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6"/><path d="M9 9l6 6"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num pending" id="logKpiEchecs">0</div><div class="kpi-lbl">Échecs de connexion (30j)</div></div>
+          </div>
+          <div class="kpi-card accent-f">
+            <div class="kpi-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num" id="logKpiDerniere">—</div><div class="kpi-lbl">Dernière connexion</div></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>Filtres</h3></div>
+          <div class="card-body" style="padding-bottom:4px">
+            <div class="filters-row">
+              <div class="field">
+                <label for="logFilterSearch">Utilisateur</label>
+                <input type="text" id="logFilterSearch" placeholder="Nom ou e-mail" />
+              </div>
+              <div class="field">
+                <label for="logFilterRole">Rôle</label>
+                <select id="logFilterRole"><option value="">Tous les rôles</option></select>
+              </div>
+              <div class="field">
+                <label for="logFilterStatut">Résultat</label>
+                <select id="logFilterStatut">
+                  <option value="">Tous</option>
+                  <option value="Succès">Succès</option>
+                  <option value="Échec">Échec</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="logFilterFrom">Du</label>
+                <input type="date" id="logFilterFrom" />
+              </div>
+              <div class="field">
+                <label for="logFilterTo">Au</label>
+                <input type="date" id="logFilterTo" />
+              </div>
+              <button type="button" class="btn-secondary" id="logFilterResetBtn">Réinitialiser</button>
+            </div>
+          </div>
+          <div class="card-body" style="padding:0">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Utilisateur</th>
+                  <th>Rôle</th>
+                  <th>Date</th>
+                  <th>Heure</th>
+                  <th>Résultat</th>
+                </tr>
+              </thead>
+              <tbody id="journalBody"></tbody>
+            </table>
+            <div class="empty-state" id="journalEmpty">Aucune connexion enregistrée pour ces filtres.</div>
+          </div>
+        </div>
+      </section>
+
+      <div id="reportPrintArea"></div>
     </div>
 
     <footer class="app-footer">
@@ -1023,9 +1325,9 @@
 
 <!-- ======================= MODAL AJOUT UTILISATEUR ======================= -->
 <div class="modal-overlay" id="userModal" hidden>
-  <div class="modal">
+  <div class="modal modal-accent-blue">
     <div class="modal-head">
-      <h3>Ajouter un utilisateur</h3>
+      <h3><span class="modal-head-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><circle cx="18" cy="8.5" r="2.4"/><path d="M16 14.3c2.8.4 4.7 2.4 4.7 5.7"/></svg></span>Ajouter un utilisateur</h3>
       <button class="close-x" id="closeUserModal">&times;</button>
     </div>
     <form class="modal-body" id="userForm">
@@ -1049,13 +1351,36 @@
         </select>
       </div>
       <div class="field">
+        <label>Structure</label>
+        <input type="text" id="u-structure" placeholder="Ex. CHU de Libreville, Direction Informatique…" />
+      </div>
+      <div class="field">
         <label>Mot de passe temporaire</label>
         <input type="password" id="u-pass" placeholder="••••••••" />
+      </div>
+      <div class="field">
+        <label>Date de création</label>
+        <input type="text" id="u-date-creation" disabled />
       </div>
     </form>
     <div class="modal-foot">
       <button type="button" class="btn-secondary" id="cancelUserModal">Annuler</button>
       <button type="submit" form="userForm" class="btn-primary">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= MODALE CONFIRMATION (suppressions) ======================= -->
+<div class="modal-overlay" id="confirmModal" hidden>
+  <div class="modal modal-danger">
+    <div class="modal-head">
+      <h3><span class="modal-head-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.7 17a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg></span><span id="confirmModalTitle">Confirmer la suppression</span></h3>
+      <button class="close-x" id="closeConfirmModal">&times;</button>
+    </div>
+    <div class="modal-body" style="display:block" id="confirmModalBody">Cette action est irréversible.</div>
+    <div class="modal-foot">
+      <button type="button" class="btn-secondary" id="cancelConfirmModal">Annuler</button>
+      <button type="button" class="btn-danger" id="confirmModalBtn">Supprimer</button>
     </div>
   </div>
 </div>
@@ -1117,6 +1442,7 @@
 </div>
 
 <script src="data.js"></script>
+<script src="api.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

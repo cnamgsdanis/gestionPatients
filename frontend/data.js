@@ -10,12 +10,13 @@ const ASSURES = [
     sexe: "M",
     dateNaissance: "14/03/1985",
     situation: "Assuré",
+    nature: "Assuré principal",
     fonds: "Fonds Secteur Public",
     employeur: "Ministère de la Santé",
     telephone: "077 12 34 56",
     ayantsDroit: [
-      { matricule: "1234567891", nom: "OBAME NGUEMA", prenom: "Marie", sexe: "F", lien: "Épouse", dateNaissance: "02/07/1988" },
-      { matricule: "1234567892", nom: "OBAME", prenom: "Junior", sexe: "M", lien: "Enfant", dateNaissance: "19/11/2014" }
+      { matricule: "1234567891", nom: "OBAME NGUEMA", prenom: "Marie", sexe: "F", lien: "Épouse", nature: "Ayant droit", dateNaissance: "02/07/1988" },
+      { matricule: "1234567892", nom: "OBAME", prenom: "Junior", sexe: "M", lien: "Enfant", nature: "Ayant droit", dateNaissance: "19/11/2014" }
     ]
   },
   {
@@ -25,11 +26,12 @@ const ASSURES = [
     sexe: "F",
     dateNaissance: "27/09/1990",
     situation: "Assuré",
+    nature: "Assuré principal",
     fonds: "Fonds Secteur Privé",
     employeur: "SOBRAGA",
     telephone: "066 22 33 44",
     ayantsDroit: [
-      { matricule: "2345678902", nom: "MOUSSAVOU", prenom: "Emma", sexe: "F", lien: "Enfant", dateNaissance: "05/01/2018" }
+      { matricule: "2345678902", nom: "MOUSSAVOU", prenom: "Emma", sexe: "F", lien: "Enfant", nature: "Ayant droit", dateNaissance: "05/01/2018" }
     ]
   },
   {
@@ -39,6 +41,7 @@ const ASSURES = [
     sexe: "M",
     dateNaissance: "11/12/1975",
     situation: "Assuré",
+    nature: "Assuré principal",
     fonds: "Fonds Garantie Sociale",
     employeur: "Retraité",
     telephone: "074 55 66 77",
@@ -51,12 +54,13 @@ const ASSURES = [
     sexe: "F",
     dateNaissance: "03/05/1995",
     situation: "Assuré",
+    nature: "Assuré principal",
     fonds: "Fonds Secteur Privé",
     employeur: "Total Gabon",
     telephone: "062 88 99 00",
     ayantsDroit: [
-      { matricule: "4567890124", nom: "ONDO", prenom: "Kevin", sexe: "M", lien: "Enfant", dateNaissance: "22/08/2020" },
-      { matricule: "4567890125", nom: "ONDO", prenom: "Sarah", sexe: "F", lien: "Enfant", dateNaissance: "14/02/2022" }
+      { matricule: "4567890124", nom: "ONDO", prenom: "Kevin", sexe: "M", lien: "Enfant", nature: "Ayant droit", dateNaissance: "22/08/2020" },
+      { matricule: "4567890125", nom: "ONDO", prenom: "Sarah", sexe: "F", lien: "Enfant", nature: "Ayant droit", dateNaissance: "14/02/2022" }
     ]
   },
   {
@@ -66,6 +70,7 @@ const ASSURES = [
     sexe: "M",
     dateNaissance: "30/06/1968",
     situation: "Assuré",
+    nature: "Assuré principal",
     fonds: "Fonds Secteur Public",
     employeur: "Ministère de l'Intérieur",
     telephone: "077 44 55 66",
@@ -82,14 +87,14 @@ const MEDECINS = [
 ];
 
 const USERS_SEED = [
-  { id: 1, nom: "NDONG", prenom: "Alice", email: "a.ndong@cnamgs.ga", role: "Super Admin", statut: "Actif" },
-  { id: 2, nom: "IBINGA", prenom: "Steevy", email: "s.ibinga@cnamgs.ga", role: "Agent hospitalier", statut: "Actif" },
-  { id: 3, nom: "Dr. AKUE", prenom: "Rosine", email: "r.akue@cnamgs.ga", role: "Médecin", statut: "Actif" },
-  { id: 4, nom: "MEZUI", prenom: "Bertrand", email: "b.mezui@cnamgs.ga", role: "DG", statut: "Inactif" },
-  { id: 5, nom: "ESSONO", prenom: "Pierrette", email: "p.essono@cnamgs.ga", role: "Pharmacie", statut: "Actif", etablissement: "Pharmacie du Centre" },
-  { id: 6, nom: "MOUELE", prenom: "Judicaël", email: "j.mouele@cnamgs.ga", role: "Pharmacie", statut: "Actif", etablissement: "Pharmacie Awendjé" },
-  { id: 7, nom: "NZIGOU", prenom: "Sandrine", email: "s.nzigou@cnamgs.ga", role: "Pharmacie", statut: "Actif", etablissement: "Pharmacie Nzeng-Ayong" },
-  { id: 8, nom: "OBIANG", prenom: "Léa", email: "l.obiang@cnamgs.ga", role: "Caisse", statut: "Actif" }
+  { id: 1, nom: "NDONG", prenom: "Alice", username: "a.ndong", email: "a.ndong@cnamgs.ga", role: "Super Admin", structure: "Direction Informatique", dateCreation: "12/01/2024", statut: "Actif" },
+  { id: 2, nom: "IBINGA", prenom: "Steevy", username: "s.ibinga", email: "s.ibinga@cnamgs.ga", role: "Agent hospitalier", structure: "CHU de Libreville", dateCreation: "03/03/2024", statut: "Actif" },
+  { id: 3, nom: "Dr. AKUE", prenom: "Rosine", username: "r.akue", email: "r.akue@cnamgs.ga", role: "Médecin", structure: "Polyclinique El Rapha", dateCreation: "18/04/2024", statut: "Actif" },
+  { id: 4, nom: "MEZUI", prenom: "Bertrand", username: "b.mezui", email: "b.mezui@cnamgs.ga", role: "DG", structure: "Direction du Contrôle Médical", dateCreation: "07/06/2024", statut: "Inactif" },
+  { id: 5, nom: "ESSONO", prenom: "Pierrette", username: "p.essono", email: "p.essono@cnamgs.ga", role: "Pharmacie", structure: "Pharmacie du Centre", dateCreation: "22/07/2024", statut: "Actif", etablissement: "Pharmacie du Centre" },
+  { id: 6, nom: "MOUELE", prenom: "Judicaël", username: "j.mouele", email: "j.mouele@cnamgs.ga", role: "Pharmacie", structure: "Pharmacie Awendjé", dateCreation: "01/08/2024", statut: "Actif", etablissement: "Pharmacie Awendjé" },
+  { id: 7, nom: "NZIGOU", prenom: "Sandrine", username: "s.nzigou", email: "s.nzigou@cnamgs.ga", role: "Pharmacie", structure: "Pharmacie Nzeng-Ayong", dateCreation: "15/08/2024", statut: "Actif", etablissement: "Pharmacie Nzeng-Ayong" },
+  { id: 8, nom: "OBIANG", prenom: "Léa", username: "l.obiang", email: "l.obiang@cnamgs.ga", role: "Caisse", structure: "Direction Financière", dateCreation: "20/08/2024", statut: "Actif" }
 ];
 
 /* Catalogue fictif des médicaments, avec un tarif de référence fixe
