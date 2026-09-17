@@ -767,9 +767,7 @@ a { color: var(--blue); }
 /* Tableau de bord : graphiques du suivi pharmacies / hôpitaux, côte à côte */
 .evolution-row { display: flex; gap: 18px; flex-wrap: wrap; }
 .evolution-row .pharma-evo-card,
-.evolution-row .pharma-bar-card,
-.evolution-row .hosp-evo-card,
-.evolution-row .hosp-reste-card { flex: 1 1 380px; }
+.evolution-row .pharma-bar-card { flex: 1 1 380px; }
 
 .evolution-chart-outer { position: relative; }
 .evolution-chart-wrap { width: 100%; position: relative; }

@@ -209,7 +209,6 @@ function playLoginTransition(callback) {
 // bloc ne fournit que les valeurs par défaut ("réinitialiser").
 const PERMISSION_VIEWS = [
   { key: "dashboard", label: "Tableau de bord" },
-  { key: "statistiques", label: "Statistiques" },
   { key: "rapports", label: "Rapports" },
   { key: "nouvelle-pec", label: "Nouvelle prise en charge" },
   { key: "medecin", label: "Espace Médecin" },
@@ -219,12 +218,12 @@ const PERMISSION_VIEWS = [
   { key: "journalisation", label: "Journalisation" }
 ];
 const ROLE_ACCESS_DEFAULT = {
-  "Super Admin": { views: ["dashboard", "statistiques", "rapports", "nouvelle-pec", "medecin", "pharmacie", "historique", "users", "journalisation"], landing: "dashboard" },
-  "DG": { views: ["dashboard", "statistiques", "rapports", "journalisation"], landing: "dashboard" },
+  "Super Admin": { views: ["dashboard", "rapports", "nouvelle-pec", "medecin", "pharmacie", "historique", "users", "journalisation"], landing: "dashboard" },
+  "DG": { views: ["dashboard", "rapports", "journalisation"], landing: "dashboard" },
   "Médecin": { views: ["medecin"], landing: "medecin" },
   "Agent hospitalier": { views: ["nouvelle-pec", "historique"], landing: "nouvelle-pec" },
   "Pharmacie": { views: ["pharmacie"], landing: "pharmacie" },
-  "Caisse": { views: ["dashboard", "statistiques", "rapports"], landing: "rapports" }
+  "Caisse": { views: ["dashboard", "rapports"], landing: "rapports" }
 };
 state.roleAccess = loadJSON("pec_role_access", JSON.parse(JSON.stringify(ROLE_ACCESS_DEFAULT)));
 // Migrations douces, une seule fois chacune : les permissions déjà
@@ -239,13 +238,16 @@ if (!loadJSON("pec_journal_view_migrated", false)) {
   saveJSON("pec_role_access", state.roleAccess);
   saveJSON("pec_journal_view_migrated", true);
 }
-if (!loadJSON("pec_stats_view_migrated", false)) {
-  ["Super Admin", "DG", "Caisse"].forEach(role => {
+// "statistiques" a été absorbée dans "rapports" (onglet Vue d'ensemble) : on
+// retire la clé désormais inconnue des permissions déjà enregistrées.
+if (!loadJSON("pec_stats_merged_migrated", false)) {
+  Object.keys(state.roleAccess).forEach(role => {
     const access = state.roleAccess[role];
-    if (access && !access.views.includes("statistiques")) access.views.push("statistiques");
+    access.views = access.views.filter(v => v !== "statistiques");
+    if (access.landing === "statistiques") access.landing = "rapports";
   });
   saveJSON("pec_role_access", state.roleAccess);
-  saveJSON("pec_stats_view_migrated", true);
+  saveJSON("pec_stats_merged_migrated", true);
 }
 
 // "soins" (feuille de soins) n'a pas d'item de sidebar propre : on y accède
@@ -575,7 +577,6 @@ setInterval(updateClock, 30000);
 
 const VIEW_META = {
   dashboard: { title: "Tableau de bord", crumb: "Accueil" },
-  statistiques: { title: "Statistiques", crumb: "Accueil / Statistiques" },
   "nouvelle-pec": { title: "Nouvelle prise en charge", crumb: "Accueil / Nouvelle prise en charge" },
   medecin: { title: "Espace Médecin", crumb: "Accueil / Espace Médecin" },
   soins: { title: "Feuille de soins", crumb: "Accueil / Feuille de soins" },
@@ -611,7 +612,6 @@ function goToView(name) {
   if (name === "rapports") renderRapports();
   if (name === "permissions") renderPermissions();
   if (name === "journalisation") renderJournalisation();
-  if (name === "statistiques") renderStatistiques();
 }
 
 // "Accueil" (racine du fil d'Ariane) est cliquable et ramène au tableau de
@@ -644,6 +644,7 @@ document.getElementById("sidebarBrandBtn").addEventListener("keydown", e => {
 function goToRapportTab(tab) {
   goToView("rapports");
   document.querySelectorAll("#rapportsTabToggle .chip").forEach(c => c.classList.toggle("active", c.dataset.tab === tab));
+  document.getElementById("rapport-vue-ensemble").hidden = tab !== "vue-ensemble";
   document.getElementById("rapport-hopitaux").hidden = tab !== "hopitaux";
   document.getElementById("rapport-pharmacies").hidden = tab !== "pharmacies";
 }
@@ -1476,6 +1477,7 @@ function renderDashboardStats() {
 }
 
 function renderRapports() {
+  renderStatistiques();
   renderPharmaRapport();
   renderHopitalRapport();
 }
@@ -2254,6 +2256,7 @@ function renderPharmaSuiviTable(list) {
 }
 
 // Dashboard : vue synthétique, toujours globale (aucun filtre) — cartes + graphiques.
+// Dashboard : uniquement les chiffres-clés, aucun graphique (page d'accueil minimale).
 function renderPharmaDashboard() {
   const aggregates = getPharmacieAggregates(null);
   const totalPrestations = aggregates.reduce((a, p) => a + p.count, 0);
@@ -2266,22 +2269,24 @@ function renderPharmaDashboard() {
   document.getElementById("pharmaStatMontant").textContent = fmtFCFA(totalMontant);
   document.getElementById("pharmaStatPaye").textContent = fmtFCFA(totalPaye);
   document.getElementById("pharmaStatReste").textContent = fmtFCFA(totalReste);
+}
+
+// Page Rapports (onglet Pharmacies) : tableau détaillé + les 2 graphiques
+// auparavant sur le dashboard (évolution des prestations, reste dû par pharmacie).
+function renderPharmaRapport() {
+  const aggregates = getPharmacieAggregates(state.pharmaSuiviFilters);
+  renderPharmaSuiviTable(aggregates);
 
   renderBarChart("pharmaBarChart", "pharmaBarTooltip",
     aggregates.map(p => ({ label: p.pharmacie, value: p.reste })),
     { color: "var(--blue)", tooltip: it => "<b>" + it.label + "</b> — " + fmtFCFA(it.value) + " restant dû" }
   );
 
-  const monthBuckets = getPharmaEvolutionByMonth(getPharmaSuiviPeriodFiltered(null));
+  const monthBuckets = getPharmaEvolutionByMonth(getPharmaSuiviPeriodFiltered(state.pharmaSuiviFilters));
   renderBarChart("pharmaEvoChart", "pharmaEvoTooltip",
     monthBuckets.map(b => ({ label: monthLabel(b), value: b.count, montant: b.montant })),
     { color: "var(--green)", tooltip: it => "<b>" + it.label + "</b> — " + it.value + " prestation(s)" + (it.montant ? " — " + fmtFCFA(it.montant) : "") }
   );
-}
-
-// Page Rapports : vue détaillée, respecte state.pharmaSuiviFilters — tableau uniquement.
-function renderPharmaRapport() {
-  renderPharmaSuiviTable(getPharmacieAggregates(state.pharmaSuiviFilters));
 }
 
 function populatePharmaFilterOptions() {
@@ -2488,6 +2493,9 @@ function renderHopitalSuiviTable(list) {
 }
 
 // Dashboard : vue synthétique, toujours globale (aucun filtre) — cartes + graphiques.
+// Dashboard : uniquement les chiffres-clés, aucun graphique (page d'accueil minimale).
+// L'évolution mensuelle consultations/examens est désormais uniquement dans
+// Rapports > Vue d'ensemble (renderStatistiques), pour éviter le doublon.
 function renderHopitalDashboard() {
   const aggregates = getHopitalAggregates(null);
   const totalConsult = aggregates.reduce((a, p) => a + p.consult, 0);
@@ -2503,27 +2511,20 @@ function renderHopitalDashboard() {
   document.getElementById("hospStatMontant").textContent = fmtFCFA(totalMontant);
   document.getElementById("hospStatPaye").textContent = fmtFCFA(totalPaye);
   document.getElementById("hospStatReste").textContent = fmtFCFA(totalReste);
-
-  renderBarChart("hospResteChart", "hospResteTooltip",
-    aggregates.map(p => ({ label: p.hopital, value: p.reste })),
-    { color: "var(--blue)", tooltip: it => "<b>" + it.label + "</b> — " + fmtFCFA(it.value) + " restant dû" }
-  );
-
-  const monthBuckets = getHopitalEvolutionByMonth(getHopitalSuiviFiltered(null));
-  renderGroupedBarChart("hospEvoChart", "hospEvoTooltip",
-    monthBuckets.map(b => ({ label: monthLabel(b), a: b.consult, b: b.exam, montant: b.montant })),
-    { tooltip: it => "<b>" + it.label + "</b><br>Consultations : " + it.a + "<br>Examens : " + it.b + (it.montant ? "<br>Montant : " + fmtFCFA(it.montant) : "") }
-  );
 }
 
-// Page Rapports : vue détaillée, respecte state.hopitalSuiviFilters — tableau
-// + comparaison consultations/examens par hôpital.
+// Page Rapports (onglet Hôpitaux) : tableau détaillé + comparaison
+// consultations/examens par hôpital + reste dû par hôpital (ex-dashboard).
 function renderHopitalRapport() {
   const aggregates = getHopitalAggregates(state.hopitalSuiviFilters);
   renderHopitalSuiviTable(aggregates);
   renderGroupedBarChart("hospCompareChart", "hospCompareTooltip",
     aggregates.map(p => ({ label: p.hopital, a: p.consult, b: p.exam })),
     { tooltip: it => "<b>" + it.label + "</b><br>Consultations : " + it.a + "<br>Examens : " + it.b + "<br>Total : " + (it.a + it.b) + " prestation(s)" }
+  );
+  renderBarChart("hospResteChart", "hospResteTooltip",
+    aggregates.map(p => ({ label: p.hopital, value: p.reste })),
+    { color: "var(--blue)", tooltip: it => "<b>" + it.label + "</b> — " + fmtFCFA(it.value) + " restant dû" }
   );
 }
 
@@ -2717,15 +2718,48 @@ document.getElementById("statsFilterResetBtn").addEventListener("click", () => {
   state.statsFilters = { from: "", to: "", type: "", statut: "", fonds: "", medecin: "", search: "" };
   renderStatistiques();
 });
-document.getElementById("statsExportBtn").addEventListener("click", () => { window.print(); });
 
 // Rapports : pas une capture de la page, mais un vrai document généré à partir
 // des données actuellement affichées (filtres + onglet actif), avec en-tête
 // CNAMGS — imprimé seul, le reste de l'app étant masqué (voir @media print).
 function buildRapportReportHtml(tab) {
   let title, filtersParts, theadHtml, rowsHtml, totals;
+  let kpiLabels = { count: "Établissement(s)", montant: "Montant total", paye: "Montant payé", reste: "Reste à payer" };
 
-  if (tab === "pharmacies") {
+  if (tab === "vue-ensemble") {
+    const f = state.statsFilters;
+    const filtered = getStatsFiltered();
+    const totalPEC = filtered.length;
+    const uniquePatients = new Set(filtered.map(h => h.matricule).filter(Boolean)).size;
+    const totalMontant = filtered.reduce((a, h) => a + num(h.totalMontant), 0);
+    const totalCharge = filtered.reduce((a, h) => a + num(h.totalPart), 0);
+    const validees = filtered.filter(h => h.statut === "Validée").length;
+    const tauxValidation = totalPEC ? Math.round((validees / totalPEC) * 100) : 0;
+    const consultCount = filtered.filter(h => h.type === "Consultation").length;
+    const examCount = filtered.filter(h => h.type === "Examen").length;
+    const pharmaAgg = getPharmacieAggregates(null);
+    const hopAgg = getHopitalAggregates(null);
+    const resteTotal = pharmaAgg.reduce((a, p) => a + p.reste, 0) + hopAgg.reduce((a, p) => a + p.reste, 0);
+
+    title = "Rapport — Vue d'ensemble de la Direction";
+    filtersParts = [
+      f.from ? "Du " + f.from : null,
+      f.to ? "au " + f.to : null,
+      f.type ? "Type : " + f.type : null,
+      f.statut ? "Statut : " + f.statut : null,
+      f.fonds ? "Fonds : " + f.fonds : null,
+      f.medecin ? "Médecin : " + f.medecin : null,
+      f.search ? "Recherche : " + f.search : null
+    ];
+    kpiLabels = { count: "Prises en charge", montant: "Montant total engagé", paye: "Part CNAMGS", reste: "Reste dû (hôpitaux + pharmacies)" };
+    totals = { count: totalPEC, montant: totalMontant, paye: totalCharge, reste: resteTotal };
+    theadHtml = "<tr><th>Indicateur</th><th>Valeur</th></tr>";
+    rowsHtml =
+      "<tr><td>Patients uniques</td><td>" + uniquePatients + "</td></tr>" +
+      "<tr><td>Consultations</td><td>" + consultCount + "</td></tr>" +
+      "<tr><td>Examens</td><td>" + examCount + "</td></tr>" +
+      "<tr><td>Taux de validation</td><td>" + tauxValidation + "%</td></tr>";
+  } else if (tab === "pharmacies") {
     const f = state.pharmaSuiviFilters;
     const list = getPharmacieAggregates(f);
     title = "Rapport — Prestations des pharmacies partenaires";
@@ -2780,10 +2814,10 @@ function buildRapportReportHtml(tab) {
       "<div><b>Généré le</b><span>" + todayFR() + "</span></div>" +
     "</div>" +
     '<div class="report-kpis">' +
-      "<div><b>" + totals.count + "</b><span>Établissement(s)</span></div>" +
-      "<div><b>" + fmtFCFA(totals.montant) + "</b><span>Montant total</span></div>" +
-      "<div><b>" + fmtFCFA(totals.paye) + "</b><span>Montant payé</span></div>" +
-      "<div><b>" + fmtFCFA(totals.reste) + "</b><span>Reste à payer</span></div>" +
+      "<div><b>" + totals.count + "</b><span>" + kpiLabels.count + "</span></div>" +
+      "<div><b>" + fmtFCFA(totals.montant) + "</b><span>" + kpiLabels.montant + "</span></div>" +
+      "<div><b>" + fmtFCFA(totals.paye) + "</b><span>" + kpiLabels.paye + "</span></div>" +
+      "<div><b>" + fmtFCFA(totals.reste) + "</b><span>" + kpiLabels.reste + "</span></div>" +
     "</div>" +
     '<table class="report-table"><thead>' + theadHtml + "</thead><tbody>" + rowsHtml + "</tbody></table>" +
     '<div class="report-footer">CNAMGS — Plateforme de gestion du circuit de l’assuré · Rapport généré automatiquement (prototype front-end)</div>' +
@@ -2792,7 +2826,7 @@ function buildRapportReportHtml(tab) {
 
 document.getElementById("rapportsExportBtn").addEventListener("click", () => {
   const activeChip = document.querySelector("#rapportsTabToggle .chip.active");
-  const tab = activeChip ? activeChip.dataset.tab : "hopitaux";
+  const tab = activeChip ? activeChip.dataset.tab : "vue-ensemble";
   document.getElementById("reportPrintArea").innerHTML = buildRapportReportHtml(tab);
   document.body.classList.add("printing-report");
   window.print();
