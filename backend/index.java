@@ -14,6 +14,8 @@ import controller.AuthController;
 import controller.PatientController;
 import controller.UtilisateurController;
 import controller.PermissionController;
+import controller.ConsultationController;
+import controller.ExamenController;
 import service.PermissionService;
 
 // Import pour définir l'adresse (IP + port) du serveur
@@ -42,17 +44,23 @@ public class index {
         PatientController     patientController     = new PatientController();
         UtilisateurController utilisateurController = new UtilisateurController();
         PermissionController permissionController = new PermissionController();
+        ConsultationController consultationController = new ConsultationController();
+        ExamenController examenController = new ExamenController();
         // ------------------------------------------------------------
         // 3. Enregistrement des routes
-        //    - /api/auth/*         → géré par AuthController
-        //    - /api/patients/*     → géré par PatientController
-        //    - /api/utilisateurs/* → géré par UtilisateurController
+        //    - /api/auth/*          → géré par AuthController
+        //    - /api/patients/*      → géré par PatientController
+        //    - /api/utilisateurs/*  → géré par UtilisateurController
+        //    - /api/consultations/* → géré par ConsultationController (dossier patient)
+        //    - /api/examens/*       → géré par ExamenController (dossier patient)
         //    Le "::handle" est une référence de méthode (Java 8+).
         // ------------------------------------------------------------
         server.createContext("/api/auth",         authController::handle);
         server.createContext("/api/patients",     patientController::handle);
         server.createContext("/api/utilisateurs", utilisateurController::handle);
         server.createContext("/api/permissions", permissionController::handle);
+        server.createContext("/api/consultations", consultationController::handle);
+        server.createContext("/api/examens",       examenController::handle);
         // ------------------------------------------------------------
         // 4. Configuration du pool de threads
         //    10 threads peuvent traiter 10 requêtes en même temps.
@@ -75,6 +83,8 @@ public class index {
         System.out.println("  POST /api/auth/login");
         System.out.println("  GET/POST/PUT/DELETE /api/patients");
         System.out.println("  GET/PUT/DELETE      /api/utilisateurs (admin)");
+        System.out.println("  GET/POST/PUT        /api/consultations (pas de DELETE)");
+        System.out.println("  GET/POST/PUT        /api/examens (pas de DELETE)");
         System.out.println("================= API DO BY DANIS@TECH END EVANN ===================");
     }
 }

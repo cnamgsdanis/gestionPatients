@@ -23,6 +23,64 @@
 // dans un contexte où CORS n'entre pas en jeu).
 const API_BASE_URL = window.PEC_API_BASE_URL || "http://localhost:8090";
 
+// ---- Mode test local (Patients / Consultations / Examens) -----------------
+// Le backend + SQL Server ne sont pas toujours disponibles en local pendant
+// le développement front-end. Quand LOCAL_TEST_FALLBACK est actif, les
+// fonctions Patients/Consultations/Examens ci-dessous retombent sur des
+// données génériques persistées en localStorage (clés "pec_local_*") dès que
+// l'appel API échoue — QUELLE QUE SOIT LA CAUSE (backend injoignable, ou
+// backend up mais SQL Server down → 500/403). C'est volontairement plus
+// permissif que le repli de apiLogin (qui ne se déclenche que si le backend
+// est injoignable au niveau réseau) : ici, l'objectif est de pouvoir tester
+// l'interface sans dépendre de l'état de la base, pas de distinguer une
+// vraie erreur API d'un backend éteint.
+// ⚠️ Remets IMPÉRATIVEMENT ce flag à false une fois le backend + SQL Server
+// opérationnels : sinon une vraie erreur API (ex: matricule déjà utilisé)
+// serait masquée par un repli silencieux vers les données locales — voir
+// le principe inverse (pas de repli silencieux) affiché plus haut, qui
+// s'applique au reste de l'application.
+// Surchargeable sans toucher ce fichier via :
+//   <script>window.PEC_LOCAL_TEST_MODE = false;</script> avant api.js.
+const LOCAL_TEST_FALLBACK = window.PEC_LOCAL_TEST_MODE !== false;
+
+function loadLocalJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (e) { return fallback; }
+}
+function saveLocalJSON(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* ignore */ }
+}
+function nextLocalId(list, field) {
+  return list.reduce((max, x) => Math.max(max, x[field] || 0), 0) + 1;
+}
+// Le médecin/structure "auteur" d'une consultation ou d'un examen vient
+// normalement du token JWT (voir ConsultationController/ExamenController) ;
+// en repli local, on prend l'utilisateur actuellement connecté côté front
+// (state, défini dans app.js, chargé avant que ces fonctions soient
+// réellement appelées).
+function currentLocalMedecin() {
+  const u = (typeof state !== "undefined" && state.currentUser) ? state.currentUser : null;
+  return {
+    id: u ? (u.id || u.apiId || 1) : 1,
+    nom: u ? ((u.prenom || "") + " " + (u.nom || "")).trim() : "Médecin (démo)"
+  };
+}
+
+const PATIENTS_SEED_LOCAL = [
+  { id_patient: 1, photo_url: null, prenom: "Jean", nom: "MBOUMBA", sex: "M", contact: "077 12 34 56", adresse: "Akanda, Libreville", date_naissance: "1987-04-12", statut_assure: true, fonds: 1, matricule_nag: "100001", id_assure_principal: null },
+  { id_patient: 2, photo_url: null, prenom: "Marie", nom: "NGUEMA", sex: "F", contact: "066 78 90 12", adresse: "Centre-ville, Port-Gentil", date_naissance: "1994-09-23", statut_assure: true, fonds: 2, matricule_nag: "100002", id_assure_principal: null },
+  { id_patient: 3, photo_url: null, prenom: "Paul", nom: "OBAME", sex: "M", contact: "062 34 56 78", adresse: "Glass, Libreville", date_naissance: "1975-01-30", statut_assure: false, fonds: 3, matricule_nag: "100003", id_assure_principal: null }
+];
+
+function localPatients() { return loadLocalJSON("pec_local_patients", PATIENTS_SEED_LOCAL.slice()); }
+function saveLocalPatients(list) { saveLocalJSON("pec_local_patients", list); }
+function localConsultations() { return loadLocalJSON("pec_local_consultations", []); }
+function saveLocalConsultations(list) { saveLocalJSON("pec_local_consultations", list); }
+function localExamens() { return loadLocalJSON("pec_local_examens", []); }
+function saveLocalExamens(list) { saveLocalJSON("pec_local_examens", list); }
+
 /* ---- Session (token JWT + utilisateur brut renvoyé par le backend) ----- */
 
 function apiLoadSession() {
@@ -172,11 +230,153 @@ function apiSetUtilisateurActif(id, actif) { return apiFetch("PATCH", "/api/util
    la liste complète et on filtre côté client (findPatientByMatricule).
    -------------------------------------------------------------------- */
 
-function apiListPatients() { return apiFetch("GET", "/api/patients"); }
-function apiGetPatient(id) { return apiFetch("GET", "/api/patients/" + id); }
-function apiCreatePatient(payload) { return apiFetch("POST", "/api/patients", payload); }
-function apiUpdatePatient(id, payload) { return apiFetch("PUT", "/api/patients/" + id, payload); }
-function apiDeletePatient(id) { return apiFetch("DELETE", "/api/patients/" + id); }
+function apiListPatients() {
+  const p = apiFetch("GET", "/api/patients");
+  if (!LOCAL_TEST_FALLBACK) return p;
+  return p.catch(err => {
+    console.warn("[API/test] Liste patients — repli local : " + err.message);
+    return localPatients();
+  });
+}
+function apiGetPatient(id) {
+  const p = apiFetch("GET", "/api/patients/" + id);
+  if (!LOCAL_TEST_FALLBACK) return p;
+  return p.catch(err => {
+    const found = localPatients().find(x => x.id_patient === id);
+    if (found) return found;
+    throw err;
+  });
+}
+function apiCreatePatient(payload) {
+  const p = apiFetch("POST", "/api/patients", payload);
+  if (!LOCAL_TEST_FALLBACK) return p;
+  return p.catch(err => {
+    const list = localPatients();
+    const id = nextLocalId(list, "id_patient");
+    list.push(Object.assign({ id_patient: id }, payload));
+    saveLocalPatients(list);
+    console.warn("[API/test] Création patient — repli local : " + err.message);
+    return { id_patient: id };
+  });
+}
+function apiUpdatePatient(id, payload) {
+  const p = apiFetch("PUT", "/api/patients/" + id, payload);
+  if (!LOCAL_TEST_FALLBACK) return p;
+  return p.catch(err => {
+    const list = localPatients();
+    const idx = list.findIndex(x => x.id_patient === id);
+    if (idx === -1) throw err;
+    list[idx] = Object.assign({ id_patient: id }, payload);
+    saveLocalPatients(list);
+    return { message: "Modifie" };
+  });
+}
+function apiDeletePatient(id) {
+  const p = apiFetch("DELETE", "/api/patients/" + id);
+  if (!LOCAL_TEST_FALLBACK) return p;
+  return p.catch(err => {
+    saveLocalPatients(localPatients().filter(x => x.id_patient !== id));
+    return { message: "Supprime" };
+  });
+}
+
+/* ---- Dossier patient : Consultations (module Dossier Patient) -----------
+   GET/POST/PUT /api/consultations — volontairement PAS de DELETE : une
+   consultation ne peut être que créée, lue ou modifiée (voir
+   backend/controller/ConsultationController.java). id_medecin et
+   id_structure sont déduits du token JWT côté serveur, jamais envoyés ici.
+   -------------------------------------------------------------------- */
+function apiListConsultations(idPatient) {
+  const p = apiFetch("GET", "/api/consultations?id_patient=" + idPatient);
+  if (!LOCAL_TEST_FALLBACK) return p;
+  return p.catch(err => {
+    console.warn("[API/test] Consultations — repli local : " + err.message);
+    return localConsultations().filter(c => c.id_patient === idPatient);
+  });
+}
+function apiGetConsultation(id) {
+  const p = apiFetch("GET", "/api/consultations/" + id);
+  if (!LOCAL_TEST_FALLBACK) return p;
+  return p.catch(err => {
+    const found = localConsultations().find(x => x.id_prestation === id);
+    if (found) return found;
+    throw err;
+  });
+}
+function apiCreateConsultation(payload) {
+  const p = apiFetch("POST", "/api/consultations", payload);
+  if (!LOCAL_TEST_FALLBACK) return p;
+  return p.catch(err => {
+    const list = localConsultations();
+    const id = nextLocalId(list, "id_prestation");
+    const med = currentLocalMedecin();
+    const c = Object.assign({ id_prestation: id, id_pec: id, id_medecin: med.id, medecin_nom: med.nom, id_structure: 1 }, payload);
+    list.push(c);
+    saveLocalConsultations(list);
+    console.warn("[API/test] Création consultation — repli local : " + err.message);
+    return c;
+  });
+}
+function apiUpdateConsultation(id, payload) {
+  const p = apiFetch("PUT", "/api/consultations/" + id, payload);
+  if (!LOCAL_TEST_FALLBACK) return p;
+  return p.catch(err => {
+    const list = localConsultations();
+    const idx = list.findIndex(x => x.id_prestation === id);
+    if (idx === -1) throw err;
+    list[idx] = Object.assign({}, list[idx], payload, { id_prestation: id });
+    saveLocalConsultations(list);
+    return { message: "Modifiee" };
+  });
+}
+
+/* ---- Dossier patient : Examens (module Dossier Patient) ------------------
+   GET/POST/PUT /api/examens — même principe que les consultations, pas de
+   DELETE (voir backend/controller/ExamenController.java).
+   -------------------------------------------------------------------- */
+function apiListExamensPatient(idPatient) {
+  const p = apiFetch("GET", "/api/examens?id_patient=" + idPatient);
+  if (!LOCAL_TEST_FALLBACK) return p;
+  return p.catch(err => {
+    console.warn("[API/test] Examens — repli local : " + err.message);
+    return localExamens().filter(e => e.id_patient === idPatient);
+  });
+}
+function apiGetExamenPatient(id) {
+  const p = apiFetch("GET", "/api/examens/" + id);
+  if (!LOCAL_TEST_FALLBACK) return p;
+  return p.catch(err => {
+    const found = localExamens().find(x => x.id_examen === id);
+    if (found) return found;
+    throw err;
+  });
+}
+function apiCreateExamenPatient(payload) {
+  const p = apiFetch("POST", "/api/examens", payload);
+  if (!LOCAL_TEST_FALLBACK) return p;
+  return p.catch(err => {
+    const list = localExamens();
+    const id = nextLocalId(list, "id_examen");
+    const med = currentLocalMedecin();
+    const e = Object.assign({ id_examen: id, id_prestation: id, id_medecin: med.id, medecin_nom: med.nom, id_structure: 1 }, payload);
+    list.push(e);
+    saveLocalExamens(list);
+    console.warn("[API/test] Création examen — repli local : " + err.message);
+    return e;
+  });
+}
+function apiUpdateExamenPatient(id, payload) {
+  const p = apiFetch("PUT", "/api/examens/" + id, payload);
+  if (!LOCAL_TEST_FALLBACK) return p;
+  return p.catch(err => {
+    const list = localExamens();
+    const idx = list.findIndex(x => x.id_examen === id);
+    if (idx === -1) throw err;
+    list[idx] = Object.assign({}, list[idx], payload, { id_examen: id });
+    saveLocalExamens(list);
+    return { message: "Modifie" };
+  });
+}
 
 // Pas de route GET /api/patients?matricule=... côté backend : on charge la
 // liste complète et on filtre côté client sur matricule_nag.
@@ -206,9 +406,9 @@ function toPhotoUrl(rawPath) {
 }
 
 // Convertit un Patient backend vers la forme utilisée par l'écran
-// "Nouvelle prise en charge" (voir showAssureCard() dans app.js). Champs
-// absents du schéma réel (date de naissance, lien assuré principal / ayant
-// droit) sont laissés vides plutôt qu'inventés.
+// "Nouvelle prise en charge" (voir showAssureCard() dans app.js). Le lien
+// assuré principal / ayant droit reste absent du schéma réel et n'est donc
+// pas exposé ici — voir mapBackendPatient plus bas pour les autres champs.
 function mapBackendPatient(p) {
   if (!p) return null;
   return {
@@ -217,11 +417,12 @@ function mapBackendPatient(p) {
     nom: p.nom || "",
     prenom: p.prenom || "",
     sexe: p.sex || "",
-    dateNaissance: "",
+    dateNaissance: p.date_naissance || "",
     fonds: p.fonds,
     statutAssure: !!p.statut_assure,
     photoUrl: toPhotoUrl(p.photo_url),
-    telephone: p.contact || ""
+    telephone: p.contact || "",
+    adresse: p.adresse || ""
   };
 }
 

@@ -12,6 +12,8 @@ public class Patient {
     public String   nom;
     public String   sex;                     // "M" ou "F"
     public String   contact;                 // téléphone (peut être null)
+    public String   adresse;                 // adresse (peut être null)
+    public String   date_naissance;          // AAAA-MM-JJ (peut être null)
     public boolean  statut_assure;           // true = assuré
     public Integer  fonds;                   //  NIVEAU 1, 2, 3 ou 4 (peut être null)
     public String   matricule_nag;           // numéro d'assuré

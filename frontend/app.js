@@ -27,7 +27,10 @@ const state = {
   connexionLog: loadJSON("pec_connexion_log", []),  // { id, email, nom, role, date, heure, statut }
   journalFilters: { search: "", role: "", statut: "", from: "", to: "" },
   apiUsers: null,          // utilisateurs chargés depuis le vrai backend (GET /api/utilisateurs), si joignable
-  usersSource: "local"     // "api" | "local" — quelle source alimente actuellement "Gestion des utilisateurs"
+  usersSource: "local",    // "api" | "local" — quelle source alimente actuellement "Gestion des utilisateurs"
+  dossierPatient: null,        // patient actuellement ouvert dans le Dossier Patient (forme mapBackendPatient)
+  dossierConsultations: [],    // consultations du patient ouvert (Consultation[], voir api.js)
+  dossierExamens: []           // examens du patient ouvert (Examen[], voir api.js)
 };
 
 // Migration douce : les entrées enregistrées avant l'ajout des actions/du statut avaient des champs manquants.
@@ -406,7 +409,12 @@ async function authenticate(username, password) {
     const session = await apiLogin(username, password);
     return { user: mapBackendUser(session.user) };
   } catch (err) {
-    if (err.isNetworkError) {
+    // LOCAL_TEST_FALLBACK (voir api.js) : en mode test, on bascule aussi sur
+    // les comptes de démo même si le backend a répondu une vraie erreur
+    // (ex : backend up mais SQL Server down → 500), pas seulement quand il
+    // est injoignable au niveau réseau — pour ne pas bloquer les tests
+    // front-end derrière un identifiant qui ne peut plus jamais aboutir.
+    if (err.isNetworkError || LOCAL_TEST_FALLBACK) {
       console.warn("[API] " + err.message + " — bascule sur les comptes de demonstration locaux.");
       const u = state.users.find(x => (x.username || "").toLowerCase() === username.toLowerCase()) || null;
       return { user: u };
@@ -435,13 +443,24 @@ function escapeHtml(s) {
 
 // Panneau d'information générique (mot de passe oublié / création de compte / mentions légales).
 // Prêt à être remplacé par une vraie navigation si un système de routage est introduit.
-function showInfoModal(title, bodyHtml) {
+// onClose (optionnel) : appelé quand la modale se ferme, quel que soit le
+// bouton utilisé (X ou Fermer) — utilisé par ex. pour vider un formulaire
+// une fois que l'utilisateur a pris connaissance du message.
+let infoModalOnClose = null;
+function showInfoModal(title, bodyHtml, onClose) {
   document.getElementById("infoModalTitle").textContent = title;
   document.getElementById("infoModalBody").innerHTML = bodyHtml;
+  infoModalOnClose = onClose || null;
   document.getElementById("infoModal").hidden = false;
 }
-document.getElementById("closeInfoModal").addEventListener("click", () => { document.getElementById("infoModal").hidden = true; });
-document.getElementById("closeInfoModalBtn").addEventListener("click", () => { document.getElementById("infoModal").hidden = true; });
+function closeInfoModal() {
+  document.getElementById("infoModal").hidden = true;
+  const cb = infoModalOnClose;
+  infoModalOnClose = null;
+  if (cb) cb();
+}
+document.getElementById("closeInfoModal").addEventListener("click", closeInfoModal);
+document.getElementById("closeInfoModalBtn").addEventListener("click", closeInfoModal);
 
 // Modale de confirmation (suppressions) à accent rouge — remplace les confirm()
 // natifs du navigateur pour rester cohérent avec le design de l'application.
@@ -604,6 +623,7 @@ const VIEW_META = {
   "nouvelle-pec": { title: "Nouvelle prise en charge", crumb: "Accueil / Nouvelle prise en charge" },
   medecin: { title: "Espace Médecin", crumb: "Accueil / Espace Médecin" },
   soins: { title: "Feuille de soins", crumb: "Accueil / Feuille de soins" },
+  "dossier-patient": { title: "Dossier patient", crumb: "Accueil / Nouvelle prise en charge / Dossier patient" },
   historique: { title: "Historique PEC", crumb: "Accueil / Historique" },
   users: { title: "Gestion des utilisateurs", crumb: "Accueil / Utilisateurs" },
   pharmacie: { title: "Espace Pharmacien", crumb: "Accueil / Espace Pharmacien" },
@@ -612,10 +632,23 @@ const VIEW_META = {
   journalisation: { title: "Journalisation", crumb: "Accueil / Journalisation" }
 };
 
-function goToView(name) {
+// Pile des vues visitées, pour que le bouton retour revienne à l'écran
+// précédent (quel qu'il soit) plutôt que de toujours ramener au tableau de
+// bord. goToView(name, { fromBack: true }) est utilisé par ce bouton pour
+// dépiler sans re-pousser la vue qu'on quitte.
+let viewHistory = [];
+let currentViewName = null;
+
+function goToView(name, opts) {
+  const fromBack = !!(opts && opts.fromBack);
   if (!isViewAllowed(name)) {
     name = state.roleAccess[state.currentUser.role].landing;
   }
+  if (!fromBack && currentViewName && currentViewName !== name) {
+    viewHistory.push(currentViewName);
+  }
+  currentViewName = name;
+
   document.querySelectorAll(".view").forEach(v => v.hidden = true);
   document.getElementById("view-" + name).hidden = false;
 
@@ -631,7 +664,7 @@ function goToView(name) {
   if (name === "historique") renderHistorique();
   if (name === "users") renderUsers();
   if (name === "dashboard") renderDashboardStats();
-  if (name === "medecin") renderMedecinQueue();
+  if (name === "medecin") { renderMedecinPatients(); renderMedecinQueue(); }
   if (name === "pharmacie") resetPharmaSearch();
   if (name === "rapports") renderRapports();
   if (name === "permissions") { renderPermissions(); loadApiPermissions(); }
@@ -654,7 +687,10 @@ function renderCrumb(meta) {
     '<span class="crumb-current">' + parts.slice(1).join(" / ") + "</span>";
   document.getElementById("crumbHomeBtn").addEventListener("click", () => goToView("dashboard"));
 }
-document.getElementById("topbarBackBtn").addEventListener("click", () => goToView("dashboard"));
+document.getElementById("topbarBackBtn").addEventListener("click", () => {
+  const previous = viewHistory.pop();
+  goToView(previous || "dashboard", { fromBack: true });
+});
 
 // La marque "CNAMGS / Circuit de l'assuré" en haut de la sidebar agit comme
 // un lien vers l'accueil, comme le logo de la plupart des apps pro.
@@ -708,6 +744,11 @@ function resetSearch() {
   document.getElementById("matriculeInput").value = "";
   document.querySelectorAll("#tmChoices .chip").forEach(c => c.classList.remove("active"));
   document.getElementById("medecinSelect").value = "";
+  document.getElementById("pec-quartier").value = "";
+  document.getElementById("pec-telephone").value = "";
+  document.getElementById("pec-service").value = "";
+  document.getElementById("nouvellePecConsultationBtn").hidden = true;
+  document.getElementById("assurePhotoCol").classList.remove("patient-frequent", "patient-new");
   updateActionButtons();
 }
 
@@ -813,7 +854,7 @@ function showAssureCard(assure) {
   const statutTxt = assure.statutAssure ? "Assuré" : "Non assuré";
   document.getElementById("af-situation").textContent = statutTxt;
   document.getElementById("af-matricule").textContent = assure.matricule || "—";
-  document.getElementById("af-naissance").textContent = assure.dateNaissance || "—";
+  document.getElementById("af-naissance").textContent = assure.dateNaissance ? dossierDateFR(assure.dateNaissance) : "—";
   document.getElementById("af-fonds").textContent = fondsLabel(assure.fonds);
   setAvatar(document.getElementById("af-avatar"), assure.prenom, assure.nom, assure.photoUrl);
 
@@ -824,7 +865,7 @@ function showAssureCard(assure) {
     prenom: assure.prenom,
     dateNaissance: assure.dateNaissance,
     sexe: assure.sexe,
-    estAssure: true
+    estAssure: !!assure.statutAssure
   };
   updateActionButtons();
 
@@ -832,13 +873,39 @@ function showAssureCard(assure) {
   state.currentMedecin = null;
   document.querySelectorAll("#tmChoices .chip").forEach(c => c.classList.remove("active"));
   document.getElementById("medecinSelect").value = "";
+  // Quartier et service repartent vierges à chaque nouvelle recherche (propres
+  // à cette visite) ; le téléphone est repris du dossier mais reste modifiable.
+  document.getElementById("pec-quartier").value = "";
+  document.getElementById("pec-telephone").value = assure.telephone || "";
+  document.getElementById("pec-service").value = "";
   updateActionButtons();
+
+  // « Nouvelle consultation » (raccourci vers la feuille de soins complète,
+  // même flux que le Dossier Patient) n'apparaît que pour un patient déjà
+  // venu en consultation plus d'une fois — repéré via son dossier réel. La
+  // carte assuré change aussi de couleur selon ce même historique (habitué
+  // en vert, jamais consulté en gris).
+  const btn = document.getElementById("nouvellePecConsultationBtn");
+  const photoCol = document.getElementById("assurePhotoCol");
+  btn.hidden = true;
+  photoCol.classList.remove("patient-frequent", "patient-new");
+  if (assure.idPatient != null) {
+    apiListConsultations(assure.idPatient).then(list => {
+      // L'assuré affiché a pu changer entre-temps (nouvelle recherche) :
+      // on ignore un résultat qui ne concerne plus l'assuré courant.
+      if (state.currentAssure !== assure) return;
+      const count = (list || []).length;
+      btn.hidden = !(count > 1);
+      photoCol.classList.toggle("patient-frequent", count > 1);
+      photoCol.classList.toggle("patient-new", count === 0);
+    }).catch(() => { btn.hidden = true; });
+  }
 }
 
 function updateActionButtons() {
   const ready = !!(state.currentAssure && state.currentPatient && state.currentTM && state.currentMedecin);
-  document.getElementById("btnConsultation").disabled = !ready;
-  document.getElementById("btnExamen").disabled = !ready;
+  document.getElementById("enregistrerPecBtn").disabled = !ready;
+  document.getElementById("nouvellePecConsultationBtn").disabled = !ready;
   const hint = document.getElementById("readyHint");
   if (hint) hint.hidden = ready;
 }
@@ -862,6 +929,8 @@ function fillPatientForm(p) {
   document.getElementById("p-nom").value = p.nom || "";
   document.getElementById("p-sex").value = p.sex || "M";
   document.getElementById("p-contact").value = p.contact || "";
+  document.getElementById("p-adresse").value = p.adresse || "";
+  document.getElementById("p-date-naissance").value = p.date_naissance || "";
   document.getElementById("p-fonds").value = p.fonds != null ? String(p.fonds) : "1";
   document.getElementById("p-statut-assure").checked = !!p.statut_assure;
   document.getElementById("p-id-assure-principal").value = p.id_assure_principal != null ? p.id_assure_principal : "";
@@ -878,6 +947,8 @@ function readPatientForm() {
     nom: document.getElementById("p-nom").value.trim(),
     sex: document.getElementById("p-sex").value,
     contact: document.getElementById("p-contact").value.trim(),
+    adresse: document.getElementById("p-adresse").value.trim(),
+    date_naissance: document.getElementById("p-date-naissance").value || null,
     statut_assure: document.getElementById("p-statut-assure").checked,
     fonds: parseInt(document.getElementById("p-fonds").value, 10),
     matricule_nag: document.getElementById("p-matricule").value.trim(),
@@ -963,6 +1034,281 @@ document.getElementById("medecinSelect").addEventListener("change", e => {
   const id = parseInt(e.target.value, 10);
   state.currentMedecin = MEDECINS.find(m => m.id === id) || null;
   updateActionButtons();
+});
+
+/* ---------------------------------------------------------------------- */
+/* Dossier patient : informations générales + modules Consultations /     */
+/* Examens (CRÉER / LIRE / MODIFIER uniquement, jamais de suppression —   */
+/* voir backend/controller/ConsultationController.java et                */
+/* ExamenController.java). Le patient possède un dossier, il n'en devient */
+/* pas un : ce dossier regroupe ses informations et ses prestations.      */
+/* ---------------------------------------------------------------------- */
+
+document.getElementById("openDossierPatientBtn").addEventListener("click", () => {
+  if (!state.currentAssure || state.currentAssure.idPatient == null) return;
+  openDossierPatient(state.currentAssure);
+});
+
+function openDossierPatient(patient) {
+  state.dossierPatient = patient;
+  renderDossierPatientInfo();
+  setDossierTab("consultations");
+  goToView("dossier-patient");
+  reloadDossierConsultations();
+  reloadDossierExamens();
+}
+
+function renderDossierPatientInfo() {
+  const p = state.dossierPatient;
+  if (!p) return;
+  document.getElementById("dpHeading").textContent = "Dossier patient — " + p.prenom + " " + p.nom;
+  document.getElementById("dp-nom").textContent = p.prenom + " " + p.nom;
+  document.getElementById("dp-matricule").textContent = p.matricule || "—";
+  document.getElementById("dp-sexe").textContent = p.sexe === "F" ? "Féminin" : (p.sexe === "M" ? "Masculin" : "—");
+  document.getElementById("dp-naissance").textContent = p.dateNaissance ? dossierDateFR(p.dateNaissance) : "—";
+  document.getElementById("dp-adresse").textContent = p.adresse || "—";
+  document.getElementById("dp-telephone").textContent = p.telephone || "—";
+  document.getElementById("dp-statut").textContent = p.statutAssure ? "Assuré" : "Non assuré";
+  setAvatar(document.getElementById("dp-avatar"), p.prenom, p.nom, p.photoUrl);
+}
+
+function setDossierTab(tab) {
+  document.getElementById("dpTabConsultationsBtn").classList.toggle("active", tab === "consultations");
+  document.getElementById("dpTabExamensBtn").classList.toggle("active", tab === "examens");
+  document.getElementById("dpConsultationsPanel").hidden = tab !== "consultations";
+  document.getElementById("dpExamensPanel").hidden = tab !== "examens";
+}
+document.getElementById("dpTabConsultationsBtn").addEventListener("click", () => setDossierTab("consultations"));
+document.getElementById("dpTabExamensBtn").addEventListener("click", () => setDossierTab("examens"));
+
+function statutLabel(statut) {
+  return statut === "validee" ? "Validée" : (statut === "rejetee" ? "Rejetée" : "En attente");
+}
+function statutPillClass(statut) {
+  return statut === "validee" ? "validee" : (statut === "rejetee" ? "rejetee" : "attente");
+}
+function dossierDateFR(isoDate) {
+  if (!isoDate) return "—";
+  const parts = isoDate.split("-");
+  return parts.length === 3 ? (parts[2] + "/" + parts[1] + "/" + parts[0]) : isoDate;
+}
+function money(n) { return (n == null ? 0 : n).toLocaleString("fr-FR") + " FCFA"; }
+
+/* ---- Consultations -------------------------------------------------- */
+
+function reloadDossierConsultations() {
+  const idPatient = state.dossierPatient.idPatient;
+  apiListConsultations(idPatient).then(list => {
+    state.dossierConsultations = list || [];
+    renderDossierConsultations();
+  }).catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
+}
+
+function renderDossierConsultations() {
+  const body = document.getElementById("dpConsultationsBody");
+  const list = state.dossierConsultations;
+  document.getElementById("dpConsultationsEmpty").hidden = list.length > 0;
+  body.innerHTML = list.map(c => (
+    "<tr>" +
+      "<td>" + dossierDateFR(c.date) + "</td>" +
+      "<td>" + escapeHtml(c.medecin_nom || "—") + "</td>" +
+      "<td>" + escapeHtml(c.numero_de_feuille || "—") + "</td>" +
+      "<td><span class=\"pill " + statutPillClass(c.statut) + "\">" + statutLabel(c.statut) + "</span></td>" +
+      "<td><button type=\"button\" class=\"btn-secondary btn-sm\" data-action=\"voir-consultation\" data-id=\"" + c.id_prestation + "\">Voir</button></td>" +
+    "</tr>"
+  )).join("");
+  body.querySelectorAll('[data-action="voir-consultation"]').forEach(btn => {
+    btn.addEventListener("click", () => {
+      const c = state.dossierConsultations.find(x => x.id_prestation === parseInt(btn.dataset.id, 10));
+      if (c) previewConsultation(c);
+    });
+  });
+}
+
+// Aperçu façon « feuille de soins » (mêmes classes CSS que previewEntry(),
+// utilisé par Historique PEC) pour une Consultation venant de l'API — moins
+// de champs disponibles que sur une feuille locale complète (pas de
+// prestations détaillées, pas de fonds/TM/praticien code, ce modèle-là ne
+// les porte pas), mais même présentation visuelle.
+// « Voir » doit montrer la feuille réellement remplie par le médecin
+// (prestations, ordonnance/médicaments prescrits...), pas juste les champs
+// limités du modèle Consultation de l'API. Cette feuille existe dans
+// state.historique (créée à la validation, voir submitMedecinValidation) —
+// on la retrouve par numéro de feuille (numero_de_feuille, copié depuis
+// entry.numero au moment de la synchronisation, voir
+// syncValidatedEntryToDossierPatient) et on réutilise previewEntry(), déjà
+// utilisé par Historique PEC, pour un rendu identique et complet. Repli sur
+// l'aperçu simplifié seulement si la feuille d'origine est introuvable
+// (autre session/poste, par exemple).
+function previewConsultation(c) {
+  const source = c.numero_de_feuille ? state.historique.find(h => h.numero === c.numero_de_feuille) : null;
+  if (source) { previewEntry(source.id); return; }
+
+  const p = state.dossierPatient;
+  const statutClass = statutPillClass(c.statut);
+  document.getElementById("previewBody").innerHTML =
+    '<div class="preview-head"><img src="CNAMGS.png" alt="CNAMGS" /><div>' +
+      '<span class="pill consultation">Consultation</span> ' +
+      '<span class="pill ' + statutClass + '">' + statutLabel(c.statut) + "</span>" +
+      '<div class="preview-num">' + escapeHtml(c.numero_de_feuille || "—") + "</div>" +
+    "</div></div>" +
+    '<div class="preview-grid">' +
+      "<div><b>Patient</b><span>" + escapeHtml(p ? (p.prenom + " " + p.nom) : "—") + "</span></div>" +
+      "<div><b>Matricule</b><span>" + escapeHtml(p ? p.matricule : "—") + "</span></div>" +
+      "<div><b>Date</b><span>" + dossierDateFR(c.date) + "</span></div>" +
+      "<div><b>Médecin</b><span>" + escapeHtml(c.medecin_nom || "—") + "</span></div>" +
+      "<div><b>Type de feuille</b><span>" + escapeHtml(c.type_feuille || "—") + "</span></div>" +
+      "<div><b>N° de feuille</b><span>" + escapeHtml(c.numero_de_feuille || "—") + "</span></div>" +
+    "</div>" +
+    '<div class="preview-totals">' +
+      "<div>Montant <b>" + money(c.montant) + "</b></div>" +
+      "<div>Montant CNAMGS <b>" + money(c.montant_pec) + "</b></div>" +
+    "</div>";
+  document.getElementById("previewModal").hidden = false;
+}
+
+// « + Nouvelle consultation » ouvre directement la feuille de soins, sans
+// passer par « Nouvelle prise en charge » : le patient du dossier est déjà
+// connu, il ne manque que le ticket modérateur et le médecin (seules
+// données qu'on ne peut pas déduire du dossier) — voir openDpSoinsStart()
+// et dpSoinsStartModal. Cette feuille de soins est enregistrée dans
+// state.historique (local), pas dans la table SQL Consultation exposée par
+// l'API — les deux flux restent séparés.
+document.getElementById("addConsultationBtn").addEventListener("click", () => openDpSoinsStart("Consultation"));
+
+/* ---- Examens ---------------------------------------------------------- */
+
+function reloadDossierExamens() {
+  const idPatient = state.dossierPatient.idPatient;
+  apiListExamensPatient(idPatient).then(list => {
+    state.dossierExamens = list || [];
+    renderDossierExamens();
+  }).catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
+}
+
+function renderDossierExamens() {
+  const body = document.getElementById("dpExamensBody");
+  const list = state.dossierExamens;
+  document.getElementById("dpExamensEmpty").hidden = list.length > 0;
+  body.innerHTML = list.map(e => (
+    "<tr>" +
+      "<td>" + dossierDateFR(e.date_examen) + "</td>" +
+      "<td>" + escapeHtml(e.type_examen || "—") + "</td>" +
+      "<td>" + escapeHtml(e.medecin_nom || "—") + "</td>" +
+      "<td>" + money(e.montant) + "</td>" +
+      "<td><span class=\"pill " + statutPillClass(e.statut) + "\">" + statutLabel(e.statut) + "</span></td>" +
+    "</tr>"
+  )).join("");
+}
+
+// « + Nouvel examen » — même principe que « + Nouvelle consultation »
+// ci-dessus, voir le commentaire associé.
+document.getElementById("addExamenBtn").addEventListener("click", () => openDpSoinsStart("Examen"));
+
+/* ---- Modale de démarrage (ticket modérateur + médecin), avant d'ouvrir   */
+/* directement la feuille de soins / le bon d'examen depuis le dossier     */
+/* patient — sans jamais afficher l'écran « Nouvelle prise en charge ».    */
+
+let dpSoinsStartType = null;
+let dpSoinsStartTM = null;
+let dpSoinsStartMedecin = null;
+
+// filterText filtre sur nom/prénom/établissement/spécialité (recherche pour
+// faciliter le choix parmi les médecins du catalogue). Si le médecin déjà
+// sélectionné (dpSoinsStartMedecin) reste dans les résultats filtrés, la
+// sélection est conservée ; sinon elle est réinitialisée.
+function populateDpMedecinSelect(filterText) {
+  const sel = document.getElementById("dp-medecin-select");
+  const needle = (filterText || "").trim().toLowerCase();
+  const matches = !needle ? MEDECINS : MEDECINS.filter(m => {
+    const hay = (m.prenom + " " + m.nom + " " + m.etablissement + " " + m.type).toLowerCase();
+    return hay.includes(needle);
+  });
+  sel.innerHTML = '<option value="">— Choisir un médecin —</option>';
+  matches.forEach(m => {
+    const opt = document.createElement("option");
+    opt.value = m.id;
+    opt.textContent = "Dr. " + m.prenom + " " + m.nom + " — " + m.etablissement;
+    sel.appendChild(opt);
+  });
+  if (dpSoinsStartMedecin && matches.some(m => m.id === dpSoinsStartMedecin.id)) {
+    sel.value = dpSoinsStartMedecin.id;
+  } else {
+    dpSoinsStartMedecin = null;
+    updateDpSoinsStartReady();
+  }
+}
+document.getElementById("dp-medecin-search").addEventListener("input", e => populateDpMedecinSelect(e.target.value));
+
+function updateDpSoinsStartReady() {
+  document.getElementById("dpSoinsStartContinueBtn").disabled = !(dpSoinsStartTM && dpSoinsStartMedecin);
+}
+
+// Si l'utilisateur connecté est lui-même un médecin, on le retrouve dans le
+// catalogue MEDECINS par correspondance nom/prénom (les deux listes ne sont
+// pas formellement reliées ailleurs dans le code — voir MODULES
+// MANQUANTS.md, "Structure"). Sans correspondance (rôle différent, nom
+// absent du catalogue), on retombe sur la sélection manuelle.
+function matchCurrentUserToMedecin() {
+  const u = state.currentUser;
+  if (!u || u.role !== "Médecin" || !u.nom || !u.prenom) return null;
+  // USERS_SEED garde parfois un préfixe "Dr." dans le nom (voir "Dr. AKUE") :
+  // à retirer avant de comparer au catalogue MEDECINS, qui n'en a pas.
+  const nom = u.nom.trim().toLowerCase().replace(/^dr\.?\s+/, "");
+  const prenom = u.prenom.trim().toLowerCase();
+  return MEDECINS.find(m => m.nom.toLowerCase() === nom && m.prenom.toLowerCase() === prenom) || null;
+}
+
+function openDpSoinsStart(type) {
+  dpSoinsStartType = type;
+  dpSoinsStartTM = null;
+  document.getElementById("dpSoinsStartTitle").textContent = type === "Examen" ? "Nouvel examen" : "Nouvelle consultation";
+  document.querySelectorAll("#dpTmChoices .chip").forEach(c => c.classList.remove("active"));
+
+  const known = matchCurrentUserToMedecin();
+  dpSoinsStartMedecin = known;
+  document.getElementById("dpMedecinKnownWrap").hidden = !known;
+  document.getElementById("dpMedecinPickWrap").hidden = !!known;
+  if (known) {
+    document.getElementById("dpMedecinKnownLabel").textContent = "Dr. " + known.prenom + " " + known.nom + " — " + known.etablissement;
+  } else {
+    document.getElementById("dp-medecin-search").value = "";
+    populateDpMedecinSelect("");
+  }
+  updateDpSoinsStartReady();
+  document.getElementById("dpSoinsStartModal").hidden = false;
+}
+
+function closeDpSoinsStartModal() {
+  document.getElementById("dpSoinsStartModal").hidden = true;
+}
+document.getElementById("closeDpSoinsStartModal").addEventListener("click", closeDpSoinsStartModal);
+document.getElementById("cancelDpSoinsStartModal").addEventListener("click", closeDpSoinsStartModal);
+
+document.querySelectorAll("#dpTmChoices .chip").forEach(chip => {
+  chip.addEventListener("click", () => {
+    dpSoinsStartTM = chip.dataset.tm;
+    document.querySelectorAll("#dpTmChoices .chip").forEach(c => c.classList.toggle("active", c === chip));
+    updateDpSoinsStartReady();
+  });
+});
+document.getElementById("dp-medecin-select").addEventListener("change", e => {
+  const id = parseInt(e.target.value, 10);
+  dpSoinsStartMedecin = MEDECINS.find(m => m.id === id) || null;
+  updateDpSoinsStartReady();
+});
+
+document.getElementById("dpSoinsStartContinueBtn").addEventListener("click", () => {
+  const p = state.dossierPatient;
+  state.currentAssure = p;
+  state.currentPatient = {
+    matricule: p.matricule, nom: p.nom, prenom: p.prenom,
+    dateNaissance: p.dateNaissance, sexe: p.sexe, estAssure: !!p.statutAssure
+  };
+  state.currentTM = dpSoinsStartTM;
+  state.currentMedecin = dpSoinsStartMedecin;
+  closeDpSoinsStartModal();
+  openSoins(dpSoinsStartType);
 });
 
 /* ---------------------------------------------------------------------- */
@@ -1063,10 +1409,11 @@ function openSoins(type) {
   const numero = nextFeuilleNum();
   document.getElementById("soinsNum").value = numero;
   document.getElementById("soinsDate").value = todayFR();
-  // assure.fonds est désormais un montant réel (table Patient), pas l'un
-  // des 3 fonds nommés du menu ci-dessous : pas de pré-remplissage fiable
-  // possible, l'agent choisit le fonds manuellement.
-  document.getElementById("soinsFonds").disabled = false;
+  // Le fonds de l'assuré (Patient.fonds, code 1-4) est déjà connu via le
+  // dossier patient — plus besoin que l'agent le resaisisse manuellement
+  // (voir SOINS_FONDS_LABEL pour la correspondance code → libellé).
+  document.getElementById("soinsFonds").value = SOINS_FONDS_LABEL[Math.round(num(assure.fonds))] || "Fonds Secteur Privé";
+  document.getElementById("soinsFonds").disabled = true;
 
   document.getElementById("p-patientNom").value = patient.prenom + " " + patient.nom;
   document.getElementById("p-dateNaissance").value = patient.dateNaissance;
@@ -1277,10 +1624,130 @@ function openSoinsForValidation(entryId, opts) {
   if (!skipNav) goToView("soins");
 }
 
-document.getElementById("btnConsultation").addEventListener("click", () => openSoins("Consultation"));
-document.getElementById("btnExamen").addEventListener("click", () => openSoins("Examen"));
 document.getElementById("cancelSoinsBtn").addEventListener("click", () => {
   goToView(state.soinsMode === "medecin" ? "medecin" : "nouvelle-pec");
+});
+
+// Correspondance Patient.fonds (code 1-4, voir FONDS_LABELS) → libellé du
+// menu "Fonds" de la feuille de soins (trois valeurs fixes, sans équivalent
+// pour le code 4 — repli sur "Fonds Secteur Privé", la valeur la plus
+// courante, faute de mieux).
+const SOINS_FONDS_LABEL = { 1: "Fonds Secteur Public", 2: "Fonds Secteur Privé", 3: "Fonds Garantie Sociale" };
+
+// « Enregistrer » (Nouvelle prise en charge) : plus de choix Consultation/
+// Examen à cette étape — c'est le médecin qui décide au moment de la
+// validation (voir syncValidatedEntryToDossierPatient). On crée directement
+// une entrée "En attente" dans la file du médecin, avec les seules infos
+// déjà connues à ce stade (patient, ticket modérateur, médecin) ; le détail
+// (prestations, ordonnance, bon d'examen) sera rempli par le médecin à la
+// validation — comme aujourd'hui pour une entrée créée par l'agent.
+document.getElementById("enregistrerPecBtn").addEventListener("click", () => {
+  const patient = state.currentPatient;
+  const medecin = state.currentMedecin;
+  if (!state.currentAssure || !patient || !state.currentTM || !medecin) return;
+
+  const entry = {
+    id: Date.now(),
+    numero: nextFeuilleNum(),
+    date: todayFR(),
+    type: "Consultation",
+    patientNom: patient.prenom + " " + patient.nom,
+    dateNaissance: patient.dateNaissance || "",
+    matricule: patient.matricule || "",
+    estAssure: !!patient.estAssure,
+    fonds: SOINS_FONDS_LABEL[Math.round(num(state.currentAssure.fonds))] || "Fonds Secteur Privé",
+    ticketModerateur: state.currentTM,
+    medecin: "Dr. " + medecin.prenom + " " + medecin.nom,
+    medecinEtab: medecin.etablissement,
+    medecinCode: medecin.code,
+    medecinType: medecin.type,
+    quartier: document.getElementById("pec-quartier").value.trim(),
+    telephone: document.getElementById("pec-telephone").value.trim(),
+    service: document.getElementById("pec-service").value,
+    accidentTiers: "",
+    grossesse: "",
+    statut: "En attente",
+    prestations: [],
+    ordonnance: [],
+    prestaDate: "",
+    prestaDomicile: "",
+    prestaCode: "",
+    examens: [],
+    examNature: "",
+    examSituation: "",
+    examCodePraticien: "",
+    examEtablissement: "",
+    examCodeEtablissement: "",
+    examDate: "",
+    examMotif: "",
+    examPubSignature: "",
+    examSpecialisteSignature: "",
+    totalMontant: "0",
+    totalTm: "0",
+    totalPart: "0"
+  };
+  state.historique.unshift(entry);
+  saveJSON("pec_historique", state.historique);
+  state.historiquePage = 1;
+  refreshPendingBadge();
+  showInfoModal("Prise en charge enregistrée", "<p>La feuille a été envoyée en attente de validation par le médecin.</p>", () => resetSearch());
+});
+
+// « Nouvelle consultation » (visible uniquement si le patient a déjà plus
+// d'une consultation dans son dossier, voir showAssureCard) : crée elle
+// aussi directement une entrée "En attente" dans la file du médecin — même
+// action qu'« Enregistrer » ci-dessus (voir ce commentaire pour le
+// pourquoi : c'est le médecin qui décide du détail à la validation).
+document.getElementById("nouvellePecConsultationBtn").addEventListener("click", () => {
+  const patient = state.currentPatient;
+  const medecin = state.currentMedecin;
+  if (!state.currentAssure || !patient || !state.currentTM || !medecin) return;
+
+  const entry = {
+    id: Date.now(),
+    numero: nextFeuilleNum(),
+    date: todayFR(),
+    type: "Consultation",
+    patientNom: patient.prenom + " " + patient.nom,
+    dateNaissance: patient.dateNaissance || "",
+    matricule: patient.matricule || "",
+    estAssure: !!patient.estAssure,
+    fonds: SOINS_FONDS_LABEL[Math.round(num(state.currentAssure.fonds))] || "Fonds Secteur Privé",
+    ticketModerateur: state.currentTM,
+    medecin: "Dr. " + medecin.prenom + " " + medecin.nom,
+    medecinEtab: medecin.etablissement,
+    medecinCode: medecin.code,
+    medecinType: medecin.type,
+    quartier: document.getElementById("pec-quartier").value.trim(),
+    telephone: document.getElementById("pec-telephone").value.trim(),
+    service: document.getElementById("pec-service").value,
+    accidentTiers: "",
+    grossesse: "",
+    statut: "En attente",
+    prestations: [],
+    ordonnance: [],
+    prestaDate: "",
+    prestaDomicile: "",
+    prestaCode: "",
+    examens: [],
+    examNature: "",
+    examSituation: "",
+    examCodePraticien: "",
+    examEtablissement: "",
+    examCodeEtablissement: "",
+    examDate: "",
+    examMotif: "",
+    examPubSignature: "",
+    examSpecialisteSignature: "",
+    totalMontant: "0",
+    totalTm: "0",
+    totalPart: "0"
+  };
+  state.historique.unshift(entry);
+  saveJSON("pec_historique", state.historique);
+  state.historiquePage = 1;
+  refreshPendingBadge();
+  showInfoModal("Nouvelle consultation enregistrée", "<p>La feuille a été envoyée en attente de validation par le médecin.</p>", () => resetSearch());
 });
 
 /* ---- Bascule animée Consultation ⇄ Examen (bon d'examen lié) ------------ */
@@ -1299,24 +1766,16 @@ function updateExamSwitchUI(entry) {
       .filter(Boolean);
     const last = linked[linked.length - 1];
     const btn = document.getElementById("examSwitchBtn");
-    const addAnother = document.getElementById("examSwitchAddAnother");
-    const removeBtn = document.getElementById("examSwitchRemove");
     if (last) {
       document.getElementById("examSwitchBtnLabel").textContent = "Voir le bon d'examen " + last.numero;
       document.getElementById("examSwitchSub").textContent = "Un examen a déjà été recommandé pour cette consultation.";
       btn.dataset.mode = "goto";
       btn.dataset.targetId = String(last.id);
-      addAnother.hidden = false;
-      removeBtn.hidden = false;
-      removeBtn.dataset.targetId = String(last.id);
     } else {
       document.getElementById("examSwitchBtnLabel").textContent = "Créer un bon d'examen";
       document.getElementById("examSwitchSub").textContent = "Génère un bon d'examen lié, pré-rempli avec les informations du patient.";
       btn.dataset.mode = "create";
       btn.dataset.targetId = "";
-      addAnother.hidden = true;
-      removeBtn.hidden = true;
-      removeBtn.dataset.targetId = "";
     }
   }
 
@@ -1324,6 +1783,14 @@ function updateExamSwitchUI(entry) {
     ? state.historique.find(h => h.id === entry.linkedConsultationId)
     : null;
   backBox.hidden = !src;
+  // "+ Créer un autre bon d'examen" / "Retirer le bon d'examen" retirés de
+  // l'interface : les boutons restent dans le DOM (masqués en permanence)
+  // pour ne pas casser les autres références à ces id, mais ne s'affichent
+  // plus jamais.
+  const addAnother = document.getElementById("examSwitchAddAnother");
+  const removeBtn = document.getElementById("examSwitchRemove");
+  addAnother.hidden = true;
+  removeBtn.hidden = true;
   if (src) {
     document.getElementById("retourConsultationSub").textContent = "Lié à la consultation " + src.numero;
     document.getElementById("retourConsultationBtn").dataset.targetId = String(src.id);
@@ -1352,8 +1819,8 @@ function flipSoinsTo(entryId) {
   }, 260);
 }
 
-function createLinkedExamAndFlip() {
-  const consultEntry = state.historique.find(h => h.id === state.editingEntryId);
+function createLinkedExamAndFlip(consultId) {
+  const consultEntry = state.historique.find(h => h.id === consultId);
   if (!consultEntry) return;
   const examEntry = examEntryFromConsultation(consultEntry);
   consultEntry.linkedExamenIds = (consultEntry.linkedExamenIds || []).concat([examEntry.id]);
@@ -1368,32 +1835,42 @@ document.getElementById("examSwitchBtn").addEventListener("click", () => {
   if (btn.dataset.mode === "goto" && btn.dataset.targetId) {
     flipSoinsTo(parseInt(btn.dataset.targetId, 10));
   } else {
-    createLinkedExamAndFlip();
+    createLinkedExamAndFlip(state.editingEntryId);
   }
 });
-document.getElementById("examSwitchAddAnother").addEventListener("click", createLinkedExamAndFlip);
+// Affiché côté examen : crée un nouveau bon d'examen lié à la même consultation.
+document.getElementById("examSwitchAddAnother").addEventListener("click", () => {
+  const targetId = document.getElementById("examSwitchAddAnother").dataset.targetId;
+  if (targetId) createLinkedExamAndFlip(parseInt(targetId, 10));
+});
 
-// Retire (supprime) un bon d'examen lié à la consultation actuellement affichée —
-// délie les deux feuilles et retire l'examen de l'historique / de la file médecin.
-function removeLinkedExam(examId) {
-  const consultEntry = state.historique.find(h => h.id === state.editingEntryId);
-  if (!consultEntry) return;
+// Retire (supprime) le bon d'examen actuellement affiché — délie les deux
+// feuilles, retire l'examen de l'historique / de la file médecin, puis
+// revient sur la consultation d'origine (l'examen affiché n'existe plus).
+function removeLinkedExam(examId, consultId) {
+  const consultEntry = consultId ? state.historique.find(h => h.id === consultId) : null;
   const examEntry = state.historique.find(h => h.id === examId);
   askConfirm(
     "Le bon d'examen " + (examEntry ? examEntry.numero : "") + " lié à cette consultation sera définitivement supprimé.",
     () => {
       state.historique = state.historique.filter(h => h.id !== examId);
-      consultEntry.linkedExamenIds = (consultEntry.linkedExamenIds || []).filter(id => id !== examId);
+      if (consultEntry) consultEntry.linkedExamenIds = (consultEntry.linkedExamenIds || []).filter(id => id !== examId);
       saveJSON("pec_historique", state.historique);
       refreshPendingBadge();
-      updateExamSwitchUI(consultEntry);
+      if (consultEntry) {
+        flipSoinsTo(consultEntry.id);
+      } else {
+        goToView(state.soinsMode === "medecin" ? "medecin" : "nouvelle-pec");
+      }
     },
     { title: "Retirer ce bon d'examen ?" }
   );
 }
 document.getElementById("examSwitchRemove").addEventListener("click", () => {
-  const targetId = document.getElementById("examSwitchRemove").dataset.targetId;
-  if (targetId) removeLinkedExam(parseInt(targetId, 10));
+  const removeBtn = document.getElementById("examSwitchRemove");
+  const examId = removeBtn.dataset.examId;
+  const consultId = removeBtn.dataset.targetId;
+  if (examId) removeLinkedExam(parseInt(examId, 10), consultId ? parseInt(consultId, 10) : null);
 });
 
 document.getElementById("retourConsultationBtn").addEventListener("click", () => {
@@ -1521,6 +1998,9 @@ function submitAgentFeuille() {
     medecinEtab: medecin ? medecin.etablissement : "",
     medecinCode: medecin ? medecin.code : "",
     medecinType: medecin ? medecin.type : "",
+    quartier: document.getElementById("pec-quartier").value.trim(),
+    telephone: document.getElementById("pec-telephone").value.trim(),
+    service: document.getElementById("pec-service").value,
     accidentTiers: (document.querySelector('input[name=tiers]:checked') || {}).value || "",
     grossesse: (document.querySelector('input[name=grossesse]:checked') || {}).value || "",
     statut: "En attente",
@@ -1568,6 +2048,9 @@ function examEntryFromConsultation(consultEntry) {
     medecinEtab: consultEntry.medecinEtab,
     medecinCode: consultEntry.medecinCode,
     medecinType: consultEntry.medecinType,
+    quartier: consultEntry.quartier,
+    telephone: consultEntry.telephone,
+    service: consultEntry.service,
     accidentTiers: consultEntry.accidentTiers,
     grossesse: consultEntry.grossesse,
     statut: "En attente",
@@ -1636,6 +2119,52 @@ function submitMedecinValidation() {
   saveJSON("pec_historique", state.historique);
   state.editingEntryId = null;
   goToView("medecin");
+  syncValidatedEntryToDossierPatient(entry);
+}
+
+// AAAA-MM-JJ à partir d'une date française JJ/MM/AAAA (state.historique
+// stocke les dates en français) — sans passer par Date/toISOString, qui
+// décale la date selon le fuseau horaire local.
+function frDateToISO(s) {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s || "");
+  return m ? (m[3] + "-" + m[2] + "-" + m[1]) : new Date().toISOString().slice(0, 10);
+}
+
+// C'est le médecin qui décide, au moment de la validation, si une feuille
+// est une Consultation ou un Examen (et, pour une Consultation, s'il y
+// rattache un bon d'examen — voir createLinkedExamAndFlip, qui crée sa
+// propre entrée "En attente", synchronisée à son tour quand ELLE sera
+// validée). Une fois la feuille validée, le dossier patient (Consultations/
+// Examens, alimentés par l'API — voir ConsultationController/
+// ExamenController) doit refléter automatiquement cette décision, sans
+// action supplémentaire. Best-effort : une erreur ici n'annule jamais la
+// validation déjà enregistrée dans state.historique ci-dessus.
+function syncValidatedEntryToDossierPatient(entry) {
+  findPatientByMatricule(entry.matricule).then(patient => {
+    if (!patient || patient.idPatient == null) {
+      console.warn("[Dossier patient] Patient introuvable pour le matricule " + entry.matricule + " — synchronisation ignorée.");
+      return;
+    }
+    if (entry.type === "Examen") {
+      apiCreateExamenPatient({
+        id_patient: patient.idPatient,
+        date_examen: frDateToISO(entry.date),
+        type_examen: entry.examNature || "Examen",
+        montant: parseFloat(entry.totalMontant) || 0,
+        statut: "validee"
+      }).catch(err => console.warn("[Dossier patient] Synchronisation examen échouée : " + err.message));
+    } else {
+      apiCreateConsultation({
+        id_patient: patient.idPatient,
+        date: frDateToISO(entry.date),
+        montant: parseFloat(entry.totalMontant) || 0,
+        montant_pec: parseFloat(entry.totalPart) || 0,
+        numero_de_feuille: entry.numero || "",
+        type_feuille: entry.type || "Consultation",
+        statut: "validee"
+      }).catch(err => console.warn("[Dossier patient] Synchronisation consultation échouée : " + err.message));
+    }
+  }).catch(err => console.warn("[Dossier patient] Recherche patient échouée : " + err.message));
 }
 
 document.getElementById("saveSoinsBtn").addEventListener("click", () => {
@@ -1653,12 +2182,16 @@ document.getElementById("saveSoinsBtn").addEventListener("click", () => {
 
 function pendingCount() { return state.historique.filter(h => h.statut === "En attente").length; }
 
-function refreshPendingBadge() {
+// count optionnel : nombre déjà calculé par renderMedecinQueue (qui exclut
+// les patients ayant déjà un dossier, voir plus bas) ; sinon, compte brut
+// de state.historique (utilisé par renderDashboardStats, sans ce filtrage
+// asynchrone).
+function refreshPendingBadge(count) {
   const badge = document.getElementById("medecinNavBadge");
   if (!badge) return;
-  const count = pendingCount();
-  badge.textContent = count;
-  badge.hidden = count === 0;
+  const n = count != null ? count : pendingCount();
+  badge.textContent = n;
+  badge.hidden = n === 0;
 }
 
 function renderDashboardStats() {
@@ -1681,12 +2214,66 @@ function parseFRDate(s) {
 }
 
 /* ---------------------------------------------------------------------- */
+/* Espace Médecin : liste des dossiers patients                           */
+/* ---------------------------------------------------------------------- */
+
+let medecinPatientsCache = [];
+
+function renderMedecinPatients() {
+  apiListPatients().then(list => {
+    medecinPatientsCache = list || [];
+    renderMedecinPatientsTable(document.getElementById("medecinPatientsSearch").value);
+  }).catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
+}
+
+function renderMedecinPatientsTable(filterText) {
+  const body = document.getElementById("medecinPatientsBody");
+  const empty = document.getElementById("medecinPatientsEmpty");
+  const needle = (filterText || "").trim().toLowerCase();
+  const list = !needle ? medecinPatientsCache : medecinPatientsCache.filter(p => {
+    const hay = ((p.prenom || "") + " " + (p.nom || "") + " " + (p.matricule_nag || "")).toLowerCase();
+    return hay.includes(needle);
+  });
+  empty.hidden = list.length > 0;
+  body.innerHTML = list.map(p => (
+    "<tr>" +
+      "<td>" + escapeHtml((p.prenom || "") + " " + (p.nom || "")) + "</td>" +
+      "<td>" + escapeHtml(p.matricule_nag || "—") + "</td>" +
+      "<td>" + (p.sex === "F" ? "Féminin" : (p.sex === "M" ? "Masculin" : "—")) + "</td>" +
+      "<td>" + (p.statut_assure ? "Assuré" : "Non assuré") + "</td>" +
+      "<td><button type=\"button\" class=\"btn-secondary btn-sm\" data-action=\"open-dossier\" data-id=\"" + p.id_patient + "\">Ouvrir le dossier</button></td>" +
+    "</tr>"
+  )).join("");
+  body.querySelectorAll('[data-action="open-dossier"]').forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = parseInt(btn.dataset.id, 10);
+      const p = medecinPatientsCache.find(x => x.id_patient === id);
+      if (p) openDossierPatient(mapBackendPatient(p));
+    });
+  });
+}
+
+document.getElementById("medecinPatientsSearch").addEventListener("input", e => {
+  renderMedecinPatientsTable(e.target.value);
+});
+
+/* ---------------------------------------------------------------------- */
 /* Espace Médecin : file d'attente des feuilles à valider                  */
 /* ---------------------------------------------------------------------- */
 
+// Vrai si ce patient (par matricule) a déjà au moins une consultation ou un
+// examen dans son Dossier Patient (voir apiListConsultations/
+// apiListExamensPatient). Utilisé pour ne plus montrer dans la file
+// d'attente les feuilles d'un patient déjà pris en charge par ailleurs —
+// évite les doublons quand plusieurs feuilles "En attente" existent pour la
+// même personne.
 function renderMedecinQueue() {
   const body = document.getElementById("medecinQueueBody");
   const empty = document.getElementById("medecinQueueEmpty");
+  // Une nouvelle consultation "En attente" reste dans la file du médecin même
+  // si le patient a déjà un dossier avec des consultations/examens validés
+  // par ailleurs — avoir déjà un dossier ne dispense jamais une nouvelle
+  // visite de passer par la validation médecin.
   const pending = state.historique.filter(h => h.statut === "En attente");
   body.innerHTML = "";
   empty.hidden = pending.length > 0;
@@ -1706,7 +2293,7 @@ function renderMedecinQueue() {
   body.querySelectorAll('[data-action="examine"]').forEach(btn => {
     btn.addEventListener("click", () => openSoinsForValidation(parseInt(btn.dataset.id, 10)));
   });
-  refreshPendingBadge();
+  refreshPendingBadge(pending.length);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1885,6 +2472,9 @@ function previewEntry(id) {
       "<div><b>Fonds</b><span>" + (h.fonds || "—") + "</span></div>" +
       "<div><b>Ticket modérateur</b><span>" + (h.ticketModerateur || "—") + "</span></div>" +
       "<div><b>Médecin</b><span>" + (h.medecin || "—") + "</span></div>" +
+      "<div><b>Quartier</b><span>" + escapeHtml(h.quartier || "—") + "</span></div>" +
+      "<div><b>Téléphone</b><span>" + escapeHtml(h.telephone || "—") + "</span></div>" +
+      "<div><b>Service</b><span>" + escapeHtml(h.service || "—") + "</span></div>" +
       "<div><b>Accident causé par un tiers</b><span>" + (h.accidentTiers || "—") + "</span></div>" +
       "<div><b>Soins liés à la grossesse</b><span>" + (h.grossesse || "—") + "</span></div>" +
       extraGrid +
@@ -2042,8 +2632,11 @@ function setUserModalMode(editing) {
   document.getElementById("u-pass-hint").hidden = !editing;
   // PUT /api/utilisateurs/{id} ne modifie pas la structure (pas de champ
   // dédié côté backend pour ça) : la rendre non éditable évite de laisser
-  // croire qu'un changement ici serait enregistré.
+  // croire qu'un changement ici serait enregistré. Même chose pour le nom
+  // d'utilisateur, non repris par cette route.
   document.getElementById("u-structure").disabled = editing;
+  document.getElementById("u-username").disabled = editing;
+  document.getElementById("u-username-hint").hidden = !editing;
 }
 
 document.getElementById("addUserBtn").addEventListener("click", () => {
@@ -2062,6 +2655,7 @@ function openUserModalForEdit(u) {
   document.getElementById("u-id").value = u.id_utilisateur;
   document.getElementById("u-nom").value = u.nom || "";
   document.getElementById("u-email").value = u.email || "";
+  document.getElementById("u-username").value = u.username || "";
   document.getElementById("u-role").value = API_ROLE_TO_FRONT_ROLE[u.role] || u.role;
   document.getElementById("u-structure").value = u.structure_nom || "";
   document.getElementById("u-pass").value = "";
@@ -2084,6 +2678,7 @@ document.getElementById("userForm").addEventListener("submit", e => {
   const prenom = parts.shift() || nomComplet;
   const nom = parts.join(" ") || "";
   const email = document.getElementById("u-email").value.trim();
+  const username = document.getElementById("u-username").value.trim().toLowerCase() || (email.split("@")[0] || "").toLowerCase();
   const role = document.getElementById("u-role").value;
 
   if (editingUserId != null) {
@@ -2105,7 +2700,7 @@ document.getElementById("userForm").addEventListener("submit", e => {
     // module "Structure" exposé par l'API pour choisir la vraie structure
     // (voir le PDF, "Périmètre connecté").
     apiRegister({
-      username: (email.split("@")[0] || "").toLowerCase(),
+      username: username,
       mot_de_passe: document.getElementById("u-pass").value || "changeme123",
       nom: nomComplet,
       email: email,
@@ -2125,7 +2720,7 @@ document.getElementById("userForm").addEventListener("submit", e => {
     nom: nom,
     prenom: prenom,
     email: email,
-    username: (email.split("@")[0] || "").toLowerCase(),
+    username: username,
     role: role,
     structure: document.getElementById("u-structure").value.trim(),
     dateCreation: todayFR(),
@@ -2329,7 +2924,7 @@ function renderPharmaResults(entries) {
       const partAssurance = servi ? num(med.partAssurance) : Math.round(prix * rate);
       const partPatient = servi ? num(med.partPatient) : (prix - Math.round(prix * rate));
       const actionCell = servi
-        ? '<span class="rx-served-note">Servi le ' + med.dateService + " — " + med.servicePar + "</span>"
+        ? '<span class="rx-served-note">Servi le ' + med.dateService + "</span>"
         : '<button type="button" class="btn-primary btn-sm" data-action="servir" data-entry="' + entry.id + '" data-idx="' + i + '">Servir</button>';
       return '<tr class="' + (servi ? "rx-row-done" : "") + '">' +
         "<td>" + med.designation + "</td>" +
@@ -2350,7 +2945,7 @@ function renderPharmaResults(entries) {
         '<span class="pill consultation">Consultation du ' + entry.date + "</span>" +
       "</div>" +
       '<div class="card-body" style="padding-top:0">' +
-        '<p class="hint" style="margin-top:0">Prescrit par <b>' + (entry.medecin || "—") + "</b>" + (entry.medecinEtab ? " — " + entry.medecinEtab : "") + "</p>" +
+        '<p class="hint" style="margin-top:0">Prescrit par <b>' + (entry.medecin || "—") + "</b>" + (entry.medecinEtab ? " — " + entry.medecinEtab : "") + (entry.medecinType ? " (" + entry.medecinType + ")" : "") + "</p>" +
       "</div>" +
       '<div class="card-body" style="padding:0">' +
         '<table class="data-table">' +

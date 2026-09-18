@@ -608,6 +608,9 @@ a { color: var(--blue); }
   padding: 16px 28px;
   background: var(--white);
   border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 40;
 }
 .topbar h2 { margin: 0; font-size: 17px; }
 .topbar-title-row { display: flex; align-items: center; gap: 10px; }
@@ -867,7 +870,7 @@ a { color: var(--blue); }
 }
 .chip:hover { border-color: var(--green); }
 .chip.active { background: var(--green); border-color: var(--green); color: #fff; }
-.choice-group select {
+.choice-group select, .choice-group input[type="text"] {
   width: 100%;
   max-width: 420px;
   padding: 10px 12px;
@@ -947,6 +950,9 @@ a { color: var(--blue); }
 }
 .card-head h3 { margin: 0; font-size: 14.5px; }
 .card-body { padding: 18px; }
+.input-sm {
+  padding: 8px 11px; border: 1px solid var(--border); border-radius: 7px; font-size: 12.5px;
+}
 
 .search-row {
   display: flex;
@@ -1164,6 +1170,18 @@ a { color: var(--blue); }
   border-radius: 16px;
   box-shadow: 0 8px 22px rgba(20, 40, 25, .08);
 }
+/* Patient habitué (plusieurs consultations déjà validées) vs. patient
+   jamais consulté — voir showAssureCard() dans app.js. */
+.assure-photo-col.patient-frequent {
+  background: linear-gradient(180deg, #fff 0%, #e2f5e6 100%);
+  border-color: var(--green);
+  box-shadow: 0 8px 22px rgba(45, 125, 69, .18);
+}
+.assure-photo-col.patient-new {
+  background: linear-gradient(180deg, #fff 0%, #eef1f4 100%);
+  border-color: #8a97a6;
+  box-shadow: 0 8px 22px rgba(30, 40, 50, .12);
+}
 .assure-photo-frame {
   width: 128px; height: 128px; border-radius: 22px;
   display: flex; align-items: center; justify-content: center;
@@ -1193,6 +1211,26 @@ a { color: var(--blue); }
 }
 @media (max-width: 760px) {
   .assure-photo-col { width: 100%; }
+}
+
+/* Dossier patient */
+.dossier-patient-info {
+  display: flex; align-items: center; gap: 24px; flex-wrap: wrap;
+}
+.dossier-patient-info .assure-meta-vert {
+  border-top: none; margin-top: 0; padding-top: 0; text-align: left;
+}
+.dossier-tabs {
+  display: flex; gap: 10px; margin: 18px 0 14px;
+}
+.dossier-tab-btn {
+  flex: 1; padding: 12px 18px; border-radius: 12px; border: 1px solid var(--border);
+  background: #fff; color: var(--ink); font-weight: 800; letter-spacing: .4px;
+  cursor: pointer; transition: background .15s, color .15s, border-color .15s;
+}
+.dossier-tab-btn:hover { background: var(--green-bg); }
+.dossier-tab-btn.active {
+  background: var(--green-dark); border-color: var(--green-dark); color: #fff;
 }
 
 /* Tables (historique / users) */
@@ -1226,6 +1264,7 @@ table.data-table tr:hover td { background: #fafcfa; }
 .pill.inactif { background: #fbe6e6; color: var(--red); }
 .pill.examen { background: #e5edfa; color: var(--blue); }
 .pill.attente { background: #fbf0da; color: #8a5a06; }
+.pill.rejetee { background: #fbe6e6; color: var(--red); }
 .row-actions { display: flex; gap: 6px; }
 .icon-btn {
   border: 1px solid var(--border);
@@ -1296,6 +1335,16 @@ table.data-table tr:hover td { background: #fafcfa; }
   background: var(--red); color: #fff; font-weight: 600; font-size: 13px; cursor: pointer;
 }
 .btn-danger:hover { background: #a30000; }
+.btn-danger-outline {
+  padding: 10px 18px; border: 1px solid var(--red); border-radius: 8px;
+  background: #fff; color: var(--red); font-weight: 600; font-size: 13px; cursor: pointer;
+}
+.btn-danger-outline:hover { background: #fdecec; }
+
+/* Topbar : actions contextuelles à la feuille de soins (bon d'examen lié) */
+.topbar-exam-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.topbar-exam-actions button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.topbar-exam-actions button svg { flex: none; }
 
 .modal-lg { max-width: 640px; }
 #previewBody { display: block; padding: 18px 20px; max-height: 70vh; overflow-y: auto; }
@@ -1475,6 +1524,12 @@ table.presta input.num { text-align: right; }
 table.presta input:focus, table.presta select:focus { outline: 2px solid var(--theme); outline-offset: -2px; }
 table.presta select:disabled { color: var(--muted); }
 
+/* Bon d'examen : seule la désignation reste visible (cotation / ticket
+   modérateur / montant CNAMGS masqués, colonnes générées en JS incluses). */
+.exam-designation-only td:nth-child(2),
+.exam-designation-only td:nth-child(3),
+.exam-designation-only td:nth-child(4) { display: none; }
+
 /* Espace Pharmacien : ligne d'un médicament déjà servi ailleurs — visible,
    non modifiable (motif du champ verrouillé), jamais masquée. */
 .rx-row-done { opacity: .6; }
@@ -1538,11 +1593,6 @@ table.presta select:disabled { color: var(--muted); }
 .exam-switch-btn.back { background: var(--green); box-shadow: 0 2px 8px rgba(47,125,69,.25); }
 .exam-switch-btn.back:hover { background: var(--green-dark); box-shadow: 0 4px 14px rgba(47,125,69,.35); }
 .exam-switch-btn.back:hover .arrow.back { transform: translateX(-3px); }
-.exam-switch-links { display: flex; align-items: center; gap: 16px; margin: 8px 2px 0; flex-wrap: wrap; }
-.exam-switch-add { display: inline-block; margin: 0; }
-.exam-switch-remove { display: inline-block; margin: 0; color: var(--red); opacity: .85; }
-.exam-switch-remove:hover { opacity: 1; }
-
 @media (max-width: 980px) {
   .sidebar { position: fixed; z-index: 40; transform: translateX(-100%); transition: transform .2s; }
   .sidebar.open { transform: translateX(0); }
