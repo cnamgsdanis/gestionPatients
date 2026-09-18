@@ -162,6 +162,17 @@
       </div>
       <div class="topbar-clock" id="topbarClock"></div>
 
+      <div class="topbar-exam-actions" id="topbarExamActions">
+        <button type="button" class="btn-secondary btn-sm" id="examSwitchAddAnother" hidden>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M12 5v14M5 12h14"/></svg>
+          Créer un autre bon d'examen
+        </button>
+        <button type="button" class="btn-danger-outline btn-sm" id="examSwitchRemove" hidden>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg>
+          Retirer le bon d'examen
+        </button>
+      </div>
+
       <div class="user-menu" id="userMenu">
         <button type="button" class="user-pill" id="userMenuTrigger" aria-haspopup="true" aria-expanded="false">
           <div class="avatar">AN</div>
@@ -538,7 +549,7 @@
 
             <div class="assure-found" id="assureFound" hidden>
               <div class="assure-split">
-                <div class="assure-photo-col">
+                <div class="assure-photo-col" id="assurePhotoCol">
                   <div class="assure-photo-frame" id="af-avatar"></div>
                   <div class="idname" id="af-nom">—</div>
                   <span class="badge" id="af-situation">—</span>
@@ -547,11 +558,12 @@
                     <div><b id="af-naissance">—</b>Date de naissance</div>
                     <div><b id="af-fonds">—</b>Fonds</div>
                   </div>
-                  <button type="button" class="btn-secondary btn-sm" id="changeAssureBtn">Changer d'assuré</button>
+                  <button type="button" class="btn-secondary btn-sm" id="changeAssureBtn" hidden>Changer d'assuré</button>
                   <div style="display:flex;gap:8px;margin-top:8px">
-                    <button type="button" class="btn-secondary btn-sm" id="editPatientBtn">Modifier</button>
-                    <button type="button" class="btn-secondary btn-sm" id="deletePatientBtn" style="color:var(--red);border-color:var(--red)">Supprimer</button>
+                    <button type="button" class="btn-secondary btn-sm" id="editPatientBtn" hidden>Modifier</button>
+                    <button type="button" class="btn-secondary btn-sm" id="deletePatientBtn" style="color:var(--red);border-color:var(--red)" hidden>Supprimer</button>
                   </div>
+                  <button type="button" class="btn-primary btn-sm" id="openDossierPatientBtn" style="margin-top:8px;width:100%" hidden>Dossier patient</button>
                 </div>
 
                 <div class="assure-pec-col">
@@ -571,26 +583,42 @@
                     <select id="medecinSelect"></select>
                   </div>
 
+                  <div class="choice-group">
+                    <label for="pec-quartier">Quartier</label>
+                    <input type="text" id="pec-quartier" placeholder="Ex. Akanda, Glass, Nzeng-Ayong…" />
+                  </div>
+
+                  <div class="choice-group">
+                    <label for="pec-telephone">Numéro de téléphone</label>
+                    <input type="text" id="pec-telephone" placeholder="Ex. 077 12 34 56" />
+                  </div>
+
+                  <div class="choice-group">
+                    <label for="pec-service">Service où l'assuré va se faire consulter</label>
+                    <select id="pec-service">
+                      <option value="">— Choisir un service —</option>
+                      <option>Médecine générale</option>
+                      <option>Pédiatrie</option>
+                      <option>Gynécologie-Obstétrique</option>
+                      <option>Cardiologie</option>
+                      <option>Chirurgie générale</option>
+                      <option>Dermatologie</option>
+                      <option>ORL</option>
+                      <option>Ophtalmologie</option>
+                      <option>Radiologie</option>
+                      <option>Laboratoire d'analyses</option>
+                      <option>Autre</option>
+                    </select>
+                  </div>
+
                   <div class="hint" id="readyHint">Sélectionnez un patient, un ticket modérateur et un médecin pour continuer.</div>
 
                   <div class="type-buttons">
-                    <button type="button" class="type-btn" id="btnConsultation" disabled>
-                      <span class="ic">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v6a4 4 0 0 0 8 0V3"/><path d="M10 15v2a4 4 0 0 0 8 0v-2"/><circle cx="19" cy="8" r="1.6"/></svg>
-                      </span>
-                      <span>
-                        <span class="tt">Consultation</span>
-                        <span class="ds">Ouvrir la feuille de soins</span>
-                      </span>
+                    <button type="button" class="btn-primary" id="enregistrerPecBtn" disabled style="flex:1;text-align:center">
+                      Enregistrer
                     </button>
-                    <button type="button" class="type-btn" id="btnExamen" disabled>
-                      <span class="ic">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 2h6"/><path d="M10 2v6.5L4.5 18a2 2 0 0 0 1.8 3h11.4a2 2 0 0 0 1.8-3L14 8.5V2"/><path d="M7.5 14h9"/></svg>
-                      </span>
-                      <span>
-                        <span class="tt">Examen</span>
-                        <span class="ds">Ouvrir le bon d'examen</span>
-                      </span>
+                    <button type="button" class="btn-secondary" id="nouvellePecConsultationBtn" hidden style="flex:1;text-align:center">
+                      Nouvelle consultation
                     </button>
                   </div>
                 </div>
@@ -600,18 +628,41 @@
         </div>
       </section>
  
-      <!-- ---------------- ESPACE MÉDECIN (file d'attente de validation) ---------------- -->
+      <!-- ---------------- ESPACE MÉDECIN ---------------- -->
       <section class="view" id="view-medecin" hidden>
         <div class="page-hero">
           <div class="page-hero-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v6a4 4 0 0 0 8 0V3"/><path d="M10 15v2a4 4 0 0 0 8 0v-2"/><circle cx="19" cy="8" r="1.6"/></svg></div>
           <div class="page-hero-text">
             <h1>Espace Médecin</h1>
-            <p>File d'attente des feuilles de soins à valider — consultations et bons d'examen envoyés par les agents.</p>
+            <p>Dossiers patients — informations générales, consultations et examens.</p>
           </div>
         </div>
+
         <div class="card">
           <div class="card-head">
-            <h3>Feuilles de soins à valider</h3>
+            <h3>Dossiers patients</h3>
+            <input type="text" id="medecinPatientsSearch" class="input-sm" placeholder="Rechercher un patient (nom, matricule)…" style="max-width:260px" />
+          </div>
+          <div class="card-body" style="padding:0">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Patient</th>
+                  <th>Matricule</th>
+                  <th>Sexe</th>
+                  <th>Statut assuré</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="medecinPatientsBody"></tbody>
+            </table>
+            <div class="empty-state" id="medecinPatientsEmpty" hidden>Aucun patient trouvé.</div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <div class="card-head">
+            <h3>Feuilles en attente de validation</h3>
           </div>
           <div class="card-body" style="padding:0">
             <table class="data-table">
@@ -808,7 +859,7 @@
                 <div class="grp">Code affection <input type="text" id="presta-code" /></div>
               </div>
  
-              <div class="totals">
+              <div class="totals" hidden>
                 <div class="t-row"><span>Total montant</span><input type="text" id="totalMontant" value="0" /></div>
                 <div class="t-row"><span>Total ticket modérateur</span><input type="text" id="totalTm" value="0" /></div>
                 <div class="t-row"><span>Total à payer par la CNAMGS</span><input type="text" id="totalPart" value="0" /></div>
@@ -868,13 +919,13 @@
 
             <div class="section-head">Examens</div>
             <div class="section-body">
-              <table class="presta">
+              <table class="presta exam-designation-only">
                 <thead>
                   <tr>
-                    <th style="width:34%">Désignation de l'examen</th>
-                    <th style="width:22%">Cotation</th>
-                    <th style="width:22%">Ticket modérateur</th>
-                    <th>Montant CNAMGS</th>
+                    <th>Désignation de l'examen</th>
+                    <th hidden>Cotation</th>
+                    <th hidden>Ticket modérateur</th>
+                    <th hidden>Montant CNAMGS</th>
                   </tr>
                 </thead>
                 <tbody id="examenBody"></tbody>
@@ -953,10 +1004,6 @@
                 <svg class="arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
               </button>
             </div>
-            <div class="exam-switch-links">
-              <button type="button" class="link-btn exam-switch-add" id="examSwitchAddAnother" hidden>+ Créer un autre bon d'examen</button>
-              <button type="button" class="link-btn exam-switch-remove" id="examSwitchRemove" hidden>Retirer le bon d'examen</button>
-            </div>
           </div>
 
           <div class="soins-actions">
@@ -966,7 +1013,70 @@
         </div>
         </div>
       </section>
- 
+
+      <!-- ---------------- DOSSIER PATIENT ---------------- -->
+      <section class="view" id="view-dossier-patient" hidden>
+        <div class="page-hero">
+          <div class="page-hero-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v6a4 4 0 0 0 8 0V3"/><path d="M10 15v2a4 4 0 0 0 8 0v-2"/><circle cx="19" cy="8" r="1.6"/></svg></div>
+          <div class="page-hero-text">
+            <h1 id="dpHeading">Dossier patient</h1>
+            <p>Informations générales du patient et historique de ses consultations et examens.</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-body dossier-patient-info">
+            <div class="assure-photo-frame" id="dp-avatar"></div>
+            <div class="assure-meta assure-meta-vert">
+              <div class="idname" id="dp-nom" style="margin-bottom:6px">—</div>
+              <div><b id="dp-matricule">—</b>Matricule</div>
+              <div><b id="dp-sexe">—</b>Sexe</div>
+              <div><b id="dp-naissance">—</b>Date de naissance</div>
+              <div><b id="dp-adresse">—</b>Adresse</div>
+              <div><b id="dp-telephone">—</b>Téléphone</div>
+              <div><b id="dp-statut">—</b>Statut assuré</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="dossier-tabs">
+          <button type="button" class="dossier-tab-btn active" id="dpTabConsultationsBtn">CONSULTATIONS</button>
+          <button type="button" class="dossier-tab-btn" id="dpTabExamensBtn">EXAMENS</button>
+        </div>
+
+        <div class="card" id="dpConsultationsPanel">
+          <div class="card-head">
+            <h3>Consultations</h3>
+            <button type="button" class="btn-primary" id="addConsultationBtn">+ Nouvelle consultation</button>
+          </div>
+          <div class="card-body" style="padding:0">
+            <table class="data-table">
+              <thead>
+                <tr><th>Date</th><th>Médecin</th><th>N° feuille</th><th>Statut</th><th>Actions</th></tr>
+              </thead>
+              <tbody id="dpConsultationsBody"></tbody>
+            </table>
+            <div class="hint" id="dpConsultationsEmpty" style="padding:16px" hidden>Aucune consultation enregistrée pour ce patient.</div>
+          </div>
+        </div>
+
+        <div class="card" id="dpExamensPanel" hidden>
+          <div class="card-head">
+            <h3>Examens</h3>
+            <button type="button" class="btn-primary" id="addExamenBtn">+ Nouvel examen</button>
+          </div>
+          <div class="card-body" style="padding:0">
+            <table class="data-table">
+              <thead>
+                <tr><th>Date</th><th>Type d'examen</th><th>Médecin</th><th>Montant</th><th>Statut</th></tr>
+              </thead>
+              <tbody id="dpExamensBody"></tbody>
+            </table>
+            <div class="hint" id="dpExamensEmpty" style="padding:16px" hidden>Aucun examen enregistré pour ce patient.</div>
+          </div>
+        </div>
+      </section>
+
       <!-- ---------------- HISTORIQUE ---------------- -->
       <section class="view" id="view-historique" hidden>
         <div class="page-hero">
@@ -1326,6 +1436,11 @@
         <input type="email" id="u-email" required />
       </div>
       <div class="field">
+        <label>Nom d'utilisateur</label>
+        <input type="text" id="u-username" placeholder="ex. a.ndong" />
+        <p class="hint" id="u-username-hint" style="margin-bottom:0" hidden>Le nom d'utilisateur d'un compte existant ne peut pas être modifié ici.</p>
+      </div>
+      <div class="field">
         <label>Rôle</label>
         <select id="u-role">
           <option>Super Admin</option>
@@ -1391,6 +1506,14 @@
         <input type="text" id="p-contact" />
       </div>
       <div class="field">
+        <label for="p-adresse">Adresse</label>
+        <input type="text" id="p-adresse" />
+      </div>
+      <div class="field">
+        <label for="p-date-naissance">Date de naissance</label>
+        <input type="date" id="p-date-naissance" />
+      </div>
+      <div class="field">
         <label for="p-fonds">Fonds</label>
         <select id="p-fonds">
           <option value="1">Public</option>
@@ -1410,6 +1533,39 @@
     <div class="modal-foot">
       <button type="button" class="btn-secondary" id="cancelPatientModal">Annuler</button>
       <button type="submit" form="patientForm" class="btn-primary" id="patientModalSubmitBtn">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= MODALE DÉMARRAGE FEUILLE DE SOINS (dossier patient) ======================= -->
+<div class="modal-overlay" id="dpSoinsStartModal" hidden>
+  <div class="modal modal-accent-blue">
+    <div class="modal-head">
+      <h3><span id="dpSoinsStartTitle">Nouvelle consultation</span></h3>
+      <button class="close-x" id="closeDpSoinsStartModal">&times;</button>
+    </div>
+    <div class="modal-body" style="display:block">
+      <div class="choice-group" style="margin-top:0">
+        <label>Ticket modérateur</label>
+        <div class="chip-row" id="dpTmChoices">
+          <button type="button" class="chip" data-tm="Plein">Plein</button>
+          <button type="button" class="chip" data-tm="Plein (ALD)">Plein (ALD)</button>
+          <button type="button" class="chip" data-tm="Exonéré">Exonéré</button>
+        </div>
+      </div>
+      <div class="choice-group" id="dpMedecinKnownWrap" hidden>
+        <label>Médecin</label>
+        <p class="hint" id="dpMedecinKnownLabel" style="margin:0"></p>
+      </div>
+      <div class="choice-group" id="dpMedecinPickWrap">
+        <label for="dp-medecin-search">Médecin</label>
+        <input type="text" id="dp-medecin-search" class="input-sm" style="width:100%;margin-bottom:8px" placeholder="Rechercher un médecin (nom, établissement)…" />
+        <select id="dp-medecin-select"></select>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn-secondary" id="cancelDpSoinsStartModal">Annuler</button>
+      <button type="button" class="btn-primary" id="dpSoinsStartContinueBtn" disabled>Continuer</button>
     </div>
   </div>
 </div>

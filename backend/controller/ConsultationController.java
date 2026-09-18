@@ -2,9 +2,9 @@ package controller;
 
 import com.google.gson.Gson;
 import com.sun.net.httpserver.HttpExchange;
-import dao.ExamenDAO;
+import dao.ConsultationDAO;
 import io.jsonwebtoken.Claims;
-import model.Examen;
+import model.Consultation;
 import security.AuthGuard;
 import service.JwtService;
 
@@ -15,15 +15,17 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Contrôleur HTTP des examens (module "Dossier Patient").
- * CRÉER / LIRE / MODIFIER uniquement — pas de suppression (voir ExamenDAO).
- * Permissions requises : examen.lire / examen.creer / examen.modifier.
+ * Contrôleur HTTP des consultations (module "Dossier Patient").
+ * CRÉER / LIRE / MODIFIER uniquement — pas de suppression (voir
+ * ConsultationDAO). Permissions requises : prestation.lire / prestation.creer
+ * / prestation.modifier (déjà réservées pour ce module, voir
+ * backend/docs/04-permission.md).
  */
-public class ExamenController {
+public class ConsultationController {
 
-    private final ExamenDAO  dao        = new ExamenDAO();
-    private final Gson       gson        = new Gson();
-    private final JwtService jwtService  = new JwtService();
+    private final ConsultationDAO dao        = new ConsultationDAO();
+    private final Gson            gson        = new Gson();
+    private final JwtService      jwtService  = new JwtService();
 
     public void handle(HttpExchange ex) throws IOException {
         String method = ex.getRequestMethod();
@@ -32,7 +34,7 @@ public class ExamenController {
                 case "GET"    -> handleGet(ex);
                 case "POST"   -> handlePost(ex);
                 case "PUT"    -> handlePut(ex);
-                case "DELETE" -> sendJson(ex, 405, "{\"error\":\"Suppression non autorisee pour un examen\"}");
+                case "DELETE" -> sendJson(ex, 405, "{\"error\":\"Suppression non autorisee pour une consultation\"}");
                 default       -> sendJson(ex, 405, "{\"error\":\"Methode non autorisee\"}");
             }
         } catch (Exception e) {
@@ -42,19 +44,19 @@ public class ExamenController {
     }
 
     // ============================================================
-    // GET /api/examens?id_patient={id}  → examens d'un patient
-    // GET /api/examens/{id}             → un examen
-    //  Permission requise : examen.lire
+    // GET /api/consultations?id_patient={id}  → consultations d'un patient
+    // GET /api/consultations/{id}              → une consultation
+    //  Permission requise : prestation.lire
     // ============================================================
     private void handleGet(HttpExchange ex) throws Exception {
-        if (!AuthGuard.verifierPermission(ex, "examen.lire")) return;
+        if (!AuthGuard.verifierPermission(ex, "prestation.lire")) return;
 
         String[] parts = ex.getRequestURI().getPath().split("/");
         if (parts.length == 4) {
             int id = Integer.parseInt(parts[3]);
-            Examen e = dao.findById(id);
-            if (e == null) sendJson(ex, 404, "{\"error\":\"Examen introuvable\"}");
-            else           sendJson(ex, 200, gson.toJson(e));
+            Consultation c = dao.findById(id);
+            if (c == null) sendJson(ex, 404, "{\"error\":\"Consultation introuvable\"}");
+            else           sendJson(ex, 200, gson.toJson(c));
             return;
         }
 
@@ -64,45 +66,45 @@ public class ExamenController {
             sendJson(ex, 400, "{\"error\":\"Parametre id_patient requis\"}");
             return;
         }
-        List<Examen> liste = dao.findAllByPatient(Integer.parseInt(idPatientStr));
+        List<Consultation> liste = dao.findAllByPatient(Integer.parseInt(idPatientStr));
         sendJson(ex, 200, gson.toJson(liste));
     }
 
     // ============================================================
-    // POST /api/examens  → créer un examen
-    //  Permission requise : examen.creer
+    // POST /api/consultations  → créer une consultation
+    //  Permission requise : prestation.creer
     //  Le médecin (id_medecin) et la structure (id_structure) sont pris du
     //  token JWT de l'utilisateur connecté, jamais du corps de la requête.
     // ============================================================
     private void handlePost(HttpExchange ex) throws Exception {
-        if (!AuthGuard.verifierPermission(ex, "examen.creer")) return;
+        if (!AuthGuard.verifierPermission(ex, "prestation.creer")) return;
 
         Claims claims = AuthGuard.verifier(ex);
         if (claims == null) return;
 
-        Examen e = gson.fromJson(readBody(ex), Examen.class);
-        e.id_medecin   = jwtService.getIdUtilisateur(claims);
-        e.id_structure = jwtService.getIdStructure(claims);
-        if (e.statut == null || e.statut.isBlank()) e.statut = "en_attente";
+        Consultation c = gson.fromJson(readBody(ex), Consultation.class);
+        c.id_medecin   = jwtService.getIdUtilisateur(claims);
+        c.id_structure = jwtService.getIdStructure(claims);
+        if (c.statut == null || c.statut.isBlank()) c.statut = "en_attente";
 
-        Examen created = dao.insert(e);
+        Consultation created = dao.insert(c);
         sendJson(ex, 201, gson.toJson(created));
     }
 
     // ============================================================
-    // PUT /api/examens/{id}  → modifier un examen
-    //  Permission requise : examen.modifier
+    // PUT /api/consultations/{id}  → modifier une consultation
+    //  Permission requise : prestation.modifier
     // ============================================================
     private void handlePut(HttpExchange ex) throws Exception {
-        if (!AuthGuard.verifierPermission(ex, "examen.modifier")) return;
+        if (!AuthGuard.verifierPermission(ex, "prestation.modifier")) return;
 
         String[] parts = ex.getRequestURI().getPath().split("/");
         int id = Integer.parseInt(parts[3]);
-        Examen e = gson.fromJson(readBody(ex), Examen.class);
-        e.id_examen = id;
-        boolean ok = dao.update(e);
+        Consultation c = gson.fromJson(readBody(ex), Consultation.class);
+        c.id_prestation = id;
+        boolean ok = dao.update(c);
         sendJson(ex, ok ? 200 : 404,
-                 ok ? "{\"message\":\"Modifie\"}" : "{\"error\":\"Introuvable\"}");
+                 ok ? "{\"message\":\"Modifiee\"}" : "{\"error\":\"Introuvable\"}");
     }
 
     // ---- Helpers ----

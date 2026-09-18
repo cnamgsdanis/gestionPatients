@@ -55,16 +55,28 @@ cœur métier de l'application (le frontend l'a déjà entièrement, en local) n
       `Utilisateur.id_structure` (aujourd'hui affiché "Structure #N" côté front, faute de mieux), et
       proposer un vrai sélecteur de structure dans "Ajouter un utilisateur" (au lieu d'un ID fixé à 1
       en dur côté front).
-- [ ] **Prise en charge** — aucune notion de "prise en charge" côté API. C'est le blocage principal :
-      tant que ce module n'existe pas, "Nouvelle prise en charge" (le cœur de l'application) ne pourra
-      jamais être branché sur de vraies données.
-- [ ] **Prestation** — le code de permission `prestation.lire` / `prestation.creer` existe déjà dans le
-      module Permission (table de référence), mais aucune route ne les utilise. Nécessaire pour la
-      feuille de soins (Consultation).
+- [x] **Prise en charge / Prestation / Examen — module "Dossier Patient" (Consultations + Examens)** —
+      ✅ posé le 18/09/2026, pour le périmètre défini par la spec Dossier Patient : `ConsultationController`
+      / `ConsultationDAO` (routes `/api/consultations`, `GET/POST/PUT` seulement — délibérément pas de
+      `DELETE`, la spec interdit de supprimer une consultation) et `ExamenController` / `ExamenDAO`
+      (routes `/api/examens`, même principe CREATE/READ/UPDATE sans DELETE). Une consultation reste
+      composée d'une ligne `Prestation` (`type_prestation='consultation'`) + une ligne `Prise_en_charge`
+      liée (pas de nouvelle table) ; un examen d'une ligne `Prestation` (`type_prestation='examen'`) +
+      une ligne `Examen` liée — voir `model/Consultation.java` et `model/Examen.java` pour le détail.
+      Nouveaux codes de permission `prestation.modifier`, `examen.lire`, `examen.creer`, `examen.modifier`
+      (jamais de `*.supprimer`) : voir `tools/migration-dossier-patient.sql` (ajoute aussi `Patient.adresse`,
+      requis par la spec et absent du schéma initial) et `backend/docs/04-permission.md`, mis à jour.
+      **Reste hors périmètre, non traité ici** : la création "générique" d'une Prestation pour les types
+      `pharmacie`/`hospitalisation`, et le flux complet de "Nouvelle prise en charge" (ticket modérateur,
+      calcul du montant CNAMGS, sélection de l'assuré...) — ce point ci-dessous reste donc ouvert tel quel.
+- [ ] **Nouvelle prise en charge (flux complet)** — la recherche d'un assuré par matricule est branchée
+      (voir §3), mais la création de la prise en charge elle-même (ticket modérateur, type de soins,
+      calcul du montant CNAMGS...) n'a pas d'équivalent API. Le module Consultations du Dossier Patient
+      (ci-dessus) couvre un besoin voisin mais plus restreint (lié à un patient déjà identifié, pas de
+      calcul de ticket modérateur) ; les deux ne sont pas encore réconciliés.
 - [ ] **Ordonnance** — codes de permission `ordonnance.lire` / `ordonnance.creer` /
       `ordonnance.delivrer` déjà réservés, mais pas de route. Nécessaire pour l'Ordonnance (côté
       médecin) et l'Espace Pharmacien (délivrance).
-- [ ] **Examen** — pas de module ni de code de permission dédié. Nécessaire pour le bon d'examen.
 
 > Une fois ces modules posés côté API, le frontend a déjà tout le code d'affichage prêt — il "suffira"
 > d'écrire l'équivalent de `frontend/api.js` pour ces entités (voir §3 ci-dessous) en suivant le même

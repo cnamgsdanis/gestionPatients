@@ -14,6 +14,8 @@ import controller.AuthController;
 import controller.PatientController;
 import controller.UtilisateurController;
 import controller.PermissionController;
+import controller.ConsultationController;
+import controller.ExamenController;
 import service.PermissionService;
 import controller.StructureController;
 import controller.OrdonnanceController;
@@ -22,7 +24,6 @@ import controller.PrestationController;
 import service.CouvertureService;
 import service.TarifService;
 import controller.PharmacieController;
-import controller.ExamenController;
 import controller.PriseEnChargeController;
 
 // Import pour définir l'adresse (IP + port) du serveur
@@ -56,6 +57,7 @@ public class index {
         MedicamentController medicamentController = new MedicamentController();
         PrestationController prestationController = new PrestationController();
         PharmacieController pharmacieController = new PharmacieController();
+        ConsultationController consultationController = new ConsultationController();
         ExamenController examenController = new ExamenController();
         PriseEnChargeController pecController = new PriseEnChargeController();
 
@@ -64,6 +66,8 @@ public class index {
         // - /api/auth/* → géré par AuthController
         // - /api/patients/* → géré par PatientController
         // - /api/utilisateurs/* → géré par UtilisateurController
+        // - /api/consultations/* → géré par ConsultationController (dossier patient)
+        // - /api/examens/* → géré par ExamenController (dossier patient)
         // Le "::handle" est une référence de méthode (Java 8+).
         // ------------------------------------------------------------
         server.createContext("/api/auth", authController::handle);
@@ -75,6 +79,7 @@ public class index {
         server.createContext("/api/medicaments", medicamentController::handle);
         server.createContext("/api/prestations", prestationController::handle);
         server.createContext("/api/pharmacie", pharmacieController::handle);
+        server.createContext("/api/consultations", consultationController::handle);
         server.createContext("/api/examens", examenController::handle);
         server.createContext("/api/prises-en-charge", pecController::handle);
 
@@ -89,7 +94,6 @@ public class index {
         // 5. Démarrage du serveur
         // ------------------------------------------------------------
         PermissionService.init(); // Charge les permissions en mémoire
-        PermissionService.init();
         service.CouvertureService.init();
         service.TarifService.init();
         server.start();
@@ -103,6 +107,8 @@ public class index {
         System.out.println("  POST /api/auth/login");
         System.out.println("  GET/POST/PUT/DELETE /api/patients");
         System.out.println("  GET/PUT/DELETE      /api/utilisateurs (admin)");
+        System.out.println("  GET/POST/PUT        /api/consultations (pas de DELETE)");
+        System.out.println("  GET/POST/PUT        /api/examens (pas de DELETE)");
         System.out.println("================= API DO BY DANIS@TECH END EVANN ===================");
     }
 }

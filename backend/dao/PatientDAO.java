@@ -122,9 +122,9 @@ public class PatientDAO {
     // ------------------------------------------------------------
     public int insert(Patient p) throws SQLException {
         String sql = "INSERT INTO Patient "
-                   + "(photo_url, prenom, nom, sex, contact, "
+                   + "(photo_url, prenom, nom, sex, contact, adresse, date_naissance, "
                    + " statut_assure, fonds, matricule_nag, id_assure_principal) "
-                   + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                   + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
         try (Connection c = Database.getConnection();
              PreparedStatement ps = c.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
@@ -137,10 +137,12 @@ public class PatientDAO {
             ps.setString (3, p.nom);
             ps.setString (4, p.sex);
             ps.setString (5, p.contact);
-            ps.setBoolean(6, p.statut_assure);
-            ps.setObject (7, p.fonds);
-            ps.setInt    (8, nag);
-            ps.setObject (9, p.id_assure_principal);
+            ps.setString (6, p.adresse);
+            ps.setObject (7, (p.date_naissance != null && !p.date_naissance.isBlank()) ? Date.valueOf(p.date_naissance) : null);
+            ps.setBoolean(8, p.statut_assure);
+            ps.setObject (9, p.fonds);
+            ps.setInt    (10, nag);
+            ps.setObject (11, p.id_assure_principal);
 
             ps.executeUpdate();
 
@@ -156,7 +158,7 @@ public class PatientDAO {
     // ------------------------------------------------------------
     public boolean update(Patient p) throws SQLException {
         String sql = "UPDATE Patient SET "
-                   + "photo_url=?, prenom=?, nom=?, sex=?, contact=?, "
+                   + "photo_url=?, prenom=?, nom=?, sex=?, contact=?, adresse=?, date_naissance=?, "
                    + "statut_assure=?, fonds=?, matricule_nag=?, id_assure_principal=? "
                    + "WHERE id_patient=?";
 
@@ -168,11 +170,13 @@ public class PatientDAO {
             ps.setString (3, p.nom);
             ps.setString (4, p.sex);
             ps.setString (5, p.contact);
-            ps.setBoolean(6, p.statut_assure);
-            ps.setObject (7, p.fonds);
-            ps.setObject (8, p.matricule_nag);
-            ps.setObject (9, p.id_assure_principal);
-            ps.setInt    (10, p.id_patient);
+            ps.setString (6, p.adresse);
+            ps.setObject (7, (p.date_naissance != null && !p.date_naissance.isBlank()) ? Date.valueOf(p.date_naissance) : null);
+            ps.setBoolean(8, p.statut_assure);
+            ps.setObject (9, p.fonds);
+            ps.setObject (10, p.matricule_nag);
+            ps.setObject (11, p.id_assure_principal);
+            ps.setInt    (12, p.id_patient);
 
             return ps.executeUpdate() > 0;
         }
@@ -194,13 +198,16 @@ public class PatientDAO {
     // ------------------------------------------------------------
     private Patient map(ResultSet rs) throws SQLException {
         Patient p = new Patient();
-        p.id_patient    = rs.getInt("id_patient");
-        p.photo_url     = rs.getString("photo_url");
-        p.prenom        = rs.getString("prenom");
-        p.nom           = rs.getString("nom");
-        p.sex           = rs.getString("sex");
-        p.contact       = rs.getString("contact");
-        p.statut_assure = rs.getBoolean("statut_assure");
+        p.id_patient          = rs.getInt("id_patient");
+        p.photo_url           = rs.getString("photo_url");
+        p.prenom              = rs.getString("prenom");
+        p.nom                 = rs.getString("nom");
+        p.sex                 = rs.getString("sex");
+        p.contact             = rs.getString("contact");
+        p.adresse             = rs.getString("adresse");
+        Date dateNaissance    = rs.getDate("date_naissance");
+        p.date_naissance      = dateNaissance == null ? null : dateNaissance.toString();
+        p.statut_assure       = rs.getBoolean("statut_assure");
 
         int fonds = rs.getInt("fonds");
         p.fonds = rs.wasNull() ? null : fonds;

@@ -48,6 +48,8 @@ CREATE TABLE Patient (
     sex                 NVARCHAR(10)  NOT NULL
         CONSTRAINT CK_Patient_sex CHECK (sex IN ('M', 'F')),
     contact             NVARCHAR(100) NULL,
+    adresse             NVARCHAR(255) NULL,
+    date_naissance      DATE          NULL,
     statut_assure       BIT           NOT NULL DEFAULT 0,
     fonds               TINYINT       NULL
         CONSTRAINT CK_Patient_fonds CHECK (fonds IN (1, 2, 3, 4)),
