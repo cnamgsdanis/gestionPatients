@@ -14,8 +14,20 @@ public class Patient {
     public String   contact;                 // téléphone (peut être null)
     public boolean  statut_assure;           // true = assuré
     public Integer  fonds;                   // niveau 1, 2, 3 ou 4 (peut être null)
-    public Integer  matricule_nag;           // NAG entier uniquement (ex: 20260001)
+    public Integer  matricule_nag;           // NAG INT, exactement 10 chiffres, chiffres uniquement (ex: 2026000001)
     public Integer  id_assure_principal;     // NULL si patient principal, sinon ID du parent
+
+    // ######################################################################
+    // AYANT DROIT / ASSURE PRINCIPAL  (champs calculés, PAS en BDD)
+    //
+    // Un ENFANT (ayant droit) a id_assure_principal = id du PARENT.
+    // Quand on SOIGNE l'enfant, l'assurance utilisée est celle du PARENT.
+    //
+    //   assure_principal  = fiche du parent (null si ce patient EST le principal)
+    //   fonds_couverture  = fonds du parent si ayant droit, sinon son propre fonds
+    // ######################################################################
+    public Patient  assure_principal;
+    public Integer  fonds_couverture;
 
     // Constructeur vide obligatoire pour Gson
     public Patient() {}

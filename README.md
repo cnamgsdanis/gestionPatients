@@ -1,11 +1,11 @@
 Oui 👍 Voici une version **courte, claire et directement copiable** dans `README.md` :
 
 ````markdown
-# 🏥 Gestion Patients
+#  Gestion Patients
 
 Projet de gestion des patients développé en équipe.
 
-## 👥 Équipe
+##  Équipe
 
 - **Danis** → Backend
 - **Evann** → Backend
@@ -14,7 +14,7 @@ Projet de gestion des patients développé en équipe.
 
 ---
 
-## 🌿 Organisation des branches
+##  Organisation des branches
 
 ```text
 main
@@ -49,7 +49,7 @@ feature/frontend/liste-patients
 
 ---
 
-## 🚀 Workflow
+##  Workflow
 
 ### 1. Récupérer `develop`
 
@@ -97,7 +97,7 @@ Après vérification et validation, la fonctionnalité est fusionnée dans `deve
 
 ---
 
-## 🔄 Synchroniser sa branche
+## Synchroniser sa branche
 
 Avant de continuer son travail :
 

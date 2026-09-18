@@ -42,9 +42,42 @@ public class PatientDAO {
         }
     }
 
+    // ######################################################################
+    // TELEPHONE UNIQUE : un numero ne peut pas appartenir a 2 patients
+    // ######################################################################
+    public Patient findByContact(String contact) throws SQLException {
+        if (contact == null || contact.isBlank()) return null;
+        String sql = "SELECT * FROM Patient WHERE contact = ?";
+        try (Connection c = Database.getConnection();
+             PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setString(1, contact.trim());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? map(rs) : null;
+            }
+        }
+    }
+
+    // ######################################################################
+    // AYANT DROIT : tous les patients "sous l'aile" d'un assuré principal
+    // SELECT * FROM Patient WHERE id_assure_principal = ?
+    // Exemple : parent id=1007 → liste des enfants liés à 1007
+    // ######################################################################
+    public List<Patient> findAyantsDroit(int idAssurePrincipal) throws SQLException {
+        List<Patient> liste = new ArrayList<>();
+        String sql = "SELECT * FROM Patient WHERE id_assure_principal = ?";
+        try (Connection c = Database.getConnection();
+             PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setInt(1, idAssurePrincipal);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) liste.add(map(rs));
+            }
+        }
+        return liste; 
+    }
+
     // ------------------------------------------------------------
     // ENDPOINT FAIT : GET /api/patients/nag/{matricule}
-    // NAG = entier uniquement (ex: 20260001)
+    // NAG = INT, exactement 10 chiffres. Aucun prefixe impose.
     // ------------------------------------------------------------
     public Patient findByNag(int matriculeNag) throws SQLException {
         String sql = "SELECT * FROM Patient WHERE matricule_nag = ?";
@@ -58,29 +91,26 @@ public class PatientDAO {
     }
 
     // ------------------------------------------------------------
-    // Génère un NAG entier unique : AAAANNNN
-    // Ex: 20260001, 20260002, ... (année + compteur 4 chiffres)
+    // NAG INT : 10 chiffres uniquement, pas de prefixe obligatoire.
+    // Plage INT 10 chiffres : 1000000000 .. 2147483647
     // ------------------------------------------------------------
     private int genererNag(Connection c) throws SQLException {
-        int annee = java.time.LocalDate.now().getYear();
-        int minAnnee = annee * 10000;       // 20260000
-        int maxAnnee = minAnnee + 9999;     // 20269999
+        int minNag = 1_000_000_000;
+        int maxNag = Integer.MAX_VALUE;
 
-        String sql = "SELECT MAX(matricule_nag) FROM Patient "
-                   + "WHERE matricule_nag >= ? AND matricule_nag <= ?";
+        String sql = "SELECT MAX(matricule_nag) FROM Patient WHERE matricule_nag >= ?";
 
         try (PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setInt(1, minAnnee);
-            ps.setInt(2, maxAnnee);
+            ps.setInt(1, minNag);
             try (ResultSet rs = ps.executeQuery()) {
                 Integer max = null;
                 if (rs.next()) {
                     int v = rs.getInt(1);
                     if (!rs.wasNull()) max = v;
                 }
-                int prochain = (max == null) ? minAnnee + 1 : max + 1;
-                if (prochain > maxAnnee) {
-                    throw new SQLException("Plus de NAG disponible pour l'annee " + annee);
+                int prochain = (max == null) ? minNag : max + 1;
+                if (prochain > maxNag) {
+                    throw new SQLException("Plus de NAG disponible (INT 10 chiffres)");
                 }
                 return prochain;
             }
