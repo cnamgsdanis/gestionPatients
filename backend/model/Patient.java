@@ -13,9 +13,9 @@ public class Patient {
     public String   sex;                     // "M" ou "F"
     public String   contact;                 // téléphone (peut être null)
     public boolean  statut_assure;           // true = assuré
-    public Integer  fonds;                   //  NIVEAU 1, 2, 3 ou 4 (peut être null)
-    public String   matricule_nag;           // numéro d'assuré
-    public Integer  id_assure_principal;     //  NULL si patient principal, sinon ID du parent
+    public Integer  fonds;                   // niveau 1, 2, 3 ou 4 (peut être null)
+    public Integer  matricule_nag;           // NAG entier uniquement (ex: 20260001)
+    public Integer  id_assure_principal;     // NULL si patient principal, sinon ID du parent
 
     // Constructeur vide obligatoire pour Gson
     public Patient() {}
