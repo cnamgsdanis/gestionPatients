@@ -1,8 +1,486 @@
 
 
-## 📄 Fichier 3/5 — `docs/api/02-patient.md`
+# 🔐 Module 01 — Authentification
 
-# 🧑‍⚕️ Module 02 — Patient
+Documentation du module d'authentification et de gestion des mots de passe.
+
+**Base URL** : `http://localhost:8080`
+
+---
+
+## 📑 Sommaire
+
+- [Vue d'ensemble](#-vue-densemble)
+- [Modèle Utilisateur](#-modèle-utilisateur)
+- [Rôles disponibles](#-rôles-disponibles)
+- [`POST /api/auth/register`](#-post-apiauthregister)
+- [`POST /api/auth/login`](#-post-apiauthlogin)
+- [`POST /api/auth/logout`](#-post-apiauthlogout)
+- [`PUT /api/auth/change-password`](#-put-apiauthchange-password)
+- [`POST /api/auth/reset-password`](#-post-apiauthreset-password)
+- [Codes HTTP](#-codes-http)
+- [Flux d'authentification JWT](#-flux-dauthentification-jwt)
+- [Exemples frontend](#-exemples-frontend-fetch)
+
+---
+
+## 🎯 Vue d'ensemble
+
+Le module **Authentification** gère :
+
+- **Inscription** - Création de nouveaux comptes
+- **Connexion** - Génération de tokens JWT
+- **Déconnexion** - Confirmation de suppression du token côté client
+- **Changement de mot de passe** - Par l'utilisateur lui-même
+- **Réinitialisation de mot de passe** - Par un administrateur
+
+### Sécurité
+
+- **BCrypt** - Hash sécurisé des mots de passe (sel automatique)
+- **JWT** - Token avec expiration d'1 heure
+- **Permissions** - Contrôle d'accès granulaire
+
+---
+
+## 📋 Modèle Utilisateur
+
+| Champ | Type | Description |
+|---|---|---|
+| `id_utilisateur` | int | Identifiant unique (généré) |
+| `username` | string | Identifiant de connexion (unique) |
+| `mot_de_passe` | string | Hash BCrypt (jamais renvoyé) |
+| `nom` | string | Nom complet |
+| `email` | string / null | Adresse e-mail |
+| `telephone` | string / null | Numéro de téléphone |
+| `role` | string | Rôle (voir liste ci-dessous) |
+| `id_structure` | int | FK vers Structure |
+| `actif` | boolean | Compte actif/désactivé |
+| `date_creation` | datetime | Date de création (auto) |
+| `derniere_connexion` | datetime / null | Dernière connexion réussie |
+
+---
+
+## 🎭 Rôles disponibles
+
+| Rôle | Description | Permissions par défaut |
+|---|---|---|
+| `administrateur` | Super admin | Toutes |
+| `agent_accueil` | Agent hospitalier | patient.*, prestation.*, structure.lire |
+| `medecin` | Médecin | patient.lire, prestation.*, ordonnance.* |
+| `pharmacien` | Pharmacien | patient.lire, ordonnance.lire/delivrer |
+| `directeur_structure` | Directeur d'établissement | patient.lire, utilisateur.lire, prestation.lire |
+| `caissier_structure` | Caissier | patient.lire, prestation.lire |
+
+---
+
+## 🔹 `POST /api/auth/register`
+
+Crée un nouveau compte utilisateur.
+
+### Requête
+
+**Headers** :
+
+```http
+Content-Type: application/json
+```
+
+### Champs (Body JSON)
+
+| Champ | Type | Obligatoire | Description |
+|---|---|---|---|
+| `username` | string | ✅ | Identifiant unique |
+| `mot_de_passe` | string | ✅ | Minimum 4 caractères |
+| `nom` | string | ✅ | Nom complet |
+| `email` | string | ❌ | Adresse e-mail |
+| `telephone` | string | ❌ | Numéro de téléphone |
+| `role` | string | ✅ | Voir liste des rôles |
+| `id_structure` | int | ✅ | ID d'une structure existante |
+
+### Body (JSON)
+
+```json
+{
+  "username": "danis",
+  "mot_de_passe": "danis123",
+  "nom": "Administrateur",
+  "email": "danis@gmail.com",
+  "telephone": "770000000",
+  "role": "administrateur",
+  "id_structure": 1
+}
+```
+
+### Réponse succès — `201 Created`
+
+```json
+{
+  "id_utilisateur": 1,
+  "username": "danis",
+  "nom": "Administrateur",
+  "email": "danis@gmail.com",
+  "telephone": "770000000",
+  "role": "administrateur",
+  "id_structure": 1,
+  "actif": true,
+  "date_creation": "2026-09-15T13:38:30.5123954",
+  "derniere_connexion": null
+}
+```
+
+> ⚠️ Le champ `mot_de_passe` **n'est jamais renvoyé**.
+
+### Erreurs
+
+| Code | Body | Cause |
+|---|---|---|
+| `400` | `{"error":"username obligatoire"}` | Champ `username` manquant |
+| `400` | `{"error":"mot de passe trop court (min 4)"}` | Mot de passe < 4 caractères |
+| `400` | `{"error":"role obligatoire"}` | Champ `role` manquant |
+| `400` | `{"error":"role invalide"}` | Rôle non reconnu |
+| `400` | `{"error":"id_structure obligatoire"}` | `id_structure` ≤ 0 |
+| `409` | `{"error":"Cet username est deja pris"}` | Username déjà utilisé |
+
+---
+
+## 🔹 `POST /api/auth/login`
+
+Authentifie un utilisateur et génère un token JWT.
+
+### Requête
+
+**Headers** :
+
+```http
+Content-Type: application/json
+```
+
+### Body (JSON)
+
+| Champ | Type | Obligatoire |
+|---|---|---|
+| `username` | string | ✅ |
+| `mot_de_passe` | string | ✅ |
+
+```json
+{
+  "username": "danis",
+  "mot_de_passe": "danis123"
+}
+```
+
+### Réponse succès — `200 OK`
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiJ9.eyJpZF91dGlsaXNhdGV1ciI6MSwicm9sZSI6ImFkbWluaXN0cmF0ZXVyIiwibm9tIjoiQWRtaW5pc3RyYXRldXIiLCJleHAiOjE3MzE2ODEyMDB9.abc123...",
+  "user": {
+    "id_utilisateur": 1,
+    "username": "danis",
+    "nom": "Administrateur",
+    "email": "danis@gmail.com",
+    "telephone": "770000000",
+    "role": "administrateur",
+    "id_structure": 1,
+    "actif": true,
+    "date_creation": "2026-09-15T13:38:30.5123954",
+    "derniere_connexion": "2026-09-15T13:39:47.8758417"
+  }
+}
+```
+
+### Erreurs
+
+| Code | Body | Cause |
+|---|---|---|
+| `400` | `{"error":"username et mot_de_passe obligatoires"}` | Champ manquant |
+| `401` | `{"error":"Identifiants invalides"}` | Username inconnu **ou** mauvais mot de passe |
+| `403` | `{"error":"Compte desactive"}` | Compte désactivé (`actif = false`) |
+
+---
+
+## 🔹 `POST /api/auth/logout`
+
+Confirme la déconnexion (le client doit supprimer son token).
+
+### Requête
+
+**Headers** :
+
+```http
+Authorization: Bearer <token>
+```
+
+### Réponse succès — `200 OK`
+
+```json
+{
+  "message": "Deconnecte. Supprimez votre token cote client."
+}
+```
+
+> ⚠️ **Note** : Avec JWT, le token ne peut pas être invalidé côté serveur sans blacklist. Cette route sert uniquement à confirmer au client qu'il peut supprimer le token de son localStorage.
+
+### Erreurs
+
+| Code | Body | Cause |
+|---|---|---|
+| `401` | `{"error":"Token manquant"}` | Pas de header `Authorization` |
+| `401` | `{"error":"Token invalide"}` | Token malformé ou expiré |
+
+---
+
+## 🔹 `PUT /api/auth/change-password`
+
+Permet à un utilisateur connecté de changer son propre mot de passe.
+
+### Requête
+
+**Headers** :
+
+```http
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+### Body (JSON)
+
+| Champ | Type | Obligatoire | Description |
+|---|---|---|---|
+| `ancien` | string | ✅ | Ancien mot de passe |
+| `nouveau` | string | ✅ | Nouveau mot de passe (min 4 caractères) |
+
+```json
+{
+  "ancien": "danis123",
+  "nouveau": "nouveauMotDePasse456"
+}
+```
+
+### Réponse succès — `200 OK`
+
+```json
+{
+  "message": "Mot de passe modifie"
+}
+```
+
+### Erreurs
+
+| Code | Body | Cause |
+|---|---|---|
+| `400` | `{"error":"ancien et nouveau obligatoires"}` | Champ manquant |
+| `400` | `{"error":"nouveau mot de passe trop court (min 4)"}` | < 4 caractères |
+| `401` | `{"error":"Token manquant"}` | Pas authentifié |
+| `401` | `{"error":"Ancien mot de passe incorrect"}` | Ancien mot de passe invalide |
+| `404` | `{"error":"Utilisateur introuvable"}` | Utilisateur n'existe plus |
+| `500` | `{"error":"Echec de la mise a jour"}` | Erreur SQL |
+
+---
+
+## 🔹 `POST /api/auth/reset-password`
+
+Permet à un **administrateur** de réinitialiser le mot de passe d'un utilisateur.
+
+### Requête
+
+**Headers** :
+
+```http
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+**Permission requise** : `utilisateur.modifier`
+
+### Body (JSON)
+
+| Champ | Type | Obligatoire | Description |
+|---|---|---|---|
+| `id_utilisateur` | int | ✅ | ID de l'utilisateur cible |
+| `nouveau` | string | ✅ | Nouveau mot de passe (min 4 caractères) |
+
+```json
+{
+  "id_utilisateur": 5,
+  "nouveau": "motDePasseTemporaire123"
+}
+```
+
+### Réponse succès — `200 OK`
+
+```json
+{
+  "message": "Mot de passe reinitialise"
+}
+```
+
+### Erreurs
+
+| Code | Body | Cause |
+|---|---|---|
+| `400` | `{"error":"id_utilisateur et nouveau obligatoires"}` | Champ manquant |
+| `400` | `{"error":"nouveau mot de passe trop court (min 4)"}` | < 4 caractères |
+| `401` | `{"error":"Token manquant"}` | Pas authentifié |
+| `403` | `{"error":"Permission refusee : utilisateur.modifier", ...}` | Pas admin |
+| `404` | `{"error":"Utilisateur cible introuvable"}` | ID inexistant |
+| `500` | `{"error":"Echec de la mise a jour"}` | Erreur SQL |
+
+---
+
+## 📊 Codes HTTP
+
+| Code | Signification | Quand il apparaît |
+|---|---|---|
+| `200` | OK | Opération réussie |
+| `201` | Created | Compte créé avec succès |
+| `400` | Bad Request | Champ manquant ou invalide |
+| `401` | Unauthorized | Identifiants incorrects ou token invalide |
+| `403` | Forbidden | Compte désactivé ou permission refusée |
+| `404` | Not Found | Utilisateur inexistant |
+| `409` | Conflict | Username déjà pris |
+| `500` | Internal Server Error | Erreur serveur (voir console) |
+
+---
+
+## 🔐 Flux d'authentification JWT
+
+```text
+1. Client → POST /api/auth/login (username + mot_de_passe)
+2. Serveur → Vérifie les identifiants avec BCrypt
+3. Serveur → Génère un token JWT (expire dans 1h)
+4. Serveur → Renvoie { token, user }
+5. Client → Stocke le token dans localStorage
+6. Client → Envoie le token dans toutes les requêtes :
+            Authorization: Bearer <token>
+7. Serveur → Vérifie la signature JWT
+8. Serveur → Extrait le rôle et vérifie les permissions
+9. Serveur → Traite la requête si autorisée
+```
+
+### Structure du token JWT
+
+```json
+{
+  "id_utilisateur": 1,
+  "role": "administrateur",
+  "nom": "Administrateur",
+  "exp": 1731681200
+}
+```
+
+---
+
+## 💻 Exemples frontend (fetch)
+
+### Login et stockage du token
+
+```javascript
+const API_URL = "http://localhost:8080";
+
+async function login(username, motDePasse) {
+  const res = await fetch(`${API_URL}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, mot_de_passe: motDePasse })
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error);
+  }
+
+  const data = await res.json();
+  
+  // Stocker le token et les infos utilisateur
+  localStorage.setItem("token", data.token);
+  localStorage.setItem("user", JSON.stringify(data.user));
+  
+  return data;
+}
+```
+
+### Changer son mot de passe
+
+```javascript
+async function changerMotDePasse(ancien, nouveau) {
+  const token = localStorage.getItem("token");
+  
+  const res = await fetch(`${API_URL}/api/auth/change-password`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`
+    },
+    body: JSON.stringify({ ancien, nouveau })
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error);
+  }
+
+  return await res.json();
+}
+```
+
+### Réinitialiser un mot de passe (admin)
+
+```javascript
+async function resetMotDePasse(idUtilisateur, nouveau) {
+  const token = localStorage.getItem("token");
+  
+  const res = await fetch(`${API_URL}/api/auth/reset-password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`
+    },
+    body: JSON.stringify({ id_utilisateur: idUtilisateur, nouveau })
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error);
+  }
+
+  return await res.json();
+}
+```
+
+### Logout
+
+```javascript
+async function logout() {
+  const token = localStorage.getItem("token");
+  
+  await fetch(`${API_URL}/api/auth/logout`, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${token}` }
+  });
+  
+  // Nettoyer le stockage local
+  localStorage.removeItem("token");
+  localStorage.removeItem("user");
+}
+```
+
+---
+
+## 📌 Notes techniques
+
+| Sujet | Détail |
+|---|---|
+| **BCrypt** | Rounds = 10 (paramétré dans `AuthService`) |
+| **JWT** | Algorithme HS256, clé secrète dans `JwtService` |
+| **Expiration** | 1 heure après génération |
+| **Refresh token** | Non implémenté (prévu pour v2) |
+| **Dernière connexion** | Mise à jour automatique à chaque login réussi |
+| **Compte désactivé** | `actif = false` empêche la connexion (403) |
+
+---
+
+*Module **01 - Authentification** — Projet GestionPatients — 2026*
 
 Documentation du module de gestion des patients.
 

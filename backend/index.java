@@ -15,6 +15,7 @@ import controller.PatientController;
 import controller.UtilisateurController;
 import controller.PermissionController;
 import service.PermissionService;
+import controller.StructureController;
 
 // Import pour définir l'adresse (IP + port) du serveur
 import java.net.InetSocketAddress;
@@ -42,6 +43,7 @@ public class index {
         PatientController     patientController     = new PatientController();
         UtilisateurController utilisateurController = new UtilisateurController();
         PermissionController permissionController = new PermissionController();
+        StructureController structureController = new StructureController();
         // ------------------------------------------------------------
         // 3. Enregistrement des routes
         //    - /api/auth/*         → géré par AuthController
@@ -53,6 +55,7 @@ public class index {
         server.createContext("/api/patients",     patientController::handle);
         server.createContext("/api/utilisateurs", utilisateurController::handle);
         server.createContext("/api/permissions", permissionController::handle);
+        server.createContext("/api/structures", structureController::handle);
         // ------------------------------------------------------------
         // 4. Configuration du pool de threads
         //    10 threads peuvent traiter 10 requêtes en même temps.

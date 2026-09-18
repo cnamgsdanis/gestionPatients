@@ -1,7 +1,5 @@
 
 
-## 📄 Fichier 4/5 — `docs/api/03-utilisateur.md`
-
 # 👤 Module 03 — Utilisateur
 
 Documentation du module de gestion des utilisateurs.
@@ -289,6 +287,127 @@ Si `actif = false`, l'utilisateur ne pourra plus se connecter :
 | **Rôle** | Modifiable via `PUT` (doit être dans la liste valide) |
 | **Désactivation** | Préférée à la suppression pour préserver l'historique |
 | **Permissions** | Modifiables par l'admin via `/api/permissions` |
+
+### Créer un utilisateur (admin)
+
+```javascript
+const API_URL = "http://localhost:8080";
+
+function getToken() {
+  return localStorage.getItem("token");
+}
+
+// --- Créer un utilisateur (POST) ---
+async function creerUtilisateur(utilisateur) {
+  const res = await fetch(`${API_URL}/api/utilisateurs`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${getToken()}`
+    },
+    body: JSON.stringify(utilisateur)
+  });
+
+  if (!res.ok) {
+    throw new Error((await res.json()).error);
+  }
+
+  return await res.json();
+}
+
+// Exemple d'utilisation
+creerUtilisateur({
+  username: "drhouse",
+  mot_de_passe: "house123",
+  nom: "Dr House",
+  email: "house@hopital.sn",
+  telephone: "771111111",
+  role: "medecin",
+  id_structure: 1
+});
+```
+
+### Lister tous les utilisateurs
+
+```javascript
+async function listerUtilisateurs() {
+  const res = await fetch(`${API_URL}/api/utilisateurs`, {
+    headers: {
+      "Authorization": `Bearer ${getToken()}`
+    }
+  });
+
+  if (!res.ok) {
+    throw new Error((await res.json()).error);
+  }
+
+  return await res.json();
+}
+```
+
+### Modifier un utilisateur
+
+```javascript
+async function modifierUtilisateur(id, modifications) {
+  const res = await fetch(`${API_URL}/api/utilisateurs/${id}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${getToken()}`
+    },
+    body: JSON.stringify(modifications)
+  });
+
+  if (!res.ok) {
+    throw new Error((await res.json()).error);
+  }
+
+  return await res.json();
+}
+
+// Exemple : changer l'email et le téléphone
+modifierUtilisateur(2, {
+  email: "newemail@hopital.sn",
+  telephone: "772222222"
+});
+```
+
+### Activer/Désactiver un compte
+
+```javascript
+async function toggleActivation(id, actif) {
+  const res = await fetch(`${API_URL}/api/utilisateurs/${id}/actif`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${getToken()}`
+    },
+    body: JSON.stringify({ actif })
+  });
+
+  if (!res.ok) {
+    throw new Error((await res.json()).error);
+  }
+
+  return await res.json();
+}
+
+// Désactiver un utilisateur
+toggleActivation(2, false);
+```
+
+---
+
+## 🔄 Récapitulatif des routes
+
+| Méthode | URL | Action | Permission |
+|---|---|---|---|
+| `GET` | `/api/utilisateurs` | Liste tous les utilisateurs | `utilisateur.lire` |
+| `GET` | `/api/utilisateurs/{id}` | Détail d'un utilisateur | `utilisateur.lire` |
+| `POST` | `/api/utilisateurs` | Créer un utilisateur | `utilisateur.creer` |
+| `PUT` | `/api/utilisateurs/{id}` | Modifier un utilisateur | `utilisateur.modifier` |
+| `DELETE` | `/api/utilisateurs/{id}` | Supprimer un utilisateur | `utilisateur.supprimer` |
+| `PATCH` | `/api/utilisateurs/{id}/actif` | Activer/Désactiver | `utilisateur.modifier` |
 
 ---
 
