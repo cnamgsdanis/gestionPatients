@@ -1,5 +1,5 @@
 /* ==========================================================================
-   PEC — logique front-end uniquement (aucun appel réseau / backend)
+   PEC — interface. Les données vivent dans la base (API) : voir api.js
    ========================================================================== */
 
 const state = {
@@ -7,67 +7,228 @@ const state = {
   currentPatient: null,   // { matricule, nom, prenom, dateNaissance, sexe, estAssure }
   currentType: null,      // 'Consultation' | 'Examen'
   currentTM: null,        // 'Plein' | 'Plein (ALD)' | 'Exonéré'
-  currentMedecin: null,   // objet MEDECINS
+  currentMedecin: null,   // objet de state.medecins (annuaire des médecins, API)
   rows: [],
   examRows: [],           // lignes du tableau "Examens" (bon d'examen)
-  soinsMode: "agent",     // 'agent' (création, envoi au médecin) | 'medecin' (validation)
-  editingEntryId: null,   // id de l'entrée historique en cours de validation par le médecin
-  prestaLocked: true,     // la section Prestations n'est éditable qu'en mode 'medecin'
-  historique: loadJSON("pec_historique", HISTORIQUE_SEED),
-  users: loadJSON("pec_users", USERS_SEED.slice()),
+  editingEntryId: null,   // id de la feuille actuellement affichée dans la feuille de soins (côté médecin)
+  prestaLocked: true,     // vrai quand la feuille affichée est déjà validée (lecture seule)
+  queueScope: null,       // file du médecin : "mine" (ses patients) | "all" ; null = choisi au premier affichage
+  pharma: { nag: "", entries: [], selectedId: null },  // recherche pharmacie : feuilles validées avec ordonnance pour le NAG saisi
+  historique: [],         // feuilles de soins chargées depuis l'API (voir persistFeuilles / mergeFeuilles)
   historiqueFilters: { search: "", type: "", statut: "", from: "", to: "" },
   historiquePage: 1,
   ordoRows: [],           // lignes d'ordonnance en cours d'édition sur la feuille de soins (médecin)
-  ordoLocked: true,       // la section Ordonnance n'est éditable qu'en mode 'medecin'
-  currentUser: null,      // utilisateur connecté (state.users), déterminé par l'e-mail saisi à la connexion
-  reglements: loadJSON("pec_reglements", []),   // paiements réels enregistrés par l'assurance envers les pharmacies : { id, pharmacie, montant, date, note }
+  ordoLocked: true,       // vrai quand la feuille affichée est déjà validée (lecture seule)
+  currentUser: null,      // utilisateur connecté (forme mapBackendUser)
+  reglements: [],         // paiements de l'assurance envers les pharmacies (API) : { id, pharmacie, montant, date, note, type }
   pharmaSuiviFilters: { from: "", to: "", pharmacie: "", statut: "" },
-  reglementsHopitaux: loadJSON("pec_reglements_hopitaux", []), // paiements réels envers les hôpitaux : { id, hopital, montant, date, note }
+  reglementsHopitaux: [], // paiements envers les hôpitaux (API) : { id, hopital, montant, date, note, type }
   hopitalSuiviFilters: { from: "", to: "", hopital: "", type: "", statut: "", fonds: "", medecin: "" },
-  connexionLog: loadJSON("pec_connexion_log", []),  // { id, email, nom, role, date, heure, statut }
   journalFilters: { search: "", role: "", statut: "", from: "", to: "" },
-  apiUsers: null,          // utilisateurs chargés depuis le vrai backend (GET /api/utilisateurs), si joignable
-  usersSource: "local",    // "api" | "local" — quelle source alimente actuellement "Gestion des utilisateurs"
+  apiUsers: null,          // utilisateurs chargés depuis l'API (GET /api/utilisateurs)
   dossierPatient: null,        // patient actuellement ouvert dans le Dossier Patient (forme mapBackendPatient)
+  dossierFromSheet: false,     // dossier ouvert depuis « Historique des visites » (header de la feuille de soins)
+  dossierFocusId: null,        // visite en cours d'examen à mettre en évidence dans la chronologie (id de sa feuille de tête)
+  dossierFocusPending: false,  // défilement vers cette visite, une seule fois à l'ouverture
   dossierConsultations: [],    // consultations du patient ouvert (Consultation[], voir api.js)
   dossierExamens: []           // examens du patient ouvert (Examen[], voir api.js)
 };
 
-// Migration douce : les entrées enregistrées avant l'ajout des actions/du statut avaient des champs manquants.
-let historiqueMigrated = false;
-state.historique.forEach((h, i) => {
-  if (!h.id) { h.id = Date.now() + i; historiqueMigrated = true; }
-  if (!h.statut) { h.statut = "Validée"; historiqueMigrated = true; }
-  if (!h.ordonnance) { h.ordonnance = []; historiqueMigrated = true; }
-  // Migration douce : avant l'ajout du bon d'examen, les feuilles de type "Examen"
-  // réutilisaient le tableau générique "prestations" — on les bascule vers "examens".
-  if (h.type === "Examen" && !h.examens) {
-    h.examens = (h.prestations || []).map(r => ({ designation: r.designation, cotation: r.montant, tm: r.tm, part: r.part }));
-    h.examNature = h.examNature || "";
-    h.examSituation = h.examSituation || "";
-    h.examCodePraticien = h.examCodePraticien || "";
-    h.examEtablissement = h.examEtablissement || "";
-    h.examCodeEtablissement = h.examCodeEtablissement || "";
-    h.examDate = h.examDate || h.prestaDate || "";
-    h.examMotif = h.examMotif || "";
-    h.examPubSignature = h.examPubSignature || "";
-    h.examSpecialisteSignature = h.examSpecialisteSignature || "";
-    historiqueMigrated = true;
-  }
-});
-if (historiqueMigrated) saveJSON("pec_historique", state.historique);
+/* ---------------------------------------------------------------------- */
+/* Données : tout vit dans la base, via l'API. Aucun stockage local de      */
+/* données. Le navigateur ne garde (sessionStorage, propre à l'onglet) que   */
+/* le jeton de connexion (api.js), la session (pec_session) et quelques       */
+/* préférences d'affichage.                                                  */
+/* ---------------------------------------------------------------------- */
 
-function loadJSON(key, fallback) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch (e) {
-    return fallback;
+function uiPref(key, fallback) {
+  try { const raw = sessionStorage.getItem("pec_ui_" + key); return raw === null ? fallback : JSON.parse(raw); } catch (e) { return fallback; }
+}
+function setUiPref(key, value) {
+  try { sessionStorage.setItem("pec_ui_" + key, JSON.stringify(value)); } catch (e) { /* ignore */ }
+}
+
+// Les feuilles sont créées par l'interface avec un identifiant client (unique) ; le serveur en garde la
+// trace et attribue le numéro, la date et sa propre clé (serverId).
+function newFeuilleId() { return Date.now() * 1000 + Math.floor(Math.random() * 1000); }
+
+// Dernier état connu du serveur pour chaque feuille : { json, serverId }. Sert à savoir ce qui a changé.
+const feuilleSnapshot = new Map();
+let feuilleQueue = Promise.resolve();
+
+function mergeServerFeuille(local, srv) {
+  if (!srv) return;
+  // le serveur reste maître de ces champs
+  ["serverId", "numero", "date"].forEach(k => { if (srv[k] !== undefined && srv[k] !== null) local[k] = srv[k]; });
+}
+
+// Envoie à la base tout ce qui a changé dans state.historique : création, modification, suppression.
+// Les envois sont mis en file (jamais deux à la fois) ; la promesse échoue si le serveur refuse.
+function persistFeuilles() {
+  const run = async () => {
+    const seen = new Set();
+    for (const e of state.historique.slice()) {
+      seen.add(e.id);
+      const snap = feuilleSnapshot.get(e.id);
+      if (!snap) {
+        const saved = await apiCreateFeuille(e);
+        mergeServerFeuille(e, saved);
+        feuilleSnapshot.set(e.id, { json: JSON.stringify(e), serverId: e.serverId });
+      } else if (snap.json !== JSON.stringify(e)) {
+        e.serverId = e.serverId || snap.serverId;
+        const saved = await apiUpdateFeuille(e.serverId, e);
+        mergeServerFeuille(e, saved);
+        feuilleSnapshot.set(e.id, { json: JSON.stringify(e), serverId: e.serverId });
+      }
+    }
+    for (const id of Array.from(feuilleSnapshot.keys())) {
+      if (seen.has(id)) continue;
+      await apiDeleteFeuille(feuilleSnapshot.get(id).serverId);
+      feuilleSnapshot.delete(id);
+    }
+  };
+  feuilleQueue = feuilleQueue.then(run, run);
+  return feuilleQueue;
+}
+
+// Enregistrement « au fil de l'eau » (brouillon) : on n'attend pas, mais on signale un refus.
+function persistFeuillesQuiet() {
+  return persistFeuilles().catch(err => reportSyncError(err));
+}
+
+let syncErrorShownAt = 0;
+function reportSyncError(err) {
+  if (Date.now() - syncErrorShownAt > 4000) {
+    syncErrorShownAt = Date.now();
+    toast({
+      kind: err && err.isNetworkError ? "warn" : "urgent",
+      title: err && err.isNetworkError ? "Serveur injoignable" : "Enregistrement refusé",
+      text: (err && err.message ? err.message : "Erreur inconnue") + (err && err.isNetworkError ? " Vos dernières modifications ne sont pas encore enregistrées." : ""),
+      sticky: !(err && err.isNetworkError), ms: 6000
+    });
+  }
+  if (!(err && err.isNetworkError)) pullFeuilles(true).catch(() => { /* on garde l'affichage actuel */ });
+}
+
+// Intègre des feuilles reçues du serveur. authoritative : la liste est complète (les feuilles absentes ont
+// été supprimées ailleurs) ; sinon c'est un extrait (recherche par NAG…) et on ne retire rien.
+// Une feuille modifiée ici et pas encore envoyée n'est jamais écrasée (sauf force).
+function mergeFeuilles(list, authoritative, force) {
+  const byId = new Map(state.historique.map(h => [h.id, h]));
+  const incoming = new Set();
+  const out = [];
+  (list || []).forEach(srv => {
+    incoming.add(srv.id);
+    const local = byId.get(srv.id);
+    const snap = feuilleSnapshot.get(srv.id);
+    const dirty = local && snap && JSON.stringify(local) !== snap.json;
+    if (local && dirty && !force) { out.push(local); return; }
+    out.push(srv);
+    feuilleSnapshot.set(srv.id, { json: JSON.stringify(srv), serverId: srv.serverId });
+  });
+  if (authoritative) {
+    // feuilles créées ici et pas encore envoyées : on les garde en tête ; les autres ont disparu du serveur
+    const pending = state.historique.filter(h => !incoming.has(h.id) && !feuilleSnapshot.has(h.id));
+    Array.from(feuilleSnapshot.keys()).forEach(id => { if (!incoming.has(id)) feuilleSnapshot.delete(id); });
+    state.historique = pending.concat(out);
+  } else {
+    const others = state.historique.filter(h => !incoming.has(h.id));
+    state.historique = out.concat(others);
   }
 }
-function saveJSON(key, value) {
-  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* ignore */ }
+
+// Paramètres de la liste « par défaut » de chaque rôle (le serveur applique de toute façon ses propres droits).
+function feuilleScopeParams() {
+  const u = state.currentUser;
+  return u && u.role === "Pharmacie" ? { servi_par_moi: 1 } : {};
 }
+async function pullFeuilles(force) {
+  const list = await apiListFeuilles(feuilleScopeParams());
+  mergeFeuilles(list, true, !!force);
+}
+
+// Compteurs légers (barre latérale) : patients qui attendent le médecin, ordonnances à servir.
+state.compteurs = null;
+async function pullCompteurs() {
+  try { state.compteurs = await apiFeuillesCompteurs(); } catch (e) { state.compteurs = null; }
+}
+
+// Chargement de tout ce dont l'utilisateur a besoin, une fois connecté. Un échec partiel n'empêche pas
+// d'entrer : les écrans concernés le disent (state.dataErrors).
+async function bootstrapData() {
+  state.dataErrors = [];
+  const u = state.currentUser;
+  const finance = u && (u.role === "Super Admin" || u.role === "DG" || u.role === "Caisse");
+  const attempt = (label, promise, fallback) => promise.catch(err => {
+    state.dataErrors.push(label + " : " + (err && err.unavailable ? "non disponible côté serveur" : (err && err.message) || "erreur"));
+    return fallback;
+  });
+  const [feuilles, reglements, medecins, catalogue, me, structures] = await Promise.all([
+    attempt("Feuilles de soins", apiListFeuilles(feuilleScopeParams()), []),
+    finance ? attempt("Règlements", apiListReglements(), []) : Promise.resolve([]),
+    attempt("Annuaire des médecins", apiListMedecins(), []),
+    attempt("Catalogue des médicaments", apiCatalogueMedicaments(), []),
+    apiMe().catch(() => null),
+    apiListStructures().catch(() => [])
+  ]);
+  mergeFeuilles(feuilles, true, true);
+  state.reglements = (reglements || []).filter(r => r.kind === "pharmacie").map(mapReglement);
+  state.reglementsHopitaux = (reglements || []).filter(r => r.kind === "hopital").map(mapReglement);
+  state.medecins = (medecins || []).map(mapMedecin);
+  state.catalogue = (catalogue || []).map(m => ({ designation: m.designation, prix: Number(m.prix_reference) || 0 }));
+  state.structures = structures || [];
+  state.permissions = me && Array.isArray(me.permissions) ? new Set(me.permissions) : null;
+  populateMedecinSelect();
+  populatePharmaFilterOptions();
+  populateHospFilterOptions();
+  await pullCompteurs();
+  if (state.dataErrors.length) {
+    toast({ kind: "warn", title: "Données incomplètes", text: state.dataErrors.join(" · "), sticky: true });
+  }
+}
+function isoToFR(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v || ""));
+  return m ? m[3] + "/" + m[2] + "/" + m[1] : (v || "");
+}
+function mapReglement(r) {
+  return {
+    id: r.id_reglement, serverId: r.id_reglement, montant: Number(r.montant) || 0, date: isoToFR(r.date), note: r.note || "", type: r.type || "reglement",
+    pharmacie: r.kind === "pharmacie" ? r.structure : undefined, hopital: r.kind === "hopital" ? r.structure : undefined
+  };
+}
+function mapMedecin(m) {
+  const parts = (m.nom || "").trim().split(" ");
+  const prenom = parts.shift() || "";
+  return { id: m.id_utilisateur, nom: parts.join(" ") || prenom, prenom: parts.length ? prenom : "", code: m.code_praticien || "", etablissement: m.structure_nom || "", type: m.type_praticien || "" };
+}
+state.medecins = [];
+state.catalogue = [];
+state.structures = [];
+state.permissions = null;
+state.dataErrors = [];
+
+// Rafraîchissement régulier : ce que les autres utilisateurs ont fait (nouvelles feuilles, validations…)
+// apparaît sans recharger la page. On ne touche pas à la feuille en cours de saisie.
+let liveRefreshBusy = false;
+async function liveRefresh() {
+  if (!state.currentUser || liveRefreshBusy || document.hidden) return;
+  liveRefreshBusy = true;
+  try {
+    if (currentViewName !== "soins") await pullFeuilles(false);
+    await pullCompteurs();
+    refreshNavLive();
+    if (currentViewName === "medecin") renderMedecinQueue();
+    if (currentViewName === "historique") renderHistorique();
+    if (typeof pullNotifications === "function") await pullNotifications();
+  } catch (e) { /* le prochain tour réessaiera */ } finally { liveRefreshBusy = false; }
+}
+window.setInterval(liveRefresh, 20000);
+
+// Une session expirée (jeton refusé) ramène à l'écran de connexion avec un message clair.
+window.onApiUnauthorized = function () {
+  if (!state.currentUser) return;
+  performLogout({ expired: true });
+};
 
 /* ---------------------------------------------------------------------- */
 /* Écran de connexion : animations "médicales / stratosphériques"          */
@@ -183,21 +344,33 @@ function mockAuthenticate(username, password) {
 // Transition animée, rapide, entre l'écran de connexion et l'application —
 // le logo pulse avec un anneau qui tourne le temps du chargement, puis
 // s'efface pour révéler l'app déjà sur la bonne vue (callback).
-function playLoginTransition(callback) {
+function playLoginTransition(callback, user, waitFor) {
   const overlay = document.getElementById("loginTransition");
+  // Salutation selon l'heure + prénom de la personne qui vient de se connecter.
+  const greet = document.getElementById("loginGreeting");
+  const first = displayFirstName(user);
+  greet.hidden = !user;
+  if (user) {
+    document.getElementById("loginGreetingHello").textContent = greetingWord() + ",";
+    document.getElementById("loginGreetingName").textContent = first || user.nom || "";
+  }
+  document.getElementById("loginTransitionText").textContent = user ? "Préparation de votre espace…" : "Connexion en cours…";
   document.getElementById("view-login").hidden = true;
   overlay.hidden = false;
   requestAnimationFrame(() => overlay.classList.add("active"));
   window.setTimeout(() => {
-    overlay.classList.add("leaving");
-    window.setTimeout(() => {
-      overlay.hidden = true;
-      overlay.classList.remove("active", "leaving");
-      document.getElementById("appShell").hidden = false;
-      stopLoginDna();
-      callback();
-    }, 350);
-  }, 650);
+    // l'écran d'accueil reste tant que les données ne sont pas là
+    Promise.resolve(waitFor).catch(() => { /* l'échec est signalé par bootstrapData */ }).then(() => {
+      overlay.classList.add("leaving");
+      window.setTimeout(() => {
+        overlay.hidden = true;
+        overlay.classList.remove("active", "leaving");
+        document.getElementById("appShell").hidden = false;
+        stopLoginDna();
+        callback();
+      }, 350);
+    });
+  }, user ? 1500 : 650);
 }
 
 // Gestion des accès par rôle : purement côté front (protection d'affichage
@@ -210,16 +383,6 @@ function playLoginTransition(callback) {
 // La matrice est modifiable par le Super Admin depuis "Gestion des
 // permissions" (state.roleAccess, persistée dans pec_role_access) ; ce
 // bloc ne fournit que les valeurs par défaut ("réinitialiser").
-const PERMISSION_VIEWS = [
-  { key: "dashboard", label: "Tableau de bord" },
-  { key: "rapports", label: "Rapports" },
-  { key: "nouvelle-pec", label: "Nouvelle prise en charge" },
-  { key: "medecin", label: "Espace Médecin" },
-  { key: "pharmacie", label: "Espace Pharmacien" },
-  { key: "historique", label: "Historique PEC" },
-  { key: "users", label: "Gestion des utilisateurs" },
-  { key: "journalisation", label: "Journalisation" }
-];
 const ROLE_ACCESS_DEFAULT = {
   "Super Admin": { views: ["dashboard", "rapports", "nouvelle-pec", "medecin", "pharmacie", "historique", "users", "journalisation"], landing: "dashboard" },
   "DG": { views: ["dashboard", "rapports", "journalisation"], landing: "dashboard" },
@@ -228,29 +391,25 @@ const ROLE_ACCESS_DEFAULT = {
   "Pharmacie": { views: ["pharmacie"], landing: "pharmacie" },
   "Caisse": { views: ["dashboard", "rapports"], landing: "rapports" }
 };
-state.roleAccess = loadJSON("pec_role_access", JSON.parse(JSON.stringify(ROLE_ACCESS_DEFAULT)));
-// Migrations douces, une seule fois chacune : les permissions déjà
-// enregistrées dans le navigateur avant l'ajout d'une vue ne l'ont pas — on
-// l'ajoute aux rôles qui l'ont par défaut, sans revenir dessus si un admin
-// la décoche ensuite volontairement (drapeaux pec_*_view_migrated).
-if (!loadJSON("pec_journal_view_migrated", false)) {
-  ["Super Admin", "DG"].forEach(role => {
-    const access = state.roleAccess[role];
-    if (access && !access.views.includes("journalisation")) access.views.push("journalisation");
-  });
-  saveJSON("pec_role_access", state.roleAccess);
-  saveJSON("pec_journal_view_migrated", true);
-}
-// "statistiques" a été absorbée dans "rapports" (onglet Vue d'ensemble) : on
-// retire la clé désormais inconnue des permissions déjà enregistrées.
-if (!loadJSON("pec_stats_merged_migrated", false)) {
-  Object.keys(state.roleAccess).forEach(role => {
-    const access = state.roleAccess[role];
-    access.views = access.views.filter(v => v !== "statistiques");
-    if (access.landing === "statistiques") access.landing = "rapports";
-  });
-  saveJSON("pec_role_access", state.roleAccess);
-  saveJSON("pec_stats_merged_migrated", true);
+// Accès par rôle : valeurs par défaut du front, affinées par les permissions réelles du compte quand le
+// serveur les fournit (GET /api/auth/me). Rien n'est enregistré dans le navigateur.
+state.roleAccess = JSON.parse(JSON.stringify(ROLE_ACCESS_DEFAULT));
+// Permission(s) du serveur dont au moins une est nécessaire pour voir chaque page.
+const VIEW_PERMISSIONS = {
+  dashboard: ["prestation.lire", "pec.lire"],
+  rapports: ["prestation.lire", "pec.lire"],
+  "nouvelle-pec": ["prestation.creer"],
+  medecin: ["ordonnance.creer", "prestation.lire"],
+  pharmacie: ["ordonnance.delivrer", "ordonnance.lire"],
+  historique: ["prestation.lire", "pec.lire"],
+  users: ["utilisateur.lire"],
+  journalisation: ["journal.lire", "utilisateur.lire"],
+  permissions: ["permission.lire"]
+};
+function permittedByServer(view) {
+  if (!state.permissions) return true;                    // le serveur ne dit rien : les droits du rôle suffisent
+  const needed = VIEW_PERMISSIONS[view];
+  return !needed || needed.some(code => state.permissions.has(code));
 }
 
 // "soins" (feuille de soins) n'a pas d'item de sidebar propre : on y accède
@@ -260,10 +419,11 @@ function getEffectiveViews(role) {
   const access = state.roleAccess[role];
   if (!access) return null;
   const views = access.views.slice();
-  if ((views.includes("nouvelle-pec") || views.includes("medecin")) && !views.includes("soins")) {
-    views.push("soins");
+  if (views.includes("nouvelle-pec") || views.includes("medecin")) {
+    if (!views.includes("soins")) views.push("soins");
+    if (!views.includes("dossier-patient")) views.push("dossier-patient");
   }
-  return views;
+  return views.filter(v => permittedByServer(v));
 }
 
 // Le cloisonnement par rôle (barre latérale + accès aux vues) est
@@ -272,7 +432,7 @@ function getEffectiveViews(role) {
 // permissions" restent pleinement fonctionnels pour la préparer à l'avance —
 // il suffira de repasser ce drapeau à true pour réactiver l'application
 // des restrictions ci-dessous (dont le verrou du Super Admin sur cet écran).
-const ROLE_ENFORCEMENT_ENABLED = false;
+const ROLE_ENFORCEMENT_ENABLED = true;
 
 function applyRoleAccess(user) {
   if (!ROLE_ENFORCEMENT_ENABLED) {
@@ -303,39 +463,26 @@ function isViewAllowed(name) {
 // topbar (déclencheur + en-tête du dropdown, tous deux à l'intérieur de
 // #userMenu) — jusqu'ici figé sur "Alice NDONG / Super Admin".
 function updateUserPill(user, email) {
-  const scope = document.getElementById("userMenu");
-  if (!scope) return;
-  const nameEls = scope.querySelectorAll(".name");
-  const roleEls = scope.querySelectorAll(".role");
-  const avatarEls = scope.querySelectorAll(".avatar");
-
   const name = user ? (user.prenom + " " + user.nom) : (email || "—");
   const role = user ? user.role : "Utilisateur";
   const initials = user
     ? ((user.prenom[0] || "") + (user.nom[0] || "")).toUpperCase()
     : (email ? email.slice(0, 2).toUpperCase() : "??");
 
-  nameEls.forEach(el => { el.textContent = name; });
-  roleEls.forEach(el => { el.textContent = role; });
-  avatarEls.forEach(el => { el.textContent = initials; });
+  ["userMenu", "sidebarUser"].forEach(id => {
+    const scope = document.getElementById(id);
+    if (!scope) return;
+    scope.querySelectorAll(".name").forEach(el => { el.textContent = name; });
+    scope.querySelectorAll(".role").forEach(el => { el.textContent = role; });
+    scope.querySelectorAll(".avatar").forEach(el => {
+      const dot = el.querySelector(".avatar-dot");   // pastille « en ligne » à conserver
+      el.textContent = initials;
+      if (dot) el.appendChild(dot);
+    });
+  });
+  updateGreeting();
 }
 
-// Journalisation : une entrée par tentative de connexion (succès ou échec —
-// "échec" ici veut dire e-mail non reconnu dans state.users, ce prototype
-// front-end n'ayant pas de vrai mot de passe à vérifier côté serveur).
-function logConnexion(user, email, statut) {
-  const d = new Date();
-  state.connexionLog.unshift({
-    id: Date.now(),
-    email: user ? user.email : email,
-    nom: user ? (user.prenom + " " + user.nom) : "—",
-    role: user ? user.role : "Inconnu",
-    date: todayFR(),
-    heure: pad(d.getHours()) + ":" + pad(d.getMinutes()),
-    statut: statut
-  });
-  saveJSON("pec_connexion_log", state.connexionLog);
-}
 
 let loginSubmitting = false;
 document.getElementById("loginForm").addEventListener("submit", function (e) {
@@ -374,51 +521,37 @@ document.getElementById("loginForm").addEventListener("submit", function (e) {
     btn.classList.remove("loading");
     btn.querySelector(".btn-label").textContent = "Se connecter";
 
-    if (result.error) {
-      // Le backend a répondu et a refusé la connexion (identifiants
-      // invalides, compte désactivé...) : échec réel, pas de repli local.
-      setFieldError("loginPass", "loginPassError", result.error);
-      logConnexion(null, username, "Échec");
+    if (result.error || !result.user) {
+      // Le serveur a répondu et refusé la connexion (identifiants invalides, compte désactivé…) ; il trace lui-même la tentative.
+      setFieldError("loginPass", "loginPassError", result.error || "Identifiants invalides.");
       return;
     }
 
-    state.currentUser = result.user;
-    logConnexion(state.currentUser, username, state.currentUser ? "Succès" : "Échec");
+    beginSession(result.user);
     applyRoleAccess(state.currentUser);
     updateUserPill(state.currentUser, username);
-    const access = state.currentUser ? state.roleAccess[state.currentUser.role] : null;
-
+    // Les données (feuilles, règlements, annuaires…) se chargent pendant l'animation d'accueil.
+    const ready = bootstrapData();
     playLoginTransition(() => {
-      if (access && access.landing !== "dashboard") {
-        goToView(access.landing);
-      } else {
-        renderDashboardStats();
-      }
-    });
+      applyRoleAccess(state.currentUser);          // les permissions du serveur affinent le menu
+      const access = state.roleAccess[state.currentUser.role];
+      goToView(access && access.landing && isViewAllowed(access.landing) ? access.landing : firstAllowedView());
+      afterLogin(true);
+    }, state.currentUser, ready);
   });
 });
 
-// Authentifie d'abord contre le vrai backend (POST /api/auth/login). Si le
-// backend est injoignable (Java/SQL Server arrêtés, CORS non configuré —
-// voir le PDF de documentation), bascule sur les comptes de démonstration
-// locaux (USERS_SEED / pec_users) pour ne pas casser le prototype quand
-// l'API n'est pas lancée. Si le backend répond mais refuse les identifiants,
-// l'échec est réel : pas de repli silencieux vers le mode démo.
+function firstAllowedView() {
+  const b = document.querySelector(".nav-item[data-view]:not([hidden])");
+  return b ? b.dataset.view : "dashboard";
+}
+
+// Authentification : POST /api/auth/login. Aucun compte local, aucun repli : le serveur décide.
 async function authenticate(username, password) {
   try {
     const session = await apiLogin(username, password);
     return { user: mapBackendUser(session.user) };
   } catch (err) {
-    // LOCAL_TEST_FALLBACK (voir api.js) : en mode test, on bascule aussi sur
-    // les comptes de démo même si le backend a répondu une vraie erreur
-    // (ex : backend up mais SQL Server down → 500), pas seulement quand il
-    // est injoignable au niveau réseau — pour ne pas bloquer les tests
-    // front-end derrière un identifiant qui ne peut plus jamais aboutir.
-    if (err.isNetworkError || LOCAL_TEST_FALLBACK) {
-      console.warn("[API] " + err.message + " — bascule sur les comptes de demonstration locaux.");
-      const u = state.users.find(x => (x.username || "").toLowerCase() === username.toLowerCase()) || null;
-      return { user: u };
-    }
     return { error: err.message || "Identifiants invalides." };
   }
 }
@@ -448,6 +581,7 @@ function escapeHtml(s) {
 // une fois que l'utilisateur a pris connaissance du message.
 let infoModalOnClose = null;
 function showInfoModal(title, bodyHtml, onClose) {
+  document.querySelector("#infoModal .modal").className = "modal";
   document.getElementById("infoModalTitle").textContent = title;
   document.getElementById("infoModalBody").innerHTML = bodyHtml;
   infoModalOnClose = onClose || null;
@@ -466,6 +600,12 @@ document.getElementById("closeInfoModalBtn").addEventListener("click", closeInfo
 // natifs du navigateur pour rester cohérent avec le design de l'application.
 let confirmModalCallback = null;
 function askConfirm(message, onConfirm, opts) {
+  // Accent rouge pour une suppression ; neutre (opts.neutral) pour une
+  // confirmation positive, comme la délivrance d'un médicament.
+  const neutral = !!(opts && opts.neutral);
+  document.querySelector("#confirmModal .modal").className = "modal " + (neutral ? "modal-accent-blue" : "modal-danger");
+  document.querySelector("#confirmModal .modal-head-icon").hidden = neutral;
+  document.getElementById("confirmModalBtn").className = neutral ? "btn-primary" : "btn-danger";
   document.getElementById("confirmModalTitle").textContent = (opts && opts.title) || "Confirmer la suppression";
   document.getElementById("confirmModalBody").textContent = message;
   document.getElementById("confirmModalBtn").textContent = (opts && opts.confirmLabel) || "Supprimer";
@@ -484,8 +624,16 @@ document.getElementById("confirmModalBtn").addEventListener("click", () => {
   if (cb) cb();
 });
 
-function performLogout() {
+function performLogout(opts) {
+  if (!(opts && opts.expired)) audit("auth.deconnexion", { message: "Déconnexion" });
   apiLogout();
+  clearSession();
+  setDrawerOpen(false);
+  setNotifPanelOpen(false);
+  closePalette();
+  hideNavTip();
+  document.getElementById("toastStack").innerHTML = "";
+  document.title = BASE_TITLE;
   document.getElementById("appShell").hidden = true;
   document.getElementById("view-login").hidden = false;
   document.getElementById("loginForm").reset();
@@ -494,8 +642,16 @@ function performLogout() {
   resetSearch();
   state.currentUser = null;
   applyRoleAccess(null);
-  goToView("dashboard");
+  goToView("dashboard");   // en quittant la feuille de soins, la saisie en cours est gardée en brouillon
+  state.editingEntryId = null;
+  state.queueScope = null;
+  viewHistory = [];
+  feuilleSnapshot.clear();
+  state.historique = []; state.reglements = []; state.reglementsHopitaux = []; state.medecins = []; state.catalogue = [];
+  state.notifications = []; state.apiUsers = null; state.permissions = null; state.compteurs = null;
+  buildLoginParticles();
   buildLoginDna();
+  if (opts && opts.expired) setFieldError("loginPass", "loginPassError", "Votre session a expiré : reconnectez-vous.");
 }
 document.getElementById("logoutBtn").addEventListener("click", performLogout);
 
@@ -533,10 +689,9 @@ function openProfilModal() {
   } else {
     etabWrap.hidden = true;
   }
-  // Le changement de mot de passe (PUT /api/auth/change-password) n'a de
-  // sens que pour un compte réellement authentifié auprès du backend — un
-  // compte de démonstration local n'a pas de mot de passe côté serveur.
-  document.getElementById("profil-password-wrap").hidden = !apiIsConnected();
+  // Nom, e-mail et rôle sont ceux du compte (modifiables par l'administrateur) ; seul le mot de passe se change ici.
+  document.getElementById("profil-nom").disabled = true;
+  document.getElementById("profil-password-wrap").hidden = false;
   document.getElementById("profil-pass-ancien").value = "";
   document.getElementById("profil-pass-nouveau").value = "";
   document.getElementById("profilModal").hidden = false;
@@ -548,20 +703,13 @@ document.getElementById("profilForm").addEventListener("submit", e => {
   e.preventDefault();
   const u = state.currentUser;
   if (!u) { document.getElementById("profilModal").hidden = true; return; }
-  const nomComplet = document.getElementById("profil-nom").value.trim();
-  const parts = nomComplet.split(" ");
-  u.prenom = parts.shift() || nomComplet;
-  u.nom = parts.join(" ") || "";
-  saveJSON("pec_users", state.users);
-  updateUserPill(u, u.email);
-
   const ancien = document.getElementById("profil-pass-ancien").value;
   const nouveau = document.getElementById("profil-pass-nouveau").value;
-  if (apiIsConnected() && (ancien || nouveau)) {
+  if (ancien || nouveau) {
     apiChangePassword(ancien, nouveau).then(() => {
       document.getElementById("profilModal").hidden = true;
       showInfoModal("Mot de passe modifié", "<p>Votre mot de passe a été mis à jour.</p>");
-    }).catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
+    }).catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
     return;
   }
   document.getElementById("profilModal").hidden = true;
@@ -569,11 +717,12 @@ document.getElementById("profilForm").addEventListener("submit", e => {
 
 document.getElementById("userMenuParams").addEventListener("click", () => {
   setUserMenuOpen(false);
-  showInfoModal("Paramètres", "<p>Les paramètres du compte et les préférences de l'application seront disponibles prochainement.</p>");
+  showInfoModal("Paramètres", "<p>Vos données sont enregistrées dans la base de la CNAMGS : rien n'est conservé dans ce navigateur, hormis la session de cet onglet.</p>" +
+    "<p>Pour changer votre mot de passe, ouvrez « Mon profil ».</p>");
 });
 document.getElementById("userMenuNotifs").addEventListener("click", () => {
   setUserMenuOpen(false);
-  showInfoModal("Notifications", "<p>Aucune notification pour le moment. Le centre de notifications sera disponible prochainement.</p>");
+  openNotifPanel();
 });
 document.getElementById("userMenuHelp").addEventListener("click", () => {
   setUserMenuOpen(false);
@@ -585,34 +734,743 @@ document.getElementById("userMenuLogout").addEventListener("click", () => {
 });
 
 /* ---------------------------------------------------------------------- */
-/* Barre latérale : réduction / dépliage                                  */
+/* Barre latérale : réduction, tiroir mobile, pastille qui glisse, halo,   */
+/* infobulles, « pouls du circuit »                                        */
 /* ---------------------------------------------------------------------- */
 
 const sidebarEl = document.getElementById("sidebar");
-function setSidebarCollapsed(collapsed) {
+const navScrollEl = document.getElementById("sidebarNav");
+const navIndicatorEl = document.getElementById("navIndicator");
+const navTipEl = document.getElementById("navTip");
+const sidebarBackdropEl = document.getElementById("sidebarBackdrop");
+const topbarMenuBtn = document.getElementById("topbarMenuBtn");
+const MOBILE_MQ = window.matchMedia("(max-width: 980px)");
+function isMobileNav() { return MOBILE_MQ.matches; }
+
+// La pastille lumineuse glisse jusqu'à l'item actif (position calculée, pas de saut).
+function placeNavIndicator() {
+  const active = navScrollEl.querySelector(".nav-item.active:not([hidden])");
+  if (!active || active.offsetParent === null) {
+    navIndicatorEl.classList.remove("ready");
+    navScrollEl.classList.remove("has-indicator");
+    return;
+  }
+  navIndicatorEl.style.height = active.offsetHeight + "px";
+  navIndicatorEl.style.transform = "translateY(" + active.offsetTop + "px)";
+  navIndicatorEl.classList.add("ready");
+  navScrollEl.classList.add("has-indicator");
+}
+window.addEventListener("resize", () => window.requestAnimationFrame(placeNavIndicator));
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(placeNavIndicator);
+
+function hideNavTip() { navTipEl.hidden = true; }
+function showNavTip(el) {
+  if (isMobileNav() || !sidebarEl.classList.contains("collapsed") || !el.dataset.tip) return;
+  const r = el.getBoundingClientRect();
+  navTipEl.textContent = el.dataset.tip;
+  navTipEl.style.left = (r.right + 14) + "px";
+  navTipEl.style.top = (r.top + r.height / 2) + "px";
+  navTipEl.hidden = false;
+}
+sidebarEl.addEventListener("pointerover", e => { const el = e.target.closest("[data-tip]"); if (el) showNavTip(el); });
+sidebarEl.addEventListener("pointerout", e => { if (e.target.closest("[data-tip]")) hideNavTip(); });
+sidebarEl.addEventListener("focusin", e => { const el = e.target.closest("[data-tip]"); if (el) showNavTip(el); });
+sidebarEl.addEventListener("focusout", hideNavTip);
+navScrollEl.addEventListener("scroll", hideNavTip, { passive: true });
+
+// Halo qui suit le curseur sur l'item survolé.
+sidebarEl.addEventListener("pointermove", e => {
+  const el = e.target.closest(".nav-item, .btn-logout, .pulse-stat");
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  el.style.setProperty("--mx", (e.clientX - r.left) + "px");
+  el.style.setProperty("--my", (e.clientY - r.top) + "px");
+});
+
+function setSidebarCollapsed(collapsed, persist) {
   sidebarEl.classList.toggle("collapsed", collapsed);
-  saveJSON("pec_sidebar_collapsed", collapsed);
+  if (persist !== false) setUiPref("sidebar_collapsed", collapsed);
+  hideNavTip();
+  window.setTimeout(placeNavIndicator, 320); // après la transition de largeur
 }
 document.getElementById("sidebarCollapseBtn").addEventListener("click", function () {
   setSidebarCollapsed(!sidebarEl.classList.contains("collapsed"));
 });
-setSidebarCollapsed(!!loadJSON("pec_sidebar_collapsed", false));
+// Sans préférence enregistrée, les écrans de taille tablette démarrent avec le menu réduit.
+(function initSidebarState() {
+  const saved = uiPref("sidebar_collapsed", null);
+  setSidebarCollapsed(saved === null ? window.innerWidth <= 1180 : !!saved, false);
+})();
+
+// Tiroir (tablette / téléphone) : bouton ☰ dans l'en-tête, voile, balayage, Échap.
+function syncSidebarInert() {
+  // Hors champ sur mobile, le menu sort de l'ordre de tabulation et des lecteurs d'écran.
+  sidebarEl.inert = isMobileNav() && !sidebarEl.classList.contains("open");
+}
+function setDrawerOpen(open) {
+  if (open && !isMobileNav()) return;
+  sidebarEl.classList.toggle("open", open);
+  document.body.classList.toggle("drawer-open", open);
+  topbarMenuBtn.setAttribute("aria-expanded", String(open));
+  if (open) {
+    sidebarBackdropEl.hidden = false;
+    window.requestAnimationFrame(() => sidebarBackdropEl.classList.add("show"));
+  } else {
+    sidebarBackdropEl.classList.remove("show");
+    window.setTimeout(() => { if (!sidebarEl.classList.contains("open")) sidebarBackdropEl.hidden = true; }, 260);
+  }
+  syncSidebarInert();
+  if (open) {
+    const first = sidebarEl.querySelector(".nav-item.active:not([hidden])") || sidebarEl.querySelector(".nav-item:not([hidden])");
+    if (first) first.focus({ preventScroll: true });
+  } else if (document.activeElement && sidebarEl.contains(document.activeElement)) {
+    topbarMenuBtn.focus({ preventScroll: true });
+  }
+}
+topbarMenuBtn.addEventListener("click", () => setDrawerOpen(!sidebarEl.classList.contains("open")));
+sidebarBackdropEl.addEventListener("click", () => setDrawerOpen(false));
+document.getElementById("sidebarCloseBtn").addEventListener("click", () => setDrawerOpen(false));
+MOBILE_MQ.addEventListener("change", () => { setDrawerOpen(false); syncSidebarInert(); hideNavTip(); window.requestAnimationFrame(placeNavIndicator); });
+syncSidebarInert();
+
+let swipeX0 = null, swipeY0 = null;
+document.addEventListener("touchstart", e => { const t = e.touches[0]; swipeX0 = t.clientX; swipeY0 = t.clientY; }, { passive: true });
+document.addEventListener("touchend", e => {
+  if (swipeX0 === null) return;
+  const t = e.changedTouches[0], dx = t.clientX - swipeX0, dy = t.clientY - swipeY0;
+  const open = sidebarEl.classList.contains("open");
+  if (isMobileNav() && !document.getElementById("appShell").hidden && Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.6) {
+    if (!open && swipeX0 < 26 && dx > 0) setDrawerOpen(true);
+    else if (open && dx < 0) setDrawerOpen(false);
+  }
+  swipeX0 = swipeY0 = null;
+}, { passive: true });
+
+// « Pouls du circuit » et pastilles : patients qui attendent le médecin, ordonnances à servir.
+function pharmaPendingCount() {
+  if (state.compteurs && state.compteurs.ordonnances_a_servir != null) return Number(state.compteurs.ordonnances_a_servir) || 0;   // compteur du serveur
+  return state.historique.filter(h => isSentToPharmacy(h) && pharmaLines(h).some(m => m.statut !== "Servi")).length;
+}
+function setLiveCount(el, n, hotEl) {
+  if (!el) return;
+  if (el.textContent !== String(n)) {
+    el.textContent = n;
+    el.classList.remove("bump"); void el.offsetWidth; el.classList.add("bump");
+  }
+  if (hotEl) hotEl.classList.toggle("hot", n > 0);
+}
+function refreshNavLive() {
+  if (!state.currentUser) return;
+  refreshPendingBadge();
+  const rx = pharmaPendingCount();
+  const pb = document.getElementById("pharmaNavBadge");
+  pb.textContent = rx;
+  pb.hidden = rx === 0;
+  const waiting = state.compteurs && state.compteurs.en_attente_medecin != null
+    ? Number(state.compteurs.en_attente_medecin) || 0
+    : waitingVisits(state.historique.filter(h => h.statut === "En attente")).length;
+  setLiveCount(document.getElementById("pulseWaiting"), waiting, document.getElementById("pulseWaiting").parentElement);
+  setLiveCount(document.getElementById("pulseRx"), rx, document.getElementById("pulseRx").parentElement);
+}
+document.querySelectorAll(".pulse-stat[data-goto]").forEach(b => b.addEventListener("click", () => goToView(b.dataset.goto)));
+window.setInterval(refreshNavLive, 4000);
 
 /* ---------------------------------------------------------------------- */
-/* Horloge de l'en-tête                                                    */
+/* En-tête : horloge vivante, salutation par l'heure, jauge de défilement   */
 /* ---------------------------------------------------------------------- */
 
 const JOURS = ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"];
 const MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
+const SUN_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+const MOON_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+
+// « Bonsoir » à partir de 18 h et jusqu'à 5 h, « Bonjour » le reste du temps.
+function isEvening(d) { const h = (d || new Date()).getHours(); return h >= 18 || h < 5; }
+function greetingWord(d) { return isEvening(d) ? "Bonsoir" : "Bonjour"; }
+function displayFirstName(u) {
+  const p = ((u && u.prenom) || "").trim().split(/\s+/)[0] || "";
+  return p ? p.charAt(0).toUpperCase() + p.slice(1) : "";
+}
+
+function updateGreeting() {
+  const el = document.getElementById("topbarGreet");
+  if (!el) return;
+  const night = isEvening();
+  const name = displayFirstName(state.currentUser);
+  document.getElementById("greetText").textContent = greetingWord() + (name ? ", " + name : "");
+  const mode = night ? "night" : "day";
+  if (el.dataset.mode !== mode) {   // on ne recrée l'icône que si le moment de la journée change (le soleil tourne en continu)
+    el.dataset.mode = mode;
+    document.getElementById("greetIco").innerHTML = night ? MOON_SVG : SUN_SVG;
+    el.classList.toggle("is-night", night);
+  }
+}
 
 function updateClock() {
-  const el = document.getElementById("topbarClock");
-  if (!el) return;
+  const t = document.getElementById("clockTime");
+  if (!t) return;
   const d = new Date();
-  const txt = JOURS[d.getDay()] + " " + d.getDate() + " " + MOIS[d.getMonth()] + " " + d.getFullYear() + " · " + pad(d.getHours()) + ":" + pad(d.getMinutes());
-  el.textContent = txt.charAt(0).toUpperCase() + txt.slice(1);
+  t.textContent = pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+  const txt = JOURS[d.getDay()] + " " + d.getDate() + " " + MOIS[d.getMonth()] + " " + d.getFullYear();
+  document.getElementById("clockDate").textContent = txt.charAt(0).toUpperCase() + txt.slice(1);
+  if (d.getSeconds() === 0) updateGreeting();
 }
-setInterval(updateClock, 30000);
+setInterval(updateClock, 1000);
+
+function updateScrollProgress() {
+  const max = document.documentElement.scrollHeight - window.innerHeight;
+  document.getElementById("topbarProgress").style.setProperty("--p", max > 4 ? Math.min(1, window.scrollY / max).toFixed(3) : "0");
+}
+window.addEventListener("scroll", updateScrollProgress, { passive: true });
+window.addEventListener("resize", updateScrollProgress);
+
+/* ---------------------------------------------------------------------- */
+/* Tableaux : sur téléphone, chaque ligne devient une fiche « libellé —     */
+/* valeur ». Les libellés viennent de l'en-tête de chaque tableau ; la mise   */
+/* en forme est purement CSS (voir « stack » dans style.css).                */
+/* ---------------------------------------------------------------------- */
+
+function labelDataTables() {
+  document.querySelectorAll("table.data-table:not(.no-stack)").forEach(table => {
+    table.classList.add("stack");
+    const heads = Array.from(table.querySelectorAll("thead th")).map(th => th.textContent.trim());
+    table.querySelectorAll("tbody tr").forEach(tr => {
+      if (tr.children.length !== heads.length) return;   // ligne à cellule fusionnée (« Chargement… ») : pas de libellé
+      Array.from(tr.children).forEach((td, i) => { if (td.getAttribute("data-label") !== heads[i]) td.setAttribute("data-label", heads[i]); });
+    });
+  });
+}
+let labelTablesQueued = false;
+new MutationObserver(() => {
+  if (labelTablesQueued) return;
+  labelTablesQueued = true;
+  window.requestAnimationFrame(() => { labelTablesQueued = false; labelDataTables(); });
+}).observe(document.getElementById("appShell"), { childList: true, subtree: true });
+labelDataTables();
+
+/* ---------------------------------------------------------------------- */
+/* Toasts : petits messages éphémères                                      */
+/* ---------------------------------------------------------------------- */
+
+const TOAST_ICONS = {
+  info: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg>',
+  success: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>',
+  warn: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l10 18H2z"/><path d="M12 10v5"/><path d="M12 18h.01"/></svg>',
+  urgent: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>',
+  security: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z"/><path d="M12 8v4"/><path d="M12 15.5h.01"/></svg>'
+};
+function toast(o) {
+  const stack = document.getElementById("toastStack");
+  const kind = o.kind || "info";
+  const el = document.createElement("div");
+  el.className = "toast toast-" + kind;
+  el.setAttribute("role", kind === "urgent" ? "alert" : "status");
+  const ms = o.sticky ? 0 : (o.ms || 5200);
+  el.innerHTML =
+    '<div class="toast-ico">' + (TOAST_ICONS[kind] || TOAST_ICONS.info) + "</div>" +
+    '<div class="toast-body"><b>' + escapeHtml(o.title || "") + "</b>" + (o.text ? "<span>" + escapeHtml(o.text) + "</span>" : "") + "</div>" +
+    '<button type="button" class="toast-x" aria-label="Fermer">&times;</button>' +
+    (ms ? '<i class="toast-bar" style="animation-duration:' + ms + 'ms"></i>' : "");
+  const close = () => {
+    if (el.classList.contains("leaving")) return;
+    el.classList.add("leaving");
+    window.setTimeout(() => el.remove(), 300);
+  };
+  el.querySelector(".toast-x").addEventListener("click", e => { e.stopPropagation(); close(); });
+  if (o.onClick) {
+    el.dataset.click = "1";
+    el.addEventListener("click", () => { close(); o.onClick(); });
+  }
+  stack.appendChild(el);
+  while (stack.children.length > 4) stack.firstElementChild.remove();
+  if (ms) window.setTimeout(close, ms);
+  return el;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Session : l'actualisation de la page ne déconnecte plus                  */
+/* La session vit dans sessionStorage : elle survit au rechargement de la   */
+/* page, mais pas à la fermeture de l'onglet (poste partagé à l'hôpital /   */
+/* à la pharmacie) et chaque onglet peut porter un utilisateur différent.   */
+/* ---------------------------------------------------------------------- */
+
+const SESSION_KEY = "pec_session";
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+let sessionMeta = null; // { sessionId, startedAt } de la session en cours
+
+function newId(prefix) { return prefix + "-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+function readSessionRecord() {
+  try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null"); } catch (e) { return null; }
+}
+function persistSession() {
+  if (!state.currentUser || !sessionMeta) return;
+  try {
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+      sessionId: sessionMeta.sessionId,
+      startedAt: sessionMeta.startedAt,
+      expiresAt: Date.now() + SESSION_TTL_MS,
+      user: state.currentUser,
+      view: currentViewName,
+      ctx: navContext
+    }));
+  } catch (e) { /* stockage indisponible : la session ne survivra simplement pas à l'actualisation */ }
+}
+function clearSession() {
+  try { sessionStorage.removeItem(SESSION_KEY); } catch (e) { /* ignore */ }
+  sessionMeta = null;
+  document.documentElement.classList.remove("has-session");
+}
+function beginSession(user) {
+  sessionMeta = { sessionId: newId("S"), startedAt: Date.now() };
+  state.currentUser = user;
+  persistSession();
+}
+
+// Rétablit l'utilisateur et la page où il se trouvait ; résout à faux s'il n'y a rien à rétablir.
+async function restoreSession() {
+  const rec = readSessionRecord();
+  if (!rec || !rec.user || rec.expiresAt <= Date.now() || apiTokenExpired()) {
+    apiLogout();
+    clearSession();
+    return false;
+  }
+  const user = mapBackendUser(apiCurrentSession().user);
+  if (!user) { clearSession(); return false; }
+
+  sessionMeta = { sessionId: rec.sessionId || newId("S"), startedAt: rec.startedAt || Date.now() };
+  state.currentUser = user;
+  applyRoleAccess(user);
+  updateUserPill(user, user.email);
+  await bootstrapData();                        // les données viennent du serveur ; l'écran de chargement reste affiché
+  applyRoleAccess(user);
+  document.getElementById("view-login").hidden = true;
+  document.getElementById("appShell").hidden = false;
+  document.documentElement.classList.remove("has-session");
+  stopLoginDna();
+
+  const access = state.roleAccess[user.role];
+  let view = rec.view;
+  // La feuille de soins et le dossier dépendent d'un contexte en mémoire : on revient à leur vue d'origine.
+  if (view === "soins" || view === "dossier-patient") view = rec.ctx || (access && access.landing) || "dashboard";
+  if (!view || !document.getElementById("view-" + view) || !isViewAllowed(view)) view = (access && access.landing && isViewAllowed(access.landing)) ? access.landing : firstAllowedView();
+  goToView(view);
+  afterLogin(false);
+  return true;
+}
+
+// Ce qui suit une connexion réussie (ou une session rétablie).
+function afterLogin(fresh) {
+  if (!fresh) pullNotifications().catch(() => {});
+  updateGreeting();
+  refreshNavLive();
+  renderNotifBadge();
+  window.requestAnimationFrame(placeNavIndicator);
+  updateScrollProgress();
+  if (!fresh) return;
+  const u = state.currentUser;
+  const previous = u.derniereConnexion ? new Date(u.derniereConnexion) : null;   // valeur d'avant cette connexion
+  toast({
+    kind: "success",
+    title: greetingWord() + (displayFirstName(u) ? ", " + displayFirstName(u) : ""),
+    text: "Ravi de vous revoir." + (previous && !isNaN(previous.getTime()) ? " Dernière connexion : " + pad(previous.getDate()) + "/" + pad(previous.getMonth() + 1) + "/" + previous.getFullYear() + " à " + pad(previous.getHours()) + ":" + pad(previous.getMinutes()) + "." : ""),
+    ms: 5000
+  });
+  pullNotifications().then(announceUnreadOnLogin).catch(() => {});
+}
+
+/* ---------------------------------------------------------------------- */
+/* Notifications : messages de l'administrateur et alertes de sécurité      */
+/* ---------------------------------------------------------------------- */
+
+const BASE_TITLE = document.title;
+const NOTIF_PRIO_LABEL = { info: "Information", importante: "Importante", urgente: "Urgente" };
+const NOTIF_ENVELOPE_SVG = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3.5 7l8.5 6 8.5-6"/></svg>';
+const NOTIF_SHIELD_SVG = TOAST_ICONS.security;
+const NOTIF_ALERT_SVG = TOAST_ICONS.warn;
+
+// Les messages viennent du serveur (GET /api/notifications) : uniquement ceux de l'utilisateur connecté.
+state.notifications = [];
+state.notificationsUnavailable = false;
+const notifKnown = new Set();
+let notifLoaded = false;
+
+function userKey(u) { return u ? String(u.email || u.username || u.id || "").toLowerCase() : ""; }
+function fullName(u) { return u ? ((u.prenom || "") + " " + (u.nom || "")).trim() : ""; }
+function knownUsers() { return state.apiUsers || []; }
+function canSendNotifications() { return !!state.currentUser && state.currentUser.role === "Super Admin"; }
+
+function mapNotification(n) {
+  return {
+    id: n.id_notification,
+    from: { nom: n.expediteur_nom || "Administrateur", role: n.expediteur_role || "" },
+    titre: n.titre || "",
+    message: n.message || "",
+    priorite: n.priorite || "info",
+    categorie: n.categorie || "message",
+    date: n.date_envoi,
+    expire: n.expire_le || null,
+    accuse: !!n.accuse_requis,
+    lu: !!n.lu,
+    acquitte: !!n.accuse
+  };
+}
+function notifExpired(n) { return !!n.expire && new Date(n.expire).getTime() < Date.now(); }
+function myNotifications() {
+  return state.notifications.filter(n => !notifExpired(n)).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+}
+function isUnread(n) { return !n.lu; }
+function unreadNotifications() { return myNotifications().filter(isUnread); }
+
+// Récupère mes messages ; ceux qui arrivent après le premier chargement sont annoncés (toast + cloche).
+async function pullNotifications() {
+  let list;
+  try { list = await apiListNotifications(); }
+  catch (err) { if (err.unavailable) state.notificationsUnavailable = true; return; }
+  const items = (list || []).map(mapNotification);
+  const fresh = notifLoaded ? items.filter(n => !notifKnown.has(n.id) && !n.lu) : [];
+  items.forEach(n => notifKnown.add(n.id));
+  state.notifications = items;
+  notifLoaded = true;
+  renderNotifBadge();
+  if (notifPanelEl.classList.contains("open")) renderNotifPanel();
+  fresh.reverse().forEach(announceNotification);
+  if (currentViewName === "journalisation" && state.journalTab === "messages") renderJournalisation();
+}
+
+function timeAgo(iso) {
+  const d = new Date(iso), s = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (s < 45) return "à l'instant";
+  if (s < 3600) return "il y a " + Math.max(1, Math.floor(s / 60)) + " min";
+  if (s < 86400) return "il y a " + Math.floor(s / 3600) + " h";
+  if (s < 172800) return "hier à " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  return "le " + pad(d.getDate()) + "/" + pad(d.getMonth() + 1) + "/" + d.getFullYear();
+}
+function fullDateTime(iso) {
+  const d = new Date(iso);
+  return pad(d.getDate()) + "/" + pad(d.getMonth() + 1) + "/" + d.getFullYear() + " à " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+}
+function notifIcon(n) { return n.categorie === "securite" ? NOTIF_SHIELD_SVG : (n.priorite === "urgente" ? NOTIF_ALERT_SVG : NOTIF_ENVELOPE_SVG); }
+function notifTag(n) { return n.categorie === "securite" ? "Sécurité" : NOTIF_PRIO_LABEL[n.priorite] || "Information"; }
+function notifClass(n) { return n.categorie === "securite" ? "securite" : (n.priorite || "info"); }
+
+const notifBellBtn = document.getElementById("notifBellBtn");
+const notifPanelEl = document.getElementById("notifPanel");
+let notifFilter = "all";
+
+function renderNotifBadge() {
+  const list = unreadNotifications(), n = list.length;
+  const badge = document.getElementById("notifBadge");
+  badge.hidden = n === 0;
+  badge.textContent = n > 99 ? "99+" : String(n);
+  badge.classList.toggle("urgent", list.some(x => x.priorite === "urgente"));
+  const mc = document.getElementById("userMenuNotifCount");
+  mc.hidden = n === 0;
+  mc.textContent = n > 99 ? "99+" : String(n);
+  notifBellBtn.setAttribute("aria-label", n ? "Notifications — " + n + " non lue" + (n > 1 ? "s" : "") : "Notifications");
+  document.title = (n ? "(" + n + ") " : "") + BASE_TITLE;
+}
+
+function renderNotifPanel() {
+  const all = myNotifications();
+  const unread = all.filter(isUnread);
+  const list = notifFilter === "unread" ? unread : all;
+  document.getElementById("notifSub").textContent = state.notificationsUnavailable ? "Messagerie non disponible côté serveur" : (unread.length
+    ? unread.length + " non lue" + (unread.length > 1 ? "s" : "") + " sur " + all.length
+    : (all.length ? "Tout est lu · " + all.length + " message" + (all.length > 1 ? "s" : "") : "Aucun message"));
+  document.getElementById("notifMarkAllBtn").hidden = unread.length === 0;
+  document.querySelectorAll("#notifTabs button").forEach(b => b.classList.toggle("active", b.dataset.f === notifFilter));
+  document.getElementById("notifFoot").hidden = !canSendNotifications();
+  const host = document.getElementById("notifList");
+  if (!list.length) {
+    host.innerHTML = '<div class="notif-empty"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>' +
+      (notifFilter === "unread" ? "Aucune notification non lue." : "Aucune notification pour le moment.") + "</div>";
+    return;
+  }
+  host.innerHTML = list.slice(0, 30).map((n, i) =>
+    '<button type="button" class="notif-item ' + notifClass(n) + (isUnread(n) ? " unread" : "") + '" data-id="' + escapeHtml(String(n.id)) + '" style="animation-delay:' + Math.min(i, 8) * 30 + 'ms">' +
+      '<span class="n-ico">' + notifIcon(n) + "</span>" +
+      '<span class="n-main">' +
+        '<span class="n-title"><span>' + escapeHtml(n.titre) + '</span><em class="n-tag">' + notifTag(n) + "</em></span>" +
+        '<span class="n-text">' + escapeHtml(n.message) + "</span>" +
+        '<span class="n-meta">' + escapeHtml(n.from.nom) + " · " + timeAgo(n.date) + (n.accuse && !n.acquitte ? " · accusé requis" : "") + "</span>" +
+      "</span>" +
+    "</button>"
+  ).join("");
+}
+
+function setNotifPanelOpen(open) {
+  notifPanelEl.classList.toggle("open", open);
+  notifBellBtn.setAttribute("aria-expanded", String(open));
+  if (open) {
+    setUserMenuOpen(false);
+    renderNotifPanel();
+    document.querySelectorAll("#toastStack .toast[data-click] .toast-x").forEach(x => x.click());
+  }
+}
+function openNotifPanel() { setNotifPanelOpen(true); }
+notifBellBtn.addEventListener("click", e => { e.stopPropagation(); setNotifPanelOpen(!notifPanelEl.classList.contains("open")); });
+document.addEventListener("click", e => { if (!document.getElementById("notifMenu").contains(e.target)) setNotifPanelOpen(false); });
+document.getElementById("notifTabs").addEventListener("click", e => {
+  const b = e.target.closest("button[data-f]");
+  if (!b) return;
+  notifFilter = b.dataset.f;
+  renderNotifPanel();
+});
+document.getElementById("notifList").addEventListener("click", e => {
+  const item = e.target.closest(".notif-item");
+  if (item) openNotification(item.dataset.id);
+});
+document.getElementById("notifMarkAllBtn").addEventListener("click", () => {
+  unreadNotifications().forEach(n => markRead(n.id, true));
+  renderNotifBadge();
+  renderNotifPanel();
+});
+
+function findNotification(id) { return state.notifications.find(x => String(x.id) === String(id)); }
+function markRead(id, quiet) {
+  const n = findNotification(id);
+  if (!n || n.lu) return;
+  n.lu = true;
+  apiMarkNotificationRead(n.id).catch(() => { n.lu = false; renderNotifBadge(); });
+  if (!quiet) audit("notification.lire", { ressourceType: "Notification", ressourceId: n.id, ressourceLibelle: n.titre });
+  renderNotifBadge();
+}
+function acknowledgeNotification(id) {
+  const n = findNotification(id);
+  if (!n) return Promise.resolve();
+  return apiAcknowledgeNotification(n.id).then(() => {
+    n.acquitte = true; n.lu = true;
+    audit("notification.accuser", { ressourceType: "Notification", ressourceId: n.id, ressourceLibelle: n.titre });
+    renderNotifBadge();
+  });
+}
+
+function openNotification(id) {
+  const n = findNotification(id);
+  if (!n) return;
+  setNotifPanelOpen(false);
+  markRead(n.id);
+  const needsAck = n.accuse && !n.acquitte;
+  const pill = n.categorie === "securite" ? "examen" : (n.priorite === "urgente" ? "inactif" : (n.priorite === "importante" ? "attente" : "consultation"));
+  showInfoModal(n.titre,
+    '<div class="notif-detail-meta"><span class="pill ' + pill + '">' + notifTag(n) + "</span>" +
+      "<span>De <b>" + escapeHtml(n.from.nom) + "</b></span><span>" + fullDateTime(n.date) + "</span></div>" +
+    '<p class="notif-detail-text">' + escapeHtml(n.message) + "</p>" +
+    (n.accuse
+      ? '<div class="notif-ack-row">' + (needsAck
+          ? "<span>L'expéditeur demande un accusé de lecture.</span>" + '<button type="button" class="btn-primary btn-sm" id="notifAckBtn">J\'ai pris connaissance</button>'
+          : "<span>✓ Vous avez accusé réception de ce message.</span>") + "</div>"
+      : ""));
+  const ack = document.getElementById("notifAckBtn");
+  if (ack) ack.addEventListener("click", () => {
+    acknowledgeNotification(n.id).then(() => {
+      closeInfoModal();
+      toast({ kind: "success", title: "Accusé envoyé", text: "L'expéditeur voit que vous avez pris connaissance du message.", ms: 3600 });
+    }).catch(err => toast({ kind: "urgent", title: "Accusé non enregistré", text: err.message, ms: 5000 }));
+  });
+}
+
+// Un message arrive pour l'utilisateur connecté : cloche qui sonne + toast (collant s'il est urgent).
+function announceNotification(n) {
+  notifBellBtn.classList.remove("ring"); void notifBellBtn.offsetWidth; notifBellBtn.classList.add("ring");
+  toast({
+    kind: n.categorie === "securite" ? "security" : (n.priorite === "urgente" ? "urgent" : (n.priorite === "importante" ? "warn" : "info")),
+    title: n.titre,
+    text: n.message.length > 110 ? n.message.slice(0, 107) + "…" : n.message,
+    sticky: n.priorite === "urgente",
+    ms: 7000,
+    onClick: () => openNotification(n.id)
+  });
+}
+function announceUnreadOnLogin() {
+  const unread = unreadNotifications();
+  if (!unread.length) return;
+  const urgent = unread.filter(n => n.priorite === "urgente");
+  urgent.slice(0, 2).forEach(announceNotification);
+  const others = unread.length - Math.min(urgent.length, 2);
+  if (others > 0) {
+    notifBellBtn.classList.remove("ring"); void notifBellBtn.offsetWidth; notifBellBtn.classList.add("ring");
+    toast({
+      kind: "info", title: unread.length === 1 ? "Un nouveau message" : unread.length + " nouveaux messages",
+      text: "De l'administrateur — cliquez pour les consulter.", ms: 6500, onClick: openNotifPanel
+    });
+  }
+}
+
+// ---- Composeur (Super Admin) ----
+const composeModal = document.getElementById("composeModal");
+let composePriorite = "info";
+
+// Destinataires : le serveur reçoit un type (tous / role / etablissement / user) et une valeur (rôle API, id de structure, id d'utilisateur).
+function composeTargetOptions(type) {
+  const users = knownUsers();
+  if (type === "role") return Object.keys(FRONT_ROLE_TO_API_ROLE).map(r => ({ v: FRONT_ROLE_TO_API_ROLE[r], l: r }));
+  if (type === "etablissement") return (state.structures || []).map(s => ({ v: String(s.id_structure), l: s.raison_sociale }));
+  if (type === "user") return users.map(u => ({ v: String(u.id), l: fullName(u) + " — " + u.role }));
+  return [];
+}
+function composeTo() {
+  const type = document.getElementById("composeTarget").value;
+  return type === "all" ? { type: "all" } : { type: type, value: document.getElementById("composeValue").value };
+}
+function notifMatches(to, u) {
+  if (!to || to.type === "all") return true;
+  if (to.type === "role") return u.apiRole === to.value;
+  if (to.type === "etablissement") return String(u.idStructure) === String(to.value);
+  if (to.type === "user") return String(u.id) === String(to.value);
+  return false;
+}
+// Aperçu des destinataires (comptes actifs, hors l'expéditeur).
+function notifRecipients(probe) {
+  const me = state.currentUser;
+  return knownUsers().filter(u => u.statut !== "Inactif" && notifMatches(probe.to, u) && (!me || u.id !== me.id));
+}
+function refreshComposeValue() {
+  const type = document.getElementById("composeTarget").value;
+  const wrap = document.getElementById("composeValueWrap");
+  wrap.hidden = type === "all";
+  if (type !== "all") {
+    document.getElementById("composeValueLabel").textContent = { role: "Rôle", etablissement: "Établissement", user: "Utilisateur" }[type];
+    document.getElementById("composeValue").innerHTML = composeTargetOptions(type).map(o => '<option value="' + escapeHtml(o.v) + '">' + escapeHtml(o.l) + "</option>").join("");
+  }
+  renderComposeRecap();
+}
+function renderComposeRecap() {
+  const rec = notifRecipients({ to: composeTo() });
+  const el = document.getElementById("composeRecap");
+  el.classList.toggle("empty", rec.length === 0);
+  el.textContent = rec.length
+    ? "Sera reçu par " + rec.length + " utilisateur" + (rec.length > 1 ? "s" : "") + " : " + rec.slice(0, 4).map(fullName).join(", ") + (rec.length > 4 ? " et " + (rec.length - 4) + " autre" + (rec.length - 4 > 1 ? "s" : "") : "") + "."
+    : "Aucun destinataire actif pour ce choix.";
+}
+async function openComposeModal() {
+  if (!canSendNotifications()) return;
+  setNotifPanelOpen(false);
+  document.getElementById("composeForm").reset();
+  composePriorite = "info";
+  document.querySelectorAll("#composePriorite .chip").forEach(c => c.classList.toggle("active", c.dataset.p === "info"));
+  document.getElementById("composeError").hidden = true;
+  document.getElementById("composeCount").textContent = "0 / 600";
+  composeModal.hidden = false;
+  document.getElementById("composeTitle").focus();
+  // la liste des comptes vient du serveur (aperçu et choix d'un utilisateur)
+  if (!state.apiUsers) { try { state.apiUsers = (await apiListUtilisateurs()).map(mapBackendUser); } catch (e) { state.apiUsers = []; } }
+  refreshComposeValue();
+}
+function closeComposeModal() { composeModal.hidden = true; }
+document.getElementById("notifComposeBtn").addEventListener("click", openComposeModal);
+document.getElementById("closeComposeModal").addEventListener("click", closeComposeModal);
+document.getElementById("cancelComposeModal").addEventListener("click", closeComposeModal);
+document.getElementById("composeTarget").addEventListener("change", refreshComposeValue);
+document.getElementById("composeValue").addEventListener("change", renderComposeRecap);
+document.getElementById("composeText").addEventListener("input", e => { document.getElementById("composeCount").textContent = e.target.value.length + " / 600"; });
+document.getElementById("composePriorite").addEventListener("click", e => {
+  const b = e.target.closest(".chip");
+  if (!b) return;
+  composePriorite = b.dataset.p;
+  document.querySelectorAll("#composePriorite .chip").forEach(c => c.classList.toggle("active", c === b));
+});
+document.getElementById("composeForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const titre = document.getElementById("composeTitle").value.trim();
+  const message = document.getElementById("composeText").value.trim();
+  const err = document.getElementById("composeError");
+  const to = composeTo();
+  const recipients = notifRecipients({ to: to });
+  let msg = "";
+  if (titre.length < 3) msg = "Donnez un titre au message (3 caractères au moins).";
+  else if (message.length < 3) msg = "Le message est vide.";
+  else if (!recipients.length) msg = "Aucun destinataire actif pour ce choix.";
+  err.hidden = !msg;
+  err.textContent = msg;
+  if (msg) return;
+  const send = document.getElementById("composeSendBtn");
+  send.disabled = true;
+  apiSendNotification({
+    cible_type: to.type, cible_valeur: to.value || null, titre: titre, message: message,
+    priorite: composePriorite, categorie: "message", accuse_requis: document.getElementById("composeAck").checked
+  }).then(res => {
+    audit("notification.envoyer", { ressourceType: "Notification", ressourceId: res && res.id_notification, ressourceLibelle: titre, apres: { destinataires: recipients.length, cible: to, priorite: composePriorite } });
+    closeComposeModal();
+    const n = res && res.destinataires != null ? res.destinataires : recipients.length;
+    toast({ kind: "success", title: "Message envoyé", text: "Reçu par " + n + " utilisateur" + (n > 1 ? "s" : "") + ".", ms: 4200 });
+    if (currentViewName === "journalisation") renderJournalisation();
+  }).catch(e2 => {
+    err.hidden = false;
+    err.textContent = e2.unavailable ? "La messagerie n'est pas encore disponible côté serveur (POST /api/notifications à créer)." : e2.message;
+  }).finally(() => { send.disabled = false; });
+});
+
+/* ---------------------------------------------------------------------- */
+/* Palette « Aller à… » (Ctrl + K)                                          */
+/* ---------------------------------------------------------------------- */
+
+const paletteModal = document.getElementById("paletteModal");
+const paletteInput = document.getElementById("paletteInput");
+const paletteListEl = document.getElementById("paletteList");
+let paletteItems = [];
+let paletteIndex = 0;
+
+function normText(s) { return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase(); }
+function paletteCatalog() {
+  const items = [];
+  document.querySelectorAll(".nav-item[data-view]").forEach(btn => {
+    if (btn.hidden) return;
+    items.push({ group: "Pages", label: btn.dataset.tip || btn.textContent.trim(), icon: btn.querySelector(".nav-ico").innerHTML, hint: "Ouvrir", run: () => goToView(btn.dataset.view) });
+  });
+  items.push({ group: "Actions", label: "Notifications", icon: NOTIF_ENVELOPE_SVG, hint: "Boîte de réception", run: openNotifPanel });
+  if (canSendNotifications()) items.push({ group: "Actions", label: "Envoyer un message aux utilisateurs", icon: NOTIF_ENVELOPE_SVG, hint: "Administrateur", run: openComposeModal });
+  items.push({ group: "Actions", label: "Mon profil", icon: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>', hint: "Compte", run: openProfilModal });
+  items.push({ group: "Actions", label: "Se déconnecter", icon: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>', hint: "Session", run: performLogout });
+  return items;
+}
+function renderPalette() {
+  const q = normText(paletteInput.value.trim());
+  paletteItems = paletteCatalog().filter(i => !q || normText(i.label).includes(q));
+  if (paletteIndex >= paletteItems.length) paletteIndex = Math.max(0, paletteItems.length - 1);
+  if (!paletteItems.length) { paletteListEl.innerHTML = '<div class="palette-empty">Rien ne correspond à « ' + escapeHtml(paletteInput.value) + " ».</div>"; return; }
+  let html = "", group = "";
+  paletteItems.forEach((it, i) => {
+    if (it.group !== group) { group = it.group; html += '<div class="palette-group">' + group + "</div>"; }
+    html += '<button type="button" class="palette-item' + (i === paletteIndex ? " active" : "") + '" role="option" data-i="' + i + '">' +
+      '<span class="p-ico">' + it.icon + "</span><span>" + escapeHtml(it.label) + "</span><small>" + it.hint + "</small></button>";
+  });
+  paletteListEl.innerHTML = html;
+  const active = paletteListEl.querySelector(".palette-item.active");
+  if (active) active.scrollIntoView({ block: "nearest" });
+}
+function openPalette() {
+  if (!state.currentUser) return;
+  paletteIndex = 0;
+  paletteInput.value = "";
+  paletteModal.hidden = false;
+  renderPalette();
+  paletteInput.focus();
+}
+function closePalette() { paletteModal.hidden = true; }
+function runPaletteItem(i) {
+  const it = paletteItems[i];
+  if (!it) return;
+  closePalette();
+  it.run();
+}
+paletteInput.addEventListener("input", () => { paletteIndex = 0; renderPalette(); });
+paletteInput.addEventListener("keydown", e => {
+  if (e.key === "ArrowDown") { e.preventDefault(); paletteIndex = Math.min(paletteItems.length - 1, paletteIndex + 1); renderPalette(); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); paletteIndex = Math.max(0, paletteIndex - 1); renderPalette(); }
+  else if (e.key === "Enter") { e.preventDefault(); runPaletteItem(paletteIndex); }
+});
+paletteListEl.addEventListener("click", e => { const b = e.target.closest(".palette-item"); if (b) runPaletteItem(parseInt(b.dataset.i, 10)); });
+paletteModal.addEventListener("click", e => { if (e.target === paletteModal) closePalette(); });
+document.getElementById("topbarSearchBtn").addEventListener("click", openPalette);
+document.addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); if (paletteModal.hidden) openPalette(); else closePalette(); return; }
+  if (e.key !== "Escape") return;
+  if (!paletteModal.hidden) closePalette();
+  else if (!composeModal.hidden) closeComposeModal();
+  else if (notifPanelEl.classList.contains("open")) setNotifPanelOpen(false);
+  else if (sidebarEl.classList.contains("open")) setDrawerOpen(false);
+});
 
 /* ---------------------------------------------------------------------- */
 /* Navigation entre les vues de l'application                             */
@@ -639,36 +1497,118 @@ const VIEW_META = {
 let viewHistory = [];
 let currentViewName = null;
 
+// Vue de la barre latérale dont dépend une sous-vue (feuille de soins, dossier
+// patient) : elle reste allumée dans le menu et apparaît dans le fil d'Ariane,
+// pour que le médecin sache toujours d'où il vient et où il se trouve.
+let navContext = "dashboard";
+
+function hasNavItem(name) {
+  return !!document.querySelector('.nav-item[data-view="' + name + '"]');
+}
+
+// Titre et fil d'Ariane d'une vue. Les sous-vues (feuille de soins, dossier
+// patient) sont calculées : elles dépendent de la vue d'origine et de la
+// feuille affichée.
+function getViewMeta(name) {
+  const parent = VIEW_META[navContext] || VIEW_META.medecin;
+  if (name === "soins") {
+    const entry = state.historique.find(h => h.id === state.editingEntryId);
+    return {
+      title: entry && entry.type === "Examen" ? "Feuille d'examen" : "Feuille de soins",
+      crumb: "Accueil / " + parent.title + (entry ? " / " + entry.numero : ""),
+      parentView: navContext
+    };
+  }
+  if (name === "dossier-patient") {
+    return { title: "Dossier patient", crumb: "Accueil / " + parent.title + " / Dossier patient", parentView: navContext };
+  }
+  return VIEW_META[name];
+}
+
+function applyViewChrome(name) {
+  const meta = getViewMeta(name);
+  document.getElementById("topbarTitle").textContent = meta.title;
+  renderCrumb(meta);
+  // Pastille d'icône de la page (celle de son entrée de menu ; une sous-vue reprend l'icône de sa vue d'origine).
+  const src = document.querySelector('.nav-item[data-view="' + (hasNavItem(name) ? name : navContext) + '"] .nav-ico');
+  const holder = document.getElementById("topbarViewIco");
+  if (src && holder) {
+    holder.innerHTML = src.innerHTML;
+    holder.classList.remove("pop"); void holder.offsetWidth; holder.classList.add("pop");
+  }
+}
+
 function goToView(name, opts) {
   const fromBack = !!(opts && opts.fromBack);
   if (!isViewAllowed(name)) {
+    audit("ui.refuse", { resultat: "REFUSE", vue: name, message: "Accès refusé à la page « " + name + " »" });
     name = state.roleAccess[state.currentUser.role].landing;
   }
+  // La feuille de soins n'a de sens que pour une feuille en cours d'examen
+  // (ex. retour arrière vers une feuille déjà validée ou supprimée).
+  if (name === "soins" && !state.historique.some(h => h.id === state.editingEntryId)) name = "medecin";
+  // Quitter la feuille de soins ne perd rien : les saisies restent en brouillon.
+  if (currentViewName === "soins" && name !== "soins") saveSoinsDraft();
   if (!fromBack && currentViewName && currentViewName !== name) {
     viewHistory.push(currentViewName);
   }
+  const viewChanged = currentViewName !== name;
   currentViewName = name;
+  if (hasNavItem(name)) navContext = name;
 
   document.querySelectorAll(".view").forEach(v => v.hidden = true);
   document.getElementById("view-" + name).hidden = false;
 
-  document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
-  const navBtn = document.querySelector('.nav-item[data-view="' + name + '"]');
-  if (navBtn) navBtn.classList.add("active");
+  const navTarget = hasNavItem(name) ? name : navContext;
+  document.querySelectorAll(".nav-item").forEach(b => b.classList.toggle("active", b.dataset.view === navTarget));
 
-  const meta = VIEW_META[name];
-  document.getElementById("topbarTitle").textContent = meta.title;
   document.getElementById("topbarBackBtn").hidden = name === "dashboard";
-  renderCrumb(meta);
+  document.getElementById("topbarHistoryBtn").hidden = name !== "soins";
+  applyViewChrome(name);
 
   if (name === "historique") renderHistorique();
   if (name === "users") renderUsers();
   if (name === "dashboard") renderDashboardStats();
-  if (name === "medecin") { renderMedecinPatients(); renderMedecinQueue(); }
+  if (name === "medecin") renderMedecinQueue();
   if (name === "pharmacie") resetPharmaSearch();
   if (name === "rapports") renderRapports();
-  if (name === "permissions") { renderPermissions(); loadApiPermissions(); }
+  if (name === "permissions") loadApiPermissions();
   if (name === "journalisation") renderJournalisation();
+  refreshViewData(name);
+
+  // Habillage : tiroir refermé sur mobile, page remontée, pastille du menu, pouls, session.
+  if (isMobileNav()) setDrawerOpen(false);
+  if (viewChanged) window.scrollTo(0, 0);
+  window.requestAnimationFrame(() => { placeNavIndicator(); updateScrollProgress(); });
+  refreshNavLive();
+  persistSession();
+  if (viewChanged && state.currentUser) audit("vue.ouvrir", { vue: name, ressourceType: "Page", ressourceLibelle: getViewMeta(name).title });
+}
+
+// Les feuilles (et les règlements pour les pages financières) sont relus à l'ouverture des pages qui les affichent.
+function refreshViewData(name) {
+  if (!state.currentUser || ["medecin", "historique", "dashboard", "rapports"].indexOf(name) < 0) return;
+  const finance = (name === "dashboard" || name === "rapports") && ["Super Admin", "DG", "Caisse"].indexOf(state.currentUser.role) >= 0;
+  Promise.all([
+    pullFeuilles(false),
+    finance ? apiListReglements().then(list => {
+      state.reglements = (list || []).filter(r => r.kind === "pharmacie").map(mapReglement);
+      state.reglementsHopitaux = (list || []).filter(r => r.kind === "hopital").map(mapReglement);
+    }) : null
+  ]).then(() => {
+    if (currentViewName !== name) return;
+    if (name === "medecin") renderMedecinQueue();
+    else if (name === "historique") renderHistorique();
+    else if (name === "dashboard") renderDashboardStats();
+    else if (name === "rapports") renderRapports();
+    refreshNavLive();
+  }).catch(err => { if (!err.isNetworkError) reportDataError(err); });
+}
+let dataErrorShownAt = 0;
+function reportDataError(err) {
+  if (Date.now() - dataErrorShownAt < 8000) return;
+  dataErrorShownAt = Date.now();
+  toast({ kind: "warn", title: "Données non actualisées", text: err.unavailable ? "Cette fonction n'est pas encore disponible côté serveur." : err.message, ms: 6000 });
 }
 
 // "Accueil" (racine du fil d'Ariane) est cliquable et ramène au tableau de
@@ -678,14 +1618,22 @@ function renderCrumb(meta) {
   const el = document.getElementById("topbarCrumb");
   const parts = meta.crumb.split(" / ");
   if (parts.length === 1) {
-    el.innerHTML = '<span class="crumb-current">' + parts[0] + "</span>";
+    el.innerHTML = '<span class="crumb-current">' + escapeHtml(parts[0]) + "</span>";
     return;
   }
+  // Une sous-vue (feuille de soins, dossier) rend aussi sa vue d'origine
+  // cliquable : « Accueil / Espace Médecin / F2026-00012 ».
+  const hasParent = !!meta.parentView && parts.length > 2;
   el.innerHTML =
-    '<button type="button" class="crumb-link" id="crumbHomeBtn">' + parts[0] + "</button>" +
+    '<button type="button" class="crumb-link" id="crumbHomeBtn">' + escapeHtml(parts[0]) + "</button>" +
     '<span class="crumb-sep">/</span>' +
-    '<span class="crumb-current">' + parts.slice(1).join(" / ") + "</span>";
+    (hasParent
+      ? '<button type="button" class="crumb-link" id="crumbParentBtn">' + escapeHtml(parts[1]) + "</button>" +
+        '<span class="crumb-sep">/</span>' +
+        '<span class="crumb-current">' + escapeHtml(parts.slice(2).join(" / ")) + "</span>"
+      : '<span class="crumb-current">' + escapeHtml(parts.slice(1).join(" / ")) + "</span>");
   document.getElementById("crumbHomeBtn").addEventListener("click", () => goToView("dashboard"));
+  if (hasParent) document.getElementById("crumbParentBtn").addEventListener("click", () => goToView(meta.parentView));
 }
 document.getElementById("topbarBackBtn").addEventListener("click", () => {
   const previous = viewHistory.pop();
@@ -724,11 +1672,11 @@ document.querySelectorAll(".nav-item[data-view]").forEach(btn => {
 
 function populateMedecinSelect() {
   const sel = document.getElementById("medecinSelect");
-  sel.innerHTML = '<option value="">— Choisir un médecin —</option>';
-  MEDECINS.forEach(m => {
+  sel.innerHTML = '<option value="">' + (state.medecins.length ? "— Choisir un médecin —" : "— Annuaire des médecins indisponible —") + "</option>";
+  state.medecins.forEach(m => {
     const opt = document.createElement("option");
     opt.value = m.id;
-    opt.textContent = "Dr. " + m.prenom + " " + m.nom + " — " + m.etablissement;
+    opt.textContent = "Dr. " + (m.prenom ? m.prenom + " " : "") + m.nom + (m.etablissement ? " — " + m.etablissement : "");
     sel.appendChild(opt);
   });
 }
@@ -740,6 +1688,10 @@ function resetSearch() {
   state.currentTM = null;
   state.currentMedecin = null;
   document.getElementById("assureFound").hidden = true;
+  document.getElementById("assureFound").classList.remove("is-suspended");
+  const pecColReset = document.querySelector("#assureFound .assure-pec-col");
+  pecColReset.classList.remove("is-blocked");
+  pecColReset.inert = false;
   document.getElementById("notFoundMsg").hidden = true;
   document.getElementById("matriculeInput").value = "";
   document.querySelectorAll("#tmChoices .chip").forEach(c => c.classList.remove("active"));
@@ -757,14 +1709,12 @@ function resetSearch() {
 // n'existe pas réellement en base ne doit jamais faire apparaître un
 // assuré fictif.
 async function runSearch(matricule) {
-  matricule = (matricule || "").trim();
+  matricule = nagDigits(matricule);
   const notFound = document.getElementById("notFoundMsg");
   const notFoundText = document.getElementById("notFoundText");
-  const createBtn = document.getElementById("createPatientBtn");
   const card = document.getElementById("assureFound");
   if (!matricule) {
     notFound.hidden = true;
-    createBtn.hidden = true;
     card.hidden = true;
     state.currentAssure = null;
     updateActionButtons();
@@ -772,36 +1722,43 @@ async function runSearch(matricule) {
   }
 
   const btn = document.getElementById("searchBtn");
-  btn.disabled = true;
   notFound.hidden = true;
-  createBtn.hidden = true;
   card.hidden = true;
 
+  // Le NAG est un INT de 10 chiffres (CK_Patient_nag_10) : inutile d'interroger
+  // la base avec autre chose.
+  if (!isValidNag(matricule)) {
+    state.currentAssure = null;
+    notFoundText.textContent = matricule.length !== 10
+      ? "Le matricule (NAG) comporte exactement 10 chiffres."
+      : "Matricule invalide : le NAG est compris entre 1 000 000 000 et 2 147 483 647.";
+    notFound.hidden = false;
+    updateActionButtons();
+    audit("patient.rechercher", { resultat: "ECHEC", message: "NAG invalide (" + matricule.length + " chiffres)", apres: { trouve: false } });
+    return;
+  }
+
+  btn.disabled = true;
   try {
     const found = await findPatientByMatricule(matricule);
     btn.disabled = false;
     if (!found) {
       state.currentAssure = null;
-      // NB : le texte va dans #notFoundText (un <span> dédié), jamais dans
-      // notFound.textContent directement — sinon ça efface le bouton
-      // "+ Créer ce patient" qui est un enfant de notFound.
       notFoundText.textContent = "Aucun assuré trouvé pour ce matricule.";
-      createBtn.hidden = false;
       notFound.hidden = false;
       updateActionButtons();
+      audit("patient.rechercher", { nag: matricule, message: "Aucun assuré pour ce NAG", apres: { trouve: false } });
       return;
     }
     state.currentAssure = found;
     showAssureCard(found);
+    audit("patient.rechercher", { nag: matricule, ressourceType: "Assuré", ressourceLibelle: ((found.prenom || "") + " " + (found.nom || "")).trim(), message: isSuspended(found) ? "Assuré suspendu : prise en charge bloquée" : "", apres: { trouve: true, statut: found.statut } });
   } catch (err) {
     btn.disabled = false;
     state.currentAssure = null;
     notFoundText.textContent = err.isNetworkError
       ? "Backend injoignable — impossible de rechercher un assuré pour le moment."
       : "Erreur lors de la recherche : " + err.message;
-    // Pas de proposition de création tant qu'on ne sait même pas si le
-    // patient existe déjà (erreur réseau ou refus de l'API).
-    createBtn.hidden = true;
     notFound.hidden = false;
     updateActionButtons();
   }
@@ -848,12 +1805,52 @@ function fondsLabel(fonds) {
   return FONDS_LABELS[key] || ("Erreur (valeur " + fonds + ")");
 }
 
+/* ---- Assuré suspendu : alerte rouge, et aucune prestation ne peut être enregistrée ---- */
+
+function isSuspended(a) { return !!a && a.statut === "suspendu"; }
+
+// Interroge la base (API, à défaut base locale) : renvoie l'assuré s'il est suspendu, sinon null.
+function checkNagSuspended(nag) {
+  const digits = nagDigits(nag);
+  if (!digits) return Promise.resolve(null);
+  return findPatientByMatricule(digits).then(p => (isSuspended(p) ? p : null)).catch(() => null);
+}
+
+// Fenêtre rouge : l'assuré est suspendu, la conséquence dépend de l'étape (accueil, médecin, pharmacie).
+function showSuspendedModal(nom, nag, consequence) {
+  showInfoModal("Assuré suspendu",
+    '<div class="suspended-modal"><span class="sa-ico big"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg></span><div>' +
+    "<p><b>" + escapeHtml(nom || "Cet assuré") + "</b>" + (nag ? " (" + escapeHtml(formatNag(nag)) + ")" : "") + " est <b>suspendu</b>.</p>" +
+    "<p>Il ne peut recevoir <b>aucune prestation</b> : " + escapeHtml(consequence) + "</p>" +
+    '<p class="hint">Sa situation doit d\'abord être régularisée auprès de la CNAMGS.</p></div></div>');
+  document.querySelector("#infoModal .modal").className = "modal modal-danger";
+}
+
+// Laisse passer (proceed) sauf si l'assuré est suspendu : dans ce cas, fenêtre rouge et trace dans le journal.
+function guardSuspended(nag, nom, consequence, proceed, auditAction) {
+  checkNagSuspended(nag).then(p => {
+    if (!p) { proceed(); return; }
+    audit(auditAction || "feuille.ouvrir", { resultat: "REFUSE", nag: nag, ressourceType: "Assuré", ressourceLibelle: nom || fullName(p), message: "Refusé : assuré suspendu" });
+    showSuspendedModal(nom || fullName(p), nag, consequence);
+  });
+}
+
 function showAssureCard(assure) {
   document.getElementById("assureFound").hidden = false;
   document.getElementById("af-nom").textContent = assure.prenom + " " + assure.nom;
-  const statutTxt = assure.statutAssure ? "Assuré" : "Non assuré";
-  document.getElementById("af-situation").textContent = statutTxt;
-  document.getElementById("af-matricule").textContent = assure.matricule || "—";
+  // Statut (actif / suspendu) et nature (assuré principal, ayant droit, conjoint) de l'assuré.
+  const statutBadge = document.getElementById("af-statut");
+  statutBadge.textContent = "Statut : " + statutAssureLabel(assure.statut);
+  statutBadge.classList.toggle("suspendu", assure.statut === "suspendu");
+  // Assuré suspendu : cachet « SUSPENDU », formulaire de prise en charge verrouillé, consigne rouge sous le formulaire.
+  const suspended = isSuspended(assure);
+  document.getElementById("assureFound").classList.toggle("is-suspended", suspended);
+  document.getElementById("assurePhotoCol").classList.toggle("is-suspended", suspended);
+  const pecCol = document.querySelector("#assureFound .assure-pec-col");
+  pecCol.classList.toggle("is-blocked", suspended);
+  pecCol.inert = suspended;
+  document.getElementById("af-nature").textContent = natureAssureLabel(assure.natureCode);
+  document.getElementById("af-matricule").textContent = formatNag(assure.matricule) || "—";
   document.getElementById("af-naissance").textContent = assure.dateNaissance ? dossierDateFR(assure.dateNaissance) : "—";
   document.getElementById("af-fonds").textContent = fondsLabel(assure.fonds);
   setAvatar(document.getElementById("af-avatar"), assure.prenom, assure.nom, assure.photoUrl);
@@ -865,7 +1862,7 @@ function showAssureCard(assure) {
     prenom: assure.prenom,
     dateNaissance: assure.dateNaissance,
     sexe: assure.sexe,
-    estAssure: !!assure.statutAssure
+    estAssure: assure.estAssure
   };
   updateActionButtons();
 
@@ -880,9 +1877,11 @@ function showAssureCard(assure) {
   document.getElementById("pec-service").value = "";
   updateActionButtons();
 
-  // « Nouvelle consultation » (raccourci vers la feuille de soins complète,
-  // même flux que le Dossier Patient) n'apparaît que pour un patient déjà
-  // venu en consultation plus d'une fois — repéré via son dossier réel. La
+  // « Nouvelle consultation » (crée directement une nouvelle feuille « En
+  // attente » pour le médecin, comme « Enregistrer ») n'apparaît que pour un
+  // patient déjà venu en consultation plus d'une fois — repéré via son
+  // dossier réel. C'est ici, à l'accueil, que démarre toute nouvelle
+  // consultation ; le dossier patient, lui, n'en démarre jamais. La
   // carte assuré change aussi de couleur selon ce même historique (habitué
   // en vert, jamais consulté en gris).
   const btn = document.getElementById("nouvellePecConsultationBtn");
@@ -895,132 +1894,40 @@ function showAssureCard(assure) {
       // on ignore un résultat qui ne concerne plus l'assuré courant.
       if (state.currentAssure !== assure) return;
       const count = (list || []).length;
-      btn.hidden = !(count > 1);
+      btn.hidden = isSuspended(assure) || !(count > 1);
       photoCol.classList.toggle("patient-frequent", count > 1);
       photoCol.classList.toggle("patient-new", count === 0);
     }).catch(() => { btn.hidden = true; });
   }
 }
 
+const READY_HINT_DEFAULT = "Sélectionnez un patient, un ticket modérateur et un médecin pour continuer.";
 function updateActionButtons() {
-  const ready = !!(state.currentAssure && state.currentPatient && state.currentTM && state.currentMedecin);
+  // Un assuré suspendu ne peut jamais avoir de prise en charge, quoi qu'on sélectionne.
+  const suspended = isSuspended(state.currentAssure);
+  const ready = !!(state.currentAssure && state.currentPatient && state.currentTM && state.currentMedecin) && !suspended;
   document.getElementById("enregistrerPecBtn").disabled = !ready;
   document.getElementById("nouvellePecConsultationBtn").disabled = !ready;
   const hint = document.getElementById("readyHint");
-  if (hint) hint.hidden = ready;
+  if (hint) {
+    hint.hidden = ready;
+    hint.textContent = suspended ? "Enregistrement impossible : l'assuré est suspendu, il ne peut recevoir aucune prestation." : READY_HINT_DEFAULT;
+    hint.classList.toggle("hint-danger", suspended);
+  }
 }
 
+// Ceinture et bretelles : même si le bouton est activé par un autre moyen, on refuse et on le trace.
+function refuseSuspendedPec() {
+  const a = state.currentAssure;
+  audit("pec.creer", { resultat: "REFUSE", nag: a.matricule, ressourceType: "Assuré", ressourceLibelle: fullName(a), message: "Prise en charge refusée : assuré suspendu" });
+  showSuspendedModal(fullName(a), a.matricule, "aucune prise en charge ne peut être enregistrée.");
+}
+
+attachNagMask(document.getElementById("matriculeInput"));
+attachNagMask(document.getElementById("pharmaNagInput"));
 document.getElementById("searchBtn").addEventListener("click", () => runSearch(document.getElementById("matriculeInput").value));
 document.getElementById("matriculeInput").addEventListener("keydown", e => { if (e.key === "Enter") runSearch(e.target.value); });
 document.getElementById("changeAssureBtn").addEventListener("click", resetSearch);
-
-/* ---------------------------------------------------------------------- */
-/* Créer / modifier / supprimer un patient (table Patient, via l'API)     */
-/* ---------------------------------------------------------------------- */
-
-const patientModal = document.getElementById("patientModal");
-let editingPatientId = null; // id_patient en cours de modification, null = création
-
-function fillPatientForm(p) {
-  document.getElementById("p-id").value = p.id_patient || "";
-  document.getElementById("p-photo-url").value = p.photo_url || "";
-  document.getElementById("p-matricule").value = p.matricule_nag || "";
-  document.getElementById("p-prenom").value = p.prenom || "";
-  document.getElementById("p-nom").value = p.nom || "";
-  document.getElementById("p-sex").value = p.sex || "M";
-  document.getElementById("p-contact").value = p.contact || "";
-  document.getElementById("p-adresse").value = p.adresse || "";
-  document.getElementById("p-date-naissance").value = p.date_naissance || "";
-  document.getElementById("p-fonds").value = p.fonds != null ? String(p.fonds) : "1";
-  document.getElementById("p-statut-assure").checked = !!p.statut_assure;
-  document.getElementById("p-id-assure-principal").value = p.id_assure_principal != null ? p.id_assure_principal : "";
-}
-
-// photo_url est repris tel quel (champ caché) : aucune UI d'upload de photo
-// n'existe, donc on ne l'écrase jamais — le PUT backend réécrit TOUTES les
-// colonnes (voir PatientDAO.update), un champ omis serait sinon mis à NULL.
-function readPatientForm() {
-  const idAssurePrincipal = document.getElementById("p-id-assure-principal").value.trim();
-  return {
-    photo_url: document.getElementById("p-photo-url").value || null,
-    prenom: document.getElementById("p-prenom").value.trim(),
-    nom: document.getElementById("p-nom").value.trim(),
-    sex: document.getElementById("p-sex").value,
-    contact: document.getElementById("p-contact").value.trim(),
-    adresse: document.getElementById("p-adresse").value.trim(),
-    date_naissance: document.getElementById("p-date-naissance").value || null,
-    statut_assure: document.getElementById("p-statut-assure").checked,
-    fonds: parseInt(document.getElementById("p-fonds").value, 10),
-    matricule_nag: document.getElementById("p-matricule").value.trim(),
-    id_assure_principal: idAssurePrincipal ? parseInt(idAssurePrincipal, 10) : null
-  };
-}
-
-function openPatientModalCreate(matricule) {
-  editingPatientId = null;
-  document.getElementById("patientForm").reset();
-  document.getElementById("p-id").value = "";
-  document.getElementById("p-photo-url").value = "";
-  document.getElementById("p-matricule").value = matricule || "";
-  document.getElementById("patientModalTitle").textContent = "Créer un patient";
-  patientModal.hidden = false;
-}
-
-function openPatientModalEdit(p) {
-  editingPatientId = p.id_patient;
-  fillPatientForm(p);
-  document.getElementById("patientModalTitle").textContent = "Modifier le patient";
-  patientModal.hidden = false;
-}
-
-function closePatientModal() {
-  patientModal.hidden = true;
-  editingPatientId = null;
-}
-document.getElementById("closePatientModal").addEventListener("click", closePatientModal);
-document.getElementById("cancelPatientModal").addEventListener("click", closePatientModal);
-
-document.getElementById("createPatientBtn").addEventListener("click", () => {
-  openPatientModalCreate(document.getElementById("matriculeInput").value.trim());
-});
-
-document.getElementById("editPatientBtn").addEventListener("click", () => {
-  if (!state.currentAssure || state.currentAssure.idPatient == null) return;
-  // GET /api/patients/{id} : on relit la fiche complète depuis la base
-  // plutôt que de réutiliser l'objet déjà mappé pour l'affichage (qui a
-  // perdu photo_url brut / id_assure_principal — voir mapBackendPatient).
-  apiGetPatient(state.currentAssure.idPatient).then(p => openPatientModalEdit(p))
-    .catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
-});
-
-document.getElementById("deletePatientBtn").addEventListener("click", () => {
-  if (!state.currentAssure || state.currentAssure.idPatient == null) return;
-  const id = state.currentAssure.idPatient;
-  askConfirm("Le patient " + state.currentAssure.prenom + " " + state.currentAssure.nom + " sera définitivement supprimé.", () => {
-    apiDeletePatient(id).then(() => {
-      resetSearch();
-      showInfoModal("Patient supprimé", "<p>Le patient a été supprimé.</p>");
-    }).catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
-  }, { title: "Supprimer ce patient ?" });
-});
-
-document.getElementById("patientForm").addEventListener("submit", e => {
-  e.preventDefault();
-  const payload = readPatientForm();
-  const action = editingPatientId != null
-    ? apiUpdatePatient(editingPatientId, payload)
-    : apiCreatePatient(payload);
-
-  action.then(res => {
-    const id = editingPatientId != null ? editingPatientId : res.id_patient;
-    closePatientModal();
-    return apiGetPatient(id);
-  }).then(p => {
-    document.getElementById("matriculeInput").value = p.matricule_nag || "";
-    state.currentAssure = mapBackendPatient(p);
-    showAssureCard(state.currentAssure);
-  }).catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
-});
 
 document.querySelectorAll("#tmChoices .chip").forEach(chip => {
   chip.addEventListener("click", () => {
@@ -1032,16 +1939,21 @@ document.querySelectorAll("#tmChoices .chip").forEach(chip => {
 
 document.getElementById("medecinSelect").addEventListener("change", e => {
   const id = parseInt(e.target.value, 10);
-  state.currentMedecin = MEDECINS.find(m => m.id === id) || null;
+  state.currentMedecin = state.medecins.find(m => m.id === id) || null;
   updateActionButtons();
 });
 
 /* ---------------------------------------------------------------------- */
-/* Dossier patient : informations générales + modules Consultations /     */
-/* Examens (CRÉER / LIRE / MODIFIER uniquement, jamais de suppression —   */
-/* voir backend/controller/ConsultationController.java et                */
-/* ExamenController.java). Le patient possède un dossier, il n'en devient */
-/* pas un : ce dossier regroupe ses informations et ses prestations.      */
+/* Dossier patient : informations générales + chronologie des visites.     */
+/* Une visite regroupe la consultation, son ordonnance et les bons d'examen */
+/* liés (feuilles locales, state.historique). Les enregistrements du       */
+/* dossier venus de l'API (Consultation / Examen — CRÉER / LIRE / MODIFIER  */
+/* uniquement, jamais de suppression, voir ConsultationController /         */
+/* ExamenController) complètent ce que ces feuilles ne couvrent pas.        */
+/*                                                                        */
+/* Une nouvelle consultation ne se démarre PAS ici : le patient repasse par */
+/* l'accueil (« Nouvelle prise en charge »), et c'est le médecin qui        */
+/* recommande un examen depuis la consultation.                            */
 /* ---------------------------------------------------------------------- */
 
 document.getElementById("openDossierPatientBtn").addEventListener("click", () => {
@@ -1049,13 +1961,22 @@ document.getElementById("openDossierPatientBtn").addEventListener("click", () =>
   openDossierPatient(state.currentAssure);
 });
 
-function openDossierPatient(patient) {
+// opts.fromSheet : ouvert depuis « Historique des visites » (header de la feuille
+// de soins) — la visite en cours d'examen (opts.focusId) est mise en évidence et
+// un bouton ramène à la feuille.
+function openDossierPatient(patient, opts) {
   state.dossierPatient = patient;
+  state.dossierConsultations = [];
+  state.dossierExamens = [];
+  state.dossierFromSheet = !!(opts && opts.fromSheet);
+  state.dossierFocusId = opts && opts.focusId != null ? opts.focusId : null;
+  state.dossierFocusPending = state.dossierFocusId != null;
+  resetPage("timeline");
+  audit("dossier.ouvrir", { nag: patient.matricule, ressourceType: "Assuré", ressourceId: patient.idPatient || patient.id || "", ressourceLibelle: ((patient.prenom || "") + " " + (patient.nom || "")).trim() });
   renderDossierPatientInfo();
-  setDossierTab("consultations");
   goToView("dossier-patient");
-  reloadDossierConsultations();
-  reloadDossierExamens();
+  renderDossierTimeline();
+  reloadDossier();
 }
 
 function renderDossierPatientInfo() {
@@ -1063,29 +1984,33 @@ function renderDossierPatientInfo() {
   if (!p) return;
   document.getElementById("dpHeading").textContent = "Dossier patient — " + p.prenom + " " + p.nom;
   document.getElementById("dp-nom").textContent = p.prenom + " " + p.nom;
-  document.getElementById("dp-matricule").textContent = p.matricule || "—";
+  document.getElementById("dp-matricule").textContent = formatNag(p.matricule) || "—";
   document.getElementById("dp-sexe").textContent = p.sexe === "F" ? "Féminin" : (p.sexe === "M" ? "Masculin" : "—");
   document.getElementById("dp-naissance").textContent = p.dateNaissance ? dossierDateFR(p.dateNaissance) : "—";
   document.getElementById("dp-adresse").textContent = p.adresse || "—";
   document.getElementById("dp-telephone").textContent = p.telephone || "—";
-  document.getElementById("dp-statut").textContent = p.statutAssure ? "Assuré" : "Non assuré";
+  document.getElementById("dp-nature").textContent = natureAssureLabel(p.natureCode);
+  const dpStatut = document.getElementById("dp-statut");
+  dpStatut.textContent = statutAssureLabel(p.statut);
+  dpStatut.className = p.statut ? "statut-" + p.statut : "";
+  document.getElementById("dpSuspendedAlert").hidden = !isSuspended(p);
   setAvatar(document.getElementById("dp-avatar"), p.prenom, p.nom, p.photoUrl);
+  document.getElementById("dpBackToSheetBtn").hidden = !state.dossierFromSheet;
 }
 
-function setDossierTab(tab) {
-  document.getElementById("dpTabConsultationsBtn").classList.toggle("active", tab === "consultations");
-  document.getElementById("dpTabExamensBtn").classList.toggle("active", tab === "examens");
-  document.getElementById("dpConsultationsPanel").hidden = tab !== "consultations";
-  document.getElementById("dpExamensPanel").hidden = tab !== "examens";
-}
-document.getElementById("dpTabConsultationsBtn").addEventListener("click", () => setDossierTab("consultations"));
-document.getElementById("dpTabExamensBtn").addEventListener("click", () => setDossierTab("examens"));
-
+// Statuts de la base : Prise_en_charge (en_attente | validee | rejetee) pour une
+// consultation, Examen (en_attente | en_cours | termine | annule) pour un examen.
+const STATUT_LABELS = {
+  en_attente: "En attente", validee: "Validée", rejetee: "Rejetée",
+  en_cours: "En cours", termine: "Terminé", annule: "Annulé"
+};
 function statutLabel(statut) {
-  return statut === "validee" ? "Validée" : (statut === "rejetee" ? "Rejetée" : "En attente");
+  return STATUT_LABELS[statut] || "En attente";
 }
 function statutPillClass(statut) {
-  return statut === "validee" ? "validee" : (statut === "rejetee" ? "rejetee" : "attente");
+  if (statut === "validee" || statut === "termine") return "validee";
+  if (statut === "rejetee" || statut === "annule") return "rejetee";
+  return "attente";
 }
 function dossierDateFR(isoDate) {
   if (!isoDate) return "—";
@@ -1094,52 +2019,179 @@ function dossierDateFR(isoDate) {
 }
 function money(n) { return (n == null ? 0 : n).toLocaleString("fr-FR") + " FCFA"; }
 
-/* ---- Consultations -------------------------------------------------- */
-
-function reloadDossierConsultations() {
-  const idPatient = state.dossierPatient.idPatient;
-  apiListConsultations(idPatient).then(list => {
-    state.dossierConsultations = list || [];
-    renderDossierConsultations();
-  }).catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
+// Enregistrements du dossier côté API (avec repli local, voir api.js).
+function reloadDossier() {
+  const p = state.dossierPatient;
+  if (!p) return;
+  if (p.matricule) {
+    apiListFeuilles({ nag: p.matricule }).then(list => {
+      if (state.dossierPatient !== p) return;
+      mergeFeuilles(list, false, false);
+      renderDossierTimeline();
+    }).catch(() => { /* le dossier s'affiche avec ce qui est déjà chargé */ });
+  }
+  if (p.idPatient == null) return;
+  Promise.all([apiListConsultations(p.idPatient), apiListExamensPatient(p.idPatient)]).then(res => {
+    if (state.dossierPatient !== p) return; // un autre dossier a été ouvert entre-temps
+    state.dossierConsultations = res[0] || [];
+    state.dossierExamens = res[1] || [];
+    renderDossierTimeline();
+  }).catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
 }
 
-function renderDossierConsultations() {
-  const body = document.getElementById("dpConsultationsBody");
-  const list = state.dossierConsultations;
-  document.getElementById("dpConsultationsEmpty").hidden = list.length > 0;
-  body.innerHTML = list.map(c => (
-    "<tr>" +
-      "<td>" + dossierDateFR(c.date) + "</td>" +
-      "<td>" + escapeHtml(c.medecin_nom || "—") + "</td>" +
-      "<td>" + escapeHtml(c.numero_de_feuille || "—") + "</td>" +
-      "<td><span class=\"pill " + statutPillClass(c.statut) + "\">" + statutLabel(c.statut) + "</span></td>" +
-      "<td><button type=\"button\" class=\"btn-secondary btn-sm\" data-action=\"voir-consultation\" data-id=\"" + c.id_prestation + "\">Voir</button></td>" +
-    "</tr>"
-  )).join("");
-  body.querySelectorAll('[data-action="voir-consultation"]').forEach(btn => {
+// Feuilles locales du patient ouvert (par matricule), toutes étapes confondues.
+function localSheetsOfPatient(p) {
+  const mat = String(p.matricule || "");
+  return mat ? state.historique.filter(h => String(h.matricule) === mat) : [];
+}
+
+// Regroupe consultations, bons liés et enregistrements API en « visites »,
+// de la plus récente à la plus ancienne.
+function buildDossierVisits() {
+  const p = state.dossierPatient;
+  if (!p) return [];
+  const sheets = localSheetsOfPatient(p);
+  const consults = sheets.filter(h => h.type === "Consultation");
+  const exams = sheets.filter(h => h.type === "Examen");
+  const usedExamIds = new Set();
+
+  const visits = consults.map(c => {
+    const bons = (c.linkedExamenIds || []).map(id => state.historique.find(h => h.id === id)).filter(Boolean);
+    exams.forEach(e => { if (e.linkedConsultationId === c.id && !bons.includes(e)) bons.push(e); });
+    bons.forEach(b => usedExamIds.add(b.id));
+    return { consult: c, bons: bons, iso: frToISO(c.date) };
+  });
+  // Bon d'examen dont la consultation n'appartient pas à ce dossier (ou feuille d'examen isolée).
+  exams.filter(e => !usedExamIds.has(e.id)).forEach(e => visits.push({ consult: null, bons: [e], iso: frToISO(e.date) }));
+
+  // Enregistrements de l'API non couverts par une feuille locale : consultations
+  // repérées par leur numéro de feuille, examens appariés date + type (chaque
+  // examen local validé « consomme » au plus un enregistrement API).
+  const knownNumeros = new Set(consults.map(c => c.numero));
+  state.dossierConsultations.forEach(c => {
+    if (c.numero_de_feuille && knownNumeros.has(c.numero_de_feuille)) return;
+    visits.push({ consult: null, bons: [], apiConsult: c, iso: c.date || "" });
+  });
+  const pool = state.dossierExamens.slice();
+  exams.filter(e => e.statut === "Validée").forEach(e => {
+    const iso = frToISO(e.date);
+    const type = e.examNature || "Examen";
+    const i = pool.findIndex(x => x.date_examen === iso && (x.type_examen || "Examen") === type);
+    if (i !== -1) pool.splice(i, 1);
+  });
+  pool.forEach(x => visits.push({ consult: null, bons: [], apiExam: x, iso: x.date_examen || "" }));
+
+  const rank = v => state.historique.indexOf(v.consult || v.bons[0]);
+  visits.sort((a, b) => (b.iso || "").localeCompare(a.iso || "") || rank(a) - rank(b));
+  return visits;
+}
+
+function entryStatutPill(e) {
+  const done = e.statut === "Validée";
+  return '<span class="pill ' + (done ? "validee" : "attente") + '">' + (done ? "Validée" : "En attente") + "</span>";
+}
+function ordoSummary(e) {
+  const rows = e.ordonnance || [];
+  if (!rows.length) return "Sans ordonnance";
+  return "Ordonnance : " + rows.map(r => escapeHtml(r.designation) + " × " + escapeHtml(r.quantite)).join(", ");
+}
+function examSummary(e) {
+  const n = (e.examens || []).filter(r => r.designation).length;
+  return [escapeHtml(e.examNature || ""), n ? n + " examen" + (n > 1 ? "s" : "") : ""].filter(Boolean).join(" — ") || "Contenu à renseigner";
+}
+function entryAmountNote(e) {
+  const n = parseFloat(e.totalMontant);
+  return n > 0 ? " · " + money(n) : "";
+}
+
+// child : la feuille d'examen est présentée en retrait sous la consultation de la
+// même visite ; parent : cette consultation (la feuille d'examen y est liée).
+function visitLineHtml(e, child, parent) {
+  const isExam = e.type === "Examen";
+  const link = parent
+    ? 'Liée à la consultation <a href="#" class="visit-link" data-preview="' + parent.id + '">' + escapeHtml(parent.numero) + "</a>"
+    : "Sans consultation liée";
+  const sub = isExam
+    ? examSummary(e) + " · " + link + " · " + escapeHtml(e.medecin || "—")
+    : escapeHtml(e.medecin || "—") + (e.medecinEtab ? " — " + escapeHtml(e.medecinEtab) : "") + " · " + ordoSummary(e);
+  return '<div class="visit-line' + (child ? " bon" : "") + '">' +
+    '<div class="visit-line-main">' +
+      '<div class="visit-line-title"><span class="pill ' + (isExam ? "examen" : "consultation") + '">' + (isExam ? "Examen" : "Consultation") + "</span>" +
+        escapeHtml(e.numero) + " " + entryStatutPill(e) + "</div>" +
+      '<div class="visit-line-sub">' + sub + escapeHtml(entryAmountNote(e)) + "</div>" +
+    "</div>" +
+    '<button type="button" class="btn-secondary btn-sm" data-preview="' + e.id + '">Voir</button>' +
+  "</div>";
+}
+
+function visitCardHtml(v) {
+  const lines = [];
+  const hasConsult = !!(v.consult || v.apiConsult);
+  if (v.consult) lines.push(visitLineHtml(v.consult, false));
+  v.bons.forEach(b => lines.push(visitLineHtml(b, hasConsult, v.consult)));
+  if (v.apiConsult) {
+    const c = v.apiConsult;
+    lines.push('<div class="visit-line"><div class="visit-line-main">' +
+      '<div class="visit-line-title"><span class="pill consultation">Consultation</span>' + escapeHtml(c.numero_de_feuille || "—") + ' <span class="pill ' + statutPillClass(c.statut) + '">' + statutLabel(c.statut) + "</span></div>" +
+      '<div class="visit-line-sub">' + escapeHtml(c.medecin_nom || "—") + (c.montant ? " · " + escapeHtml(money(c.montant)) : "") + "</div></div>" +
+      '<button type="button" class="btn-secondary btn-sm" data-preview-api="' + c.id_prestation + '">Voir</button></div>');
+  }
+  if (v.apiExam) {
+    const x = v.apiExam;
+    lines.push('<div class="visit-line"><div class="visit-line-main">' +
+      '<div class="visit-line-title"><span class="pill examen">Examen</span>' + escapeHtml(x.type_examen || "—") + ' <span class="pill ' + statutPillClass(x.statut) + '">' + statutLabel(x.statut) + "</span></div>" +
+      '<div class="visit-line-sub">' + escapeHtml(x.medecin_nom || "—") + (x.montant ? " · " + escapeHtml(money(x.montant)) : "") + "</div></div></div>");
+  }
+  const onlyExam = !hasConsult;
+  const count = v.bons.length;
+  const key = v.consult ? v.consult.id : (v.bons[0] ? v.bons[0].id : "");
+  const current = state.dossierFocusId != null && key === state.dossierFocusId;
+  return '<div class="visit-card' + (onlyExam ? " examen" : "") + (current ? " current" : "") + '" data-visit="' + key + '">' +
+    '<div class="visit-card-head"><strong>' + (onlyExam ? "Examen du " : "Visite du ") + dossierDateFR(v.iso) + "</strong>" +
+    (current ? '<span class="pill attente">En cours d\'examen</span>' : "") +
+    "<span class=\"hint\" style=\"margin:0\">" + (onlyExam ? "Examen seul" : (count ? count + " feuille" + (count > 1 ? "s" : "") + " d'examen liée" + (count > 1 ? "s" : "") : "Sans feuille d'examen")) + "</span></div>" +
+    lines.join("") + "</div>";
+}
+
+function renderDossierTimeline() {
+  const wrap = document.getElementById("dpTimeline");
+  const empty = document.getElementById("dpTimelineEmpty");
+  if (!wrap) return;
+  const visits = buildDossierVisits();
+  empty.hidden = visits.length > 0;
+  // Arrivé depuis la feuille de soins : la page qui contient la visite en cours s'affiche d'office.
+  if (state.dossierFocusPending) {
+    const at = visits.findIndex(v => { const h = v.consult || v.bons[0]; return h && h.id === state.dossierFocusId; });
+    if (at >= 0) PAGER_STATE.timeline = Math.floor(at / 5) + 1;
+  }
+  const info = pageSlice("timeline", visits, 5);
+  renderPager("dpTimelinePager", "timeline", info, renderDossierTimeline, "visites");
+  wrap.innerHTML = info.items.map(visitCardHtml).join("");
+  wrap.querySelectorAll("[data-preview]").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.preventDefault();
+      previewEntry(parseInt(btn.dataset.preview, 10));
+    });
+  });
+  // Arrivé depuis la feuille de soins : la visite en cours est amenée à l'écran si elle n'y est pas déjà (une seule fois).
+  if (state.dossierFocusPending) {
+    const cur = wrap.querySelector(".visit-card.current");
+    if (cur) { cur.scrollIntoView({ behavior: "smooth", block: "nearest" }); state.dossierFocusPending = false; }
+  }
+  wrap.querySelectorAll("[data-preview-api]").forEach(btn => {
     btn.addEventListener("click", () => {
-      const c = state.dossierConsultations.find(x => x.id_prestation === parseInt(btn.dataset.id, 10));
+      const c = state.dossierConsultations.find(x => x.id_prestation === parseInt(btn.dataset.previewApi, 10));
       if (c) previewConsultation(c);
     });
   });
 }
 
-// Aperçu façon « feuille de soins » (mêmes classes CSS que previewEntry(),
-// utilisé par Historique PEC) pour une Consultation venant de l'API — moins
-// de champs disponibles que sur une feuille locale complète (pas de
-// prestations détaillées, pas de fonds/TM/praticien code, ce modèle-là ne
-// les porte pas), mais même présentation visuelle.
-// « Voir » doit montrer la feuille réellement remplie par le médecin
-// (prestations, ordonnance/médicaments prescrits...), pas juste les champs
-// limités du modèle Consultation de l'API. Cette feuille existe dans
-// state.historique (créée à la validation, voir submitMedecinValidation) —
-// on la retrouve par numéro de feuille (numero_de_feuille, copié depuis
-// entry.numero au moment de la synchronisation, voir
-// syncValidatedEntryToDossierPatient) et on réutilise previewEntry(), déjà
-// utilisé par Historique PEC, pour un rendu identique et complet. Repli sur
-// l'aperçu simplifié seulement si la feuille d'origine est introuvable
-// (autre session/poste, par exemple).
+// Aperçu façon « feuille de soins » d'une Consultation venant de l'API, quand
+// la feuille locale d'origine est introuvable (autre session/poste, par
+// exemple) : moins de champs disponibles (ce modèle ne porte ni prestations
+// détaillées, ni fonds/TM/code praticien), même présentation visuelle que
+// previewEntry(), qui reste l'aperçu de référence (retrouvé par numéro de
+// feuille, copié dans numero_de_feuille à la synchronisation).
 function previewConsultation(c) {
   const source = c.numero_de_feuille ? state.historique.find(h => h.numero === c.numero_de_feuille) : null;
   if (source) { previewEntry(source.id); return; }
@@ -1154,162 +2206,29 @@ function previewConsultation(c) {
     "</div></div>" +
     '<div class="preview-grid">' +
       "<div><b>Patient</b><span>" + escapeHtml(p ? (p.prenom + " " + p.nom) : "—") + "</span></div>" +
-      "<div><b>Matricule</b><span>" + escapeHtml(p ? p.matricule : "—") + "</span></div>" +
+      "<div><b>Matricule</b><span>" + escapeHtml(p ? formatNag(p.matricule) : "—") + "</span></div>" +
       "<div><b>Date</b><span>" + dossierDateFR(c.date) + "</span></div>" +
       "<div><b>Médecin</b><span>" + escapeHtml(c.medecin_nom || "—") + "</span></div>" +
       "<div><b>Type de feuille</b><span>" + escapeHtml(c.type_feuille || "—") + "</span></div>" +
       "<div><b>N° de feuille</b><span>" + escapeHtml(c.numero_de_feuille || "—") + "</span></div>" +
     "</div>" +
-    '<div class="preview-totals">' +
-      "<div>Montant <b>" + money(c.montant) + "</b></div>" +
-      "<div>Montant CNAMGS <b>" + money(c.montant_pec) + "</b></div>" +
-    "</div>";
+    (c.montant || c.montant_pec
+      ? '<div class="preview-totals">' +
+          "<div>Montant <b>" + money(c.montant) + "</b></div>" +
+          "<div>Montant CNAMGS <b>" + money(c.montant_pec) + "</b></div>" +
+        "</div>"
+      : "");
   document.getElementById("previewModal").hidden = false;
 }
 
-// « + Nouvelle consultation » ouvre directement la feuille de soins, sans
-// passer par « Nouvelle prise en charge » : le patient du dossier est déjà
-// connu, il ne manque que le ticket modérateur et le médecin (seules
-// données qu'on ne peut pas déduire du dossier) — voir openDpSoinsStart()
-// et dpSoinsStartModal. Cette feuille de soins est enregistrée dans
-// state.historique (local), pas dans la table SQL Consultation exposée par
-// l'API — les deux flux restent séparés.
-document.getElementById("addConsultationBtn").addEventListener("click", () => openDpSoinsStart("Consultation"));
-
-/* ---- Examens ---------------------------------------------------------- */
-
-function reloadDossierExamens() {
-  const idPatient = state.dossierPatient.idPatient;
-  apiListExamensPatient(idPatient).then(list => {
-    state.dossierExamens = list || [];
-    renderDossierExamens();
-  }).catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
-}
-
-function renderDossierExamens() {
-  const body = document.getElementById("dpExamensBody");
-  const list = state.dossierExamens;
-  document.getElementById("dpExamensEmpty").hidden = list.length > 0;
-  body.innerHTML = list.map(e => (
-    "<tr>" +
-      "<td>" + dossierDateFR(e.date_examen) + "</td>" +
-      "<td>" + escapeHtml(e.type_examen || "—") + "</td>" +
-      "<td>" + escapeHtml(e.medecin_nom || "—") + "</td>" +
-      "<td>" + money(e.montant) + "</td>" +
-      "<td><span class=\"pill " + statutPillClass(e.statut) + "\">" + statutLabel(e.statut) + "</span></td>" +
-    "</tr>"
-  )).join("");
-}
-
-// « + Nouvel examen » — même principe que « + Nouvelle consultation »
-// ci-dessus, voir le commentaire associé.
-document.getElementById("addExamenBtn").addEventListener("click", () => openDpSoinsStart("Examen"));
-
-/* ---- Modale de démarrage (ticket modérateur + médecin), avant d'ouvrir   */
-/* directement la feuille de soins / le bon d'examen depuis le dossier     */
-/* patient — sans jamais afficher l'écran « Nouvelle prise en charge ».    */
-
-let dpSoinsStartType = null;
-let dpSoinsStartTM = null;
-let dpSoinsStartMedecin = null;
-
-// filterText filtre sur nom/prénom/établissement/spécialité (recherche pour
-// faciliter le choix parmi les médecins du catalogue). Si le médecin déjà
-// sélectionné (dpSoinsStartMedecin) reste dans les résultats filtrés, la
-// sélection est conservée ; sinon elle est réinitialisée.
-function populateDpMedecinSelect(filterText) {
-  const sel = document.getElementById("dp-medecin-select");
-  const needle = (filterText || "").trim().toLowerCase();
-  const matches = !needle ? MEDECINS : MEDECINS.filter(m => {
-    const hay = (m.prenom + " " + m.nom + " " + m.etablissement + " " + m.type).toLowerCase();
-    return hay.includes(needle);
-  });
-  sel.innerHTML = '<option value="">— Choisir un médecin —</option>';
-  matches.forEach(m => {
-    const opt = document.createElement("option");
-    opt.value = m.id;
-    opt.textContent = "Dr. " + m.prenom + " " + m.nom + " — " + m.etablissement;
-    sel.appendChild(opt);
-  });
-  if (dpSoinsStartMedecin && matches.some(m => m.id === dpSoinsStartMedecin.id)) {
-    sel.value = dpSoinsStartMedecin.id;
-  } else {
-    dpSoinsStartMedecin = null;
-    updateDpSoinsStartReady();
-  }
-}
-document.getElementById("dp-medecin-search").addEventListener("input", e => populateDpMedecinSelect(e.target.value));
-
-function updateDpSoinsStartReady() {
-  document.getElementById("dpSoinsStartContinueBtn").disabled = !(dpSoinsStartTM && dpSoinsStartMedecin);
-}
-
-// Si l'utilisateur connecté est lui-même un médecin, on le retrouve dans le
-// catalogue MEDECINS par correspondance nom/prénom (les deux listes ne sont
-// pas formellement reliées ailleurs dans le code — voir MODULES
-// MANQUANTS.md, "Structure"). Sans correspondance (rôle différent, nom
-// absent du catalogue), on retombe sur la sélection manuelle.
+// Si l'utilisateur connecté est lui-même un médecin, on le retrouve dans l'annuaire des médecins (API) par son
+// identifiant. Sans correspondance (autre rôle, annuaire indisponible) : null, donc pas de filtre « Mes patients ».
+function isMyPatient(h, me) { return h.medecinId != null ? h.medecinId === me.id : (!!h.medecinCode && h.medecinCode === me.code); }
 function matchCurrentUserToMedecin() {
   const u = state.currentUser;
-  if (!u || u.role !== "Médecin" || !u.nom || !u.prenom) return null;
-  // USERS_SEED garde parfois un préfixe "Dr." dans le nom (voir "Dr. AKUE") :
-  // à retirer avant de comparer au catalogue MEDECINS, qui n'en a pas.
-  const nom = u.nom.trim().toLowerCase().replace(/^dr\.?\s+/, "");
-  const prenom = u.prenom.trim().toLowerCase();
-  return MEDECINS.find(m => m.nom.toLowerCase() === nom && m.prenom.toLowerCase() === prenom) || null;
+  if (!u || u.role !== "Médecin") return null;
+  return state.medecins.find(m => m.id === u.id) || null;
 }
-
-function openDpSoinsStart(type) {
-  dpSoinsStartType = type;
-  dpSoinsStartTM = null;
-  document.getElementById("dpSoinsStartTitle").textContent = type === "Examen" ? "Nouvel examen" : "Nouvelle consultation";
-  document.querySelectorAll("#dpTmChoices .chip").forEach(c => c.classList.remove("active"));
-
-  const known = matchCurrentUserToMedecin();
-  dpSoinsStartMedecin = known;
-  document.getElementById("dpMedecinKnownWrap").hidden = !known;
-  document.getElementById("dpMedecinPickWrap").hidden = !!known;
-  if (known) {
-    document.getElementById("dpMedecinKnownLabel").textContent = "Dr. " + known.prenom + " " + known.nom + " — " + known.etablissement;
-  } else {
-    document.getElementById("dp-medecin-search").value = "";
-    populateDpMedecinSelect("");
-  }
-  updateDpSoinsStartReady();
-  document.getElementById("dpSoinsStartModal").hidden = false;
-}
-
-function closeDpSoinsStartModal() {
-  document.getElementById("dpSoinsStartModal").hidden = true;
-}
-document.getElementById("closeDpSoinsStartModal").addEventListener("click", closeDpSoinsStartModal);
-document.getElementById("cancelDpSoinsStartModal").addEventListener("click", closeDpSoinsStartModal);
-
-document.querySelectorAll("#dpTmChoices .chip").forEach(chip => {
-  chip.addEventListener("click", () => {
-    dpSoinsStartTM = chip.dataset.tm;
-    document.querySelectorAll("#dpTmChoices .chip").forEach(c => c.classList.toggle("active", c === chip));
-    updateDpSoinsStartReady();
-  });
-});
-document.getElementById("dp-medecin-select").addEventListener("change", e => {
-  const id = parseInt(e.target.value, 10);
-  dpSoinsStartMedecin = MEDECINS.find(m => m.id === id) || null;
-  updateDpSoinsStartReady();
-});
-
-document.getElementById("dpSoinsStartContinueBtn").addEventListener("click", () => {
-  const p = state.dossierPatient;
-  state.currentAssure = p;
-  state.currentPatient = {
-    matricule: p.matricule, nom: p.nom, prenom: p.prenom,
-    dateNaissance: p.dateNaissance, sexe: p.sexe, estAssure: !!p.statutAssure
-  };
-  state.currentTM = dpSoinsStartTM;
-  state.currentMedecin = dpSoinsStartMedecin;
-  closeDpSoinsStartModal();
-  openSoins(dpSoinsStartType);
-});
 
 /* ---------------------------------------------------------------------- */
 /* Code QR (généré côté client, à partir du numéro de feuille + matricule) */
@@ -1373,152 +2292,83 @@ function todayFR() {
   return pad(d.getDate()) + "/" + pad(d.getMonth() + 1) + "/" + d.getFullYear();
 }
 function nextFeuilleNum() {
-  const n = state.historique.length + 1;
-  return "F" + new Date().getFullYear() + "-" + String(n).padStart(5, "0");
+  const prefix = "F" + new Date().getFullYear() + "-";
+  const fmtNum = n => prefix + String(n).padStart(5, "0");
+  let n = state.historique.length + 1;
+  // Le numéro sert de clé (dossier patient, pharmacie) : il doit rester unique
+  // même après la suppression d'un bon d'examen.
+  while (state.historique.some(h => h.numero === fmtNum(n))) n++;
+  return fmtNum(n);
 }
 
 const TYPE_LABELS = { generaliste: "Généraliste", specialiste: "Spécialiste", autre: "Autre" };
 const TM_IDS = { "Plein": "tm-plein", "Plein (ALD)": "tm-ald", "Exonéré": "tm-exonere" };
 
-function openSoins(type) {
-  if (!state.currentAssure || !state.currentPatient || !state.currentTM || !state.currentMedecin) return;
-  state.soinsMode = "agent";
-  state.editingEntryId = null;
-  state.currentType = type;
-  state.examRows = [emptyExamRow()];
+/* ---------------------------------------------------------------------- */
+/* Feuille de soins côté médecin. Une seule vue pour la feuille consultation */
+/* et pour la feuille d'examen ajoutée depuis elle : seuls le thème (vert /  */
+/* bleu) et les sections affichées changent. Tout ce que l'accueil a        */
+/* renseigné arrive pré-rempli et verrouillé ; le médecin ne complète que   */
+/* sa partie (prestation, ordonnance, feuille d'examen, signature).         */
+/* ---------------------------------------------------------------------- */
 
-  const isExam = type === "Examen";
-  document.getElementById("soinsWrap").classList.toggle("examen-theme", isExam);
-  document.getElementById("prSectionTitle").textContent = isExam ? "Praticien prescripteur" : "Praticien";
-  document.getElementById("prestationsSection").hidden = isExam;
-  document.getElementById("ordonnanceSection").hidden = isExam;
-  document.getElementById("examenSection").hidden = !isExam;
+const PRESTA_FIELD_IDS = ["presta-date", "presta-code", "presta-domicile-oui", "presta-domicile-non", "totalMontant", "totalTm", "totalPart"];
+const EXAM_FIELD_IDS = [
+  "exam-presta-date", "exam-etablissement", "exam-code-praticien", "exam-code-etablissement", "exam-motif",
+  "exam-nature-radiologie", "exam-nature-biologie", "exam-nature-autre",
+  "exam-situation-hospitalise", "exam-situation-externe",
+  "exam-pub-signature", "exam-specialiste-signature"
+];
 
-  // La bascule Consultation ⇄ Examen n'a de sens que côté médecin, en validation.
-  document.getElementById("recommandExamenSection").hidden = true;
-  document.getElementById("retourConsultationSection").hidden = true;
+function setDisabledIds(ids, disabled) {
+  ids.forEach(id => { document.getElementById(id).disabled = disabled; });
+}
 
-  const assure = state.currentAssure;
-  const patient = state.currentPatient;
-  const medecin = state.currentMedecin;
+// La racine d'une visite est la consultation ; une feuille d'examen s'y
+// rattache par linkedConsultationId.
+function visitRootOf(entry) {
+  if (entry.type === "Consultation") return entry;
+  return entry.linkedConsultationId ? (state.historique.find(h => h.id === entry.linkedConsultationId) || null) : null;
+}
 
-  const badge = document.getElementById("soinsBadge");
-  badge.textContent = type;
-  badge.className = "soins-type-badge " + (type === "Consultation" ? "consultation" : "examen");
+// Toutes les feuilles de la visite de `entry` : la consultation puis ses
+// feuilles d'examen. Une feuille d'examen sans consultation forme une visite à
+// elle seule.
+function visitEntries(entry) {
+  const root = visitRootOf(entry);
+  if (!root) return [entry];
+  const bons = (root.linkedExamenIds || []).map(id => state.historique.find(h => h.id === id)).filter(Boolean);
+  if (entry.type === "Examen" && !bons.includes(entry)) bons.push(entry);
+  return [root].concat(bons);
+}
 
-  const numero = nextFeuilleNum();
-  document.getElementById("soinsNum").value = numero;
-  document.getElementById("soinsDate").value = todayFR();
-  // Le fonds de l'assuré (Patient.fonds, code 1-4) est déjà connu via le
-  // dossier patient — plus besoin que l'agent le resaisisse manuellement
-  // (voir SOINS_FONDS_LABEL pour la correspondance code → libellé).
-  document.getElementById("soinsFonds").value = SOINS_FONDS_LABEL[Math.round(num(assure.fonds))] || "Fonds Secteur Privé";
-  document.getElementById("soinsFonds").disabled = true;
-
-  document.getElementById("p-patientNom").value = patient.prenom + " " + patient.nom;
-  document.getElementById("p-dateNaissance").value = patient.dateNaissance;
-  document.getElementById("p-matriculePatient").value = patient.matricule;
-
-  const isSelf = patient.estAssure;
-  document.getElementById("chk-assure").checked = isSelf;
-  document.getElementById("chk-ayant").checked = !isSelf;
-  document.getElementById("chk-assure-wrap").classList.toggle("on", isSelf);
-  document.getElementById("chk-ayant-wrap").classList.toggle("on", !isSelf);
-
-  document.getElementById("pr-nom").value = "Dr. " + medecin.prenom + " " + medecin.nom;
-  document.getElementById("pr-etab").value = medecin.etablissement;
-  document.getElementById("pr-code").value = medecin.code;
-  document.getElementById("pr-signature").value = "";
-
-  Object.keys(TYPE_LABELS).forEach(key => {
-    const checked = medecin.type === TYPE_LABELS[key];
-    document.getElementById("pr-type-" + key).checked = checked;
-    document.getElementById("pr-type-" + key + "-wrap").classList.toggle("on", checked);
-  });
-
-  Object.keys(TM_IDS).forEach(key => {
-    const id = TM_IDS[key];
-    const checked = state.currentTM === key;
-    document.getElementById(id).checked = checked;
-    document.getElementById(id + "-wrap").classList.toggle("locked", checked);
-  });
-
-  document.querySelectorAll('#view-soins input[type=radio]').forEach(el => { el.checked = false; el.disabled = false; });
-
-  // La partie Prestations est du ressort du médecin : verrouillée à cette étape.
-  state.prestaLocked = true;
-  document.getElementById("prestationsHint").hidden = false;
-  document.getElementById("presta-date").value = todayFR();
-  document.getElementById("presta-date").disabled = true;
-  document.getElementById("presta-code").value = "";
-  document.getElementById("presta-code").disabled = true;
-  document.getElementById("presta-domicile-oui").disabled = true;
-  document.getElementById("presta-domicile-non").disabled = true;
-  document.getElementById("totalMontant").value = "0";
-  document.getElementById("totalTm").value = "0";
-  document.getElementById("totalPart").value = "0";
-  document.getElementById("totalMontant").disabled = true;
-  document.getElementById("totalTm").disabled = true;
-  document.getElementById("totalPart").disabled = true;
-
-  // L'ordonnance (médicaments prescrits) est elle aussi du ressort du médecin.
-  state.ordoLocked = true;
-  document.getElementById("ordonnanceHint").hidden = false;
-  document.getElementById("addOrdoRowBtn").disabled = true;
-  document.getElementById("removeOrdoRowBtn").disabled = true;
-  state.ordoRows = [emptyOrdoRow()];
-
-  // Le bon d'examen (prestations + examens + volet établissement public) est lui aussi
-  // du ressort du médecin : verrouillé à cette étape, comme Prestations/Ordonnance ci-dessus.
-  document.getElementById("examPrestaHint").hidden = false;
-  document.getElementById("exam-presta-date").value = todayFR();
-  document.getElementById("exam-presta-date").disabled = true;
-  document.getElementById("exam-etablissement").value = "";
-  document.getElementById("exam-etablissement").disabled = true;
-  document.getElementById("exam-code-praticien").value = "";
-  document.getElementById("exam-code-praticien").disabled = true;
-  document.getElementById("exam-code-etablissement").value = "";
-  document.getElementById("exam-code-etablissement").disabled = true;
-  document.getElementById("exam-motif").value = "";
-  document.getElementById("exam-motif").disabled = true;
-  document.getElementById("exam-pub-signature").value = "";
-  document.getElementById("exam-specialiste-signature").value = "";
-  [
-    "exam-nature-radiologie", "exam-nature-biologie", "exam-nature-autre",
-    "exam-situation-hospitalise", "exam-situation-externe"
-  ].forEach(id => { document.getElementById(id).disabled = true; });
-  document.getElementById("addExamRowBtn").disabled = true;
-  document.getElementById("removeExamRowBtn").disabled = true;
-
-  document.getElementById("saveSoinsBtn").textContent = "Envoyer au médecin";
-
-  drawPseudoQR(document.getElementById("qrCanvas"), patient.matricule + "-" + numero);
-
-  renderOrdoRows();
-  renderExamRows();
-  goToView("soins");
+function currentSoinsEntry() {
+  return state.historique.find(h => h.id === state.editingEntryId) || null;
 }
 
 function openSoinsForValidation(entryId, opts) {
   const entry = state.historique.find(h => h.id === entryId);
   if (!entry) return;
   const skipNav = !!(opts && opts.skipNav);
-  state.soinsMode = "medecin";
+  const isExam = entry.type === "Examen";
+  const editable = entry.statut !== "Validée"; // une feuille déjà validée s'affiche en lecture seule
   state.editingEntryId = entryId;
   state.currentType = entry.type;
+  audit("feuille.ouvrir", { nag: entry.matricule, ressourceType: entry.type === "Examen" ? "Feuille d'examen" : "Feuille de soins", ressourceId: entry.id, ressourceLibelle: entry.numero, apres: { statut: entry.statut } });
 
   const badge = document.getElementById("soinsBadge");
   badge.textContent = entry.type;
-  badge.className = "soins-type-badge " + (entry.type === "Consultation" ? "consultation" : "examen");
+  badge.className = "soins-type-badge " + (isExam ? "examen" : "consultation");
 
   document.getElementById("soinsNum").value = entry.numero;
   document.getElementById("soinsDate").value = entry.date;
   document.getElementById("soinsFonds").value = entry.fonds || "";
   document.getElementById("soinsFonds").disabled = true;
 
+  // Patient : donnée de l'assuré, verrouillée.
   document.getElementById("p-patientNom").value = entry.patientNom || "";
-  document.getElementById("p-dateNaissance").value = entry.dateNaissance || "";
-  document.getElementById("p-matriculePatient").value = entry.matricule || "";
+  document.getElementById("p-dateNaissance").value = displayDateFR(entry.dateNaissance);
+  document.getElementById("p-matriculePatient").value = formatNag(entry.matricule);
 
   const isSelf = !!entry.estAssure;
   document.getElementById("chk-assure").checked = isSelf;
@@ -1526,7 +2376,6 @@ function openSoinsForValidation(entryId, opts) {
   document.getElementById("chk-assure-wrap").classList.toggle("on", isSelf);
   document.getElementById("chk-ayant-wrap").classList.toggle("on", !isSelf);
 
-  const isExam = entry.type === "Examen";
   document.getElementById("soinsWrap").classList.toggle("examen-theme", isExam);
   document.getElementById("prSectionTitle").textContent = isExam ? "Praticien prescripteur" : "Praticien";
   document.getElementById("prestationsSection").hidden = isExam;
@@ -1535,10 +2384,12 @@ function openSoinsForValidation(entryId, opts) {
 
   updateExamSwitchUI(entry);
 
+  // Praticien : pré-rempli à l'accueil, verrouillé — seule la signature revient au médecin.
   document.getElementById("pr-nom").value = entry.medecin || "";
   document.getElementById("pr-etab").value = entry.medecinEtab || "";
   document.getElementById("pr-code").value = entry.medecinCode || "";
   document.getElementById("pr-signature").value = entry.signature || "";
+  document.getElementById("pr-signature").disabled = !editable;
 
   Object.keys(TYPE_LABELS).forEach(key => {
     const checked = entry.medecinType === TYPE_LABELS[key];
@@ -1546,6 +2397,7 @@ function openSoinsForValidation(entryId, opts) {
     document.getElementById("pr-type-" + key + "-wrap").classList.toggle("on", checked);
   });
 
+  // Ticket modérateur : renseigné à l'accueil, verrouillé.
   Object.keys(TM_IDS).forEach(key => {
     const id = TM_IDS[key];
     const checked = entry.ticketModerateur === key;
@@ -1553,80 +2405,267 @@ function openSoinsForValidation(entryId, opts) {
     document.getElementById(id + "-wrap").classList.toggle("locked", checked);
   });
 
-  // Condition de prise en charge : déjà renseignée par l'agent, verrouillée pour le médecin.
+  // Condition de prise en charge : déjà renseignée à l'accueil, verrouillée pour le médecin.
   document.getElementById("tiers-oui").checked = entry.accidentTiers === "Oui";
   document.getElementById("tiers-non").checked = entry.accidentTiers === "Non";
   document.getElementById("grossesse-oui").checked = entry.grossesse === "Oui";
   document.getElementById("grossesse-non").checked = entry.grossesse === "Non";
   document.querySelectorAll('input[name=tiers], input[name=grossesse]').forEach(el => { el.disabled = true; });
 
-  // La partie Prestations est déverrouillée : c'est le travail du médecin.
-  state.prestaLocked = false;
-  document.getElementById("prestationsHint").hidden = true;
+  // Prestation (consultation) : le travail du médecin.
   document.getElementById("presta-date").value = entry.prestaDate || todayFR();
-  document.getElementById("presta-date").disabled = false;
   document.getElementById("presta-code").value = entry.prestaCode || "";
-  document.getElementById("presta-code").disabled = false;
   document.getElementById("presta-domicile-oui").checked = entry.prestaDomicile === "Oui";
   document.getElementById("presta-domicile-non").checked = entry.prestaDomicile === "Non";
-  document.getElementById("presta-domicile-oui").disabled = false;
-  document.getElementById("presta-domicile-non").disabled = false;
   document.getElementById("totalMontant").value = entry.totalMontant || "0";
   document.getElementById("totalTm").value = entry.totalTm || "0";
   document.getElementById("totalPart").value = entry.totalPart || "0";
-  document.getElementById("totalMontant").disabled = false;
-  document.getElementById("totalTm").disabled = false;
-  document.getElementById("totalPart").disabled = false;
+  setDisabledIds(PRESTA_FIELD_IDS, !editable);
 
-  // L'ordonnance est déverrouillée : le médecin prescrit désignation + quantité (pas de montant).
-  state.ordoLocked = false;
-  document.getElementById("ordonnanceHint").hidden = true;
-  document.getElementById("addOrdoRowBtn").disabled = false;
-  document.getElementById("removeOrdoRowBtn").disabled = false;
+  // Ordonnance : le médecin prescrit désignation + quantité + posologie/durée (pas de montant).
+  state.ordoLocked = !editable;
+  document.getElementById("addOrdoRowBtn").disabled = !editable;
+  document.getElementById("removeOrdoRowBtn").disabled = !editable;
   state.ordoRows = (entry.ordonnance && entry.ordonnance.length) ? entry.ordonnance.map(r => Object.assign({}, r)) : [emptyOrdoRow()];
 
-  // Le bon d'examen est lui aussi déverrouillé : c'est le travail du médecin.
-  if (isExam) {
-    document.getElementById("examPrestaHint").hidden = true;
-    document.getElementById("exam-presta-date").value = entry.examDate || todayFR();
-    document.getElementById("exam-presta-date").disabled = false;
-    document.getElementById("exam-etablissement").value = entry.examEtablissement || "";
-    document.getElementById("exam-etablissement").disabled = false;
-    document.getElementById("exam-code-praticien").value = entry.examCodePraticien || "";
-    document.getElementById("exam-code-praticien").disabled = false;
-    document.getElementById("exam-code-etablissement").value = entry.examCodeEtablissement || "";
-    document.getElementById("exam-code-etablissement").disabled = false;
-    document.getElementById("exam-motif").value = entry.examMotif || "";
-    document.getElementById("exam-motif").disabled = false;
-    document.getElementById("exam-pub-signature").value = entry.examPubSignature || "";
-    document.getElementById("exam-specialiste-signature").value = entry.examSpecialisteSignature || "";
-
-    document.getElementById("exam-nature-radiologie").checked = entry.examNature === "Radiologie";
-    document.getElementById("exam-nature-biologie").checked = entry.examNature === "Biologie";
-    document.getElementById("exam-nature-autre").checked = entry.examNature === "Autre";
-    document.getElementById("exam-situation-hospitalise").checked = entry.examSituation === "Hospitalisé";
-    document.getElementById("exam-situation-externe").checked = entry.examSituation === "Soins Externes";
-    [
-      "exam-nature-radiologie", "exam-nature-biologie", "exam-nature-autre",
-      "exam-situation-hospitalise", "exam-situation-externe"
-    ].forEach(id => { document.getElementById(id).disabled = false; });
-    document.getElementById("addExamRowBtn").disabled = false;
-    document.getElementById("removeExamRowBtn").disabled = false;
-  }
+  // Feuille d'examen : prestation + examens, le travail du médecin.
+  document.getElementById("exam-presta-date").value = entry.examDate || todayFR();
+  document.getElementById("exam-etablissement").value = entry.examEtablissement || "";
+  document.getElementById("exam-code-praticien").value = entry.examCodePraticien || "";
+  document.getElementById("exam-code-etablissement").value = entry.examCodeEtablissement || "";
+  document.getElementById("exam-motif").value = entry.examMotif || "";
+  document.getElementById("exam-pub-signature").value = entry.examPubSignature || "";
+  document.getElementById("exam-specialiste-signature").value = entry.examSpecialisteSignature || "";
+  document.getElementById("exam-nature-radiologie").checked = entry.examNature === "Radiologie";
+  document.getElementById("exam-nature-biologie").checked = entry.examNature === "Biologie";
+  document.getElementById("exam-nature-autre").checked = entry.examNature === "Autre";
+  document.getElementById("exam-situation-hospitalise").checked = entry.examSituation === "Hospitalisé";
+  document.getElementById("exam-situation-externe").checked = entry.examSituation === "Soins Externes";
+  setDisabledIds(EXAM_FIELD_IDS, !editable);
+  state.prestaLocked = !editable;
+  document.getElementById("addExamRowBtn").disabled = !editable;
+  document.getElementById("removeExamRowBtn").disabled = !editable;
   state.examRows = (entry.examens && entry.examens.length) ? entry.examens.map(r => Object.assign({}, r)) : [emptyExamRow()];
 
-  document.getElementById("saveSoinsBtn").textContent = "Valider et enregistrer";
+  // Rien à valider quand toutes les feuilles de la visite le sont déjà.
+  document.getElementById("saveSoinsBtn").hidden = visitEntries(entry).every(e => e.statut === "Validée");
 
   drawPseudoQR(document.getElementById("qrCanvas"), (entry.matricule || "") + "-" + entry.numero);
 
   renderOrdoRows();
   renderExamRows();
-  if (!skipNav) goToView("soins");
+  if (skipNav) applyViewChrome("soins"); else goToView("soins");
 }
 
-document.getElementById("cancelSoinsBtn").addEventListener("click", () => {
-  goToView(state.soinsMode === "medecin" ? "medecin" : "nouvelle-pec");
+// Enregistre la saisie en cours dans la feuille affichée, sans toucher à son
+// statut : appelé en quittant la feuille, en basculant vers l'autre feuille et
+// avant toute validation, pour ne jamais perdre une saisie.
+function saveSoinsDraft() {
+  const entry = currentSoinsEntry();
+  if (!entry || entry.statut === "Validée") return;
+  captureFormIntoEntry(entry);
+  persistFeuillesQuiet();
+}
+
+/* ---- Validation : consultation + feuille d'examen d'un coup -------------- */
+
+// Une ligne d'ordonnance est « complète » si le médicament, une quantité
+// (entier ≥ 1, Prescription.quantite_prescrite > 0 en base) et la posologie /
+// durée sont renseignés : c'est ce que le pharmacien délivre, il n'y a donc
+// rien à deviner de son côté.
+function ordoRowMissing(r) {
+  const miss = [];
+  if (!r.designation) miss.push("médicament");
+  const q = String(r.quantite || "").trim();
+  if (!/^\d+$/.test(q) || parseInt(q, 10) < 1) miss.push("quantité (entier ≥ 1)");
+  if (!String(r.posologie || "").trim()) miss.push("posologie / durée");
+  return miss;
+}
+function ordoRowIsBlank(r) {
+  return !r.designation && !String(r.quantite || "").trim() && !String(r.posologie || "").trim();
+}
+
+// Points bloquants d'une feuille — uniquement la partie du médecin (ce que
+// l'accueil a renseigné est verrouillé, le médecin ne peut pas le corriger).
+function entryProblems(entry) {
+  const p = [];
+  if (!(entry.signature || "").trim()) p.push({ field: "pr-signature", text: "Signature du praticien manquante" });
+  if (entry.type === "Examen") {
+    if (!extractFRDate(entry.examDate)) p.push({ field: "exam-presta-date", text: "Date de la prestation d'examen invalide (format JJ/MM/AAAA)" });
+    if (!entry.examNature) p.push({ field: "exam-presta-date", text: "Nature de la prestation à choisir (Radiologie, Biologie ou Autre)" });
+    if (!(entry.examens || []).some(r => (r.designation || "").trim())) p.push({ field: "examenBody", text: "Aucun examen désigné" });
+  } else {
+    if (!extractFRDate(entry.prestaDate)) p.push({ field: "presta-date", text: "Date de la prestation invalide (format JJ/MM/AAAA)" });
+    (entry.ordonnance || []).forEach((r, i) => {
+      const miss = ordoRowMissing(r);
+      if (miss.length) p.push({ field: "ordoBody", text: "Ordonnance, ligne " + (i + 1) + " : " + miss.join(", ") + " à préciser" });
+    });
+  }
+  return p;
+}
+
+function paperTitleHtml(e) {
+  const isExam = e.type === "Examen";
+  return '<span class="pill ' + (isExam ? "examen" : "consultation") + '">' + (isExam ? "Examen" : "Consultation") + "</span> " + escapeHtml(e.numero);
+}
+
+// Amène le médecin sur le premier champ à corriger de la feuille affichée.
+function focusProblemField(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) el.focus({ preventScroll: true });
+}
+
+let visitModalFocusField = null;
+function closeVisitModal(skipFocus) {
+  document.getElementById("visitModal").hidden = true;
+  const field = visitModalFocusField;
+  visitModalFocusField = null;
+  if (field && !skipFocus) focusProblemField(field);
+}
+document.getElementById("closeVisitModal").addEventListener("click", () => closeVisitModal());
+document.getElementById("cancelVisitModal").addEventListener("click", () => closeVisitModal());
+document.getElementById("confirmVisitBtn").addEventListener("click", () => commitVisitValidation());
+document.getElementById("visitModalBody").addEventListener("click", e => {
+  const btn = e.target.closest("[data-goto]");
+  if (!btn) return;
+  closeVisitModal(true);
+  flipSoinsTo(parseInt(btn.dataset.goto, 10));
 });
+
+// « Valider et enregistrer » : enregistre le brouillon, puis soit liste ce qui
+// reste à compléter (validation bloquée), soit demande confirmation en
+// récapitulant les feuilles validées d'un coup (consultation + feuille d'examen
+// ajoutée) — on ne peut pas laisser l'une validée et l'autre oubliée.
+function openVisitValidation() {
+  const entry = currentSoinsEntry();
+  if (!entry) return;
+  guardSuspended(entry.matricule, entry.patientNom, "la feuille ne peut pas être validée.", openVisitValidationNow, "feuille.valider");
+}
+function openVisitValidationNow() {
+  const current = currentSoinsEntry();
+  if (!current) return;
+  saveSoinsDraft();
+  const group = visitEntries(current);
+  const pending = group.filter(e => e.statut !== "Validée");
+  if (!pending.length) return;
+
+  const issues = pending.map(e => ({ entry: e, problems: entryProblems(e) })).filter(x => x.problems.length);
+  const body = document.getElementById("visitModalBody");
+  const confirmBtn = document.getElementById("confirmVisitBtn");
+
+  if (issues.length) {
+    document.getElementById("visitModalTitle").textContent = "À compléter avant de valider";
+    body.innerHTML =
+      '<p class="hint" style="margin:0 0 12px">La validation est bloquée tant que les points suivants ne sont pas renseignés.</p>' +
+      '<ul class="visit-recap">' + issues.map(x =>
+        '<li class="' + (x.entry.type === "Examen" ? "examen" : "consultation") + '">' +
+          '<div class="visit-recap-title">' + paperTitleHtml(x.entry) + "</div>" +
+          "<ul>" + x.problems.map(pr => "<li>" + escapeHtml(pr.text) + "</li>").join("") + "</ul>" +
+          (x.entry.id !== current.id ? '<button type="button" class="btn-secondary btn-sm" data-goto="' + x.entry.id + '">Aller à cette feuille</button>' : "") +
+        "</li>"
+      ).join("") + "</ul>";
+    confirmBtn.hidden = true;
+    const own = issues.find(x => x.entry.id === current.id);
+    visitModalFocusField = own ? own.problems[0].field : null;
+  } else {
+    // Consultation à valider sans aucun médicament : on demande au médecin s'il en est sûr
+    // (elle ne sera pas envoyée à la pharmacie).
+    const noMeds = pending.filter(e => e.type === "Consultation" && !(e.ordonnance || []).length);
+    document.getElementById("visitModalTitle").textContent = noMeds.length ? "Valider sans médicaments ?" : (group.length > 1 ? "Valider les feuilles" : "Valider la feuille");
+    const warn = noMeds.length
+      ? '<div class="visit-warn"><b>Aucun médicament n\'est prescrit</b> sur la consultation ' + escapeHtml(noMeds[0].numero) +
+        ". Elle sera validée et versée au dossier, mais <b>elle ne sera pas envoyée à la pharmacie</b>.<br />Êtes-vous sûr de vouloir valider sans médicaments ?</div>"
+      : "";
+    body.innerHTML = warn +
+      '<p class="hint" style="margin:0 0 12px">Les feuilles ci-dessous seront validées et versées au dossier de <b>' + escapeHtml(current.patientNom || "") + "</b>. Cette action est définitive.</p>" +
+      '<ul class="visit-recap">' + group.map(e => {
+        const done = e.statut === "Validée";
+        const detail = e.type === "Examen"
+          ? escapeHtml(e.examNature || "") + " — " + (e.examens || []).filter(r => r.designation).length + " examen(s)"
+          : ((e.ordonnance || []).length
+              ? (e.ordonnance || []).length + " médicament(s) prescrit(s) — envoyée à la pharmacie"
+              : "Aucun médicament prescrit — non envoyée à la pharmacie");
+        return '<li class="' + (e.type === "Examen" ? "examen" : "consultation") + (done ? " done" : "") + '">' +
+          '<div class="visit-recap-title">' + paperTitleHtml(e) + (done ? ' <span class="pill validee">Déjà validée</span>' : "") + "</div>" +
+          '<div class="visit-recap-sub">' + detail + "</div></li>";
+      }).join("") + "</ul>";
+    confirmBtn.textContent = noMeds.length ? "Oui, valider sans médicaments" : "Confirmer la validation";
+    confirmBtn.hidden = false;
+    visitModalFocusField = null;
+  }
+  document.getElementById("visitModal").hidden = false;
+}
+
+async function commitVisitValidation() {
+  const current = currentSoinsEntry();
+  if (!current) return;
+  const group = visitEntries(current);
+  const pending = group.filter(e => e.statut !== "Validée");
+  const visitRef = newId("V");   // corrélation : toutes les feuilles validées d'un coup
+  pending.forEach(e => { e.statut = "Validée"; });
+  try {
+    await persistFeuilles();
+  } catch (err) {
+    // le serveur a refusé (droits, assuré suspendu, feuille déjà validée…) ou ne répond pas : rien n'est validé
+    pending.forEach(e => { e.statut = "En attente"; });
+    closeVisitModal(true);
+    showInfoModal("Validation impossible", "<p>" + escapeHtml(err.message) + "</p><p class=\"hint\">La feuille reste en attente : vous pouvez réessayer.</p>");
+    if (!err.isNetworkError) pullFeuilles(true).catch(() => {});
+    return;
+  }
+  pending.forEach(e => {
+    audit("feuille.valider", {
+      correlationId: visitRef, nag: e.matricule, ressourceType: e.type === "Examen" ? "Feuille d'examen" : "Feuille de soins", ressourceId: e.id, ressourceLibelle: e.numero,
+      avant: { statut: "En attente" },
+      apres: { statut: "Validée", medicaments: (e.ordonnance || []).filter(m => m.designation).length, envoyeePharmacie: e.type === "Consultation" && (e.ordonnance || []).some(m => m.designation) }
+    });
+  });
+  state.editingEntryId = null;
+  refreshPendingBadge();
+  closeVisitModal(true);
+  goToView("medecin");
+  pending.forEach(syncValidatedEntryToDossierPatient);
+  const consult = pending.find(e => e.type === "Consultation");
+  const pharmacyNote = !consult ? "" : (isSentToPharmacy(consult)
+    ? "<p>L'ordonnance est envoyée à la pharmacie.</p>"
+    : "<p>Sans médicaments prescrits : la feuille n'est <b>pas</b> envoyée à la pharmacie.</p>");
+  showInfoModal(
+    pending.length > 1 ? "Feuilles validées" : "Feuille validée",
+    "<p>" + pending.length + " feuille" + (pending.length > 1 ? "s validées" : " validée") + " pour <b>" + escapeHtml(current.patientNom || "") +
+    "</b> — le dossier du patient est mis à jour.</p>" + pharmacyNote
+  );
+}
+
+// « Historique des visites » (header de la feuille de soins) : ouvre le dossier de
+// l'assuré examiné, sur sa chronologie. La visite en cours y est mise en évidence,
+// avec sa feuille d'examen rattachée à sa consultation, et un bouton ramène à la
+// feuille (la saisie en cours est gardée en brouillon).
+async function openHistoryFromSheet() {
+  const entry = currentSoinsEntry();
+  if (!entry) return;
+  saveSoinsDraft();
+  const head = visitRootOf(entry) || entry;
+  try {
+    const patient = await findPatientByMatricule(entry.matricule);
+    if (!patient) {
+      showInfoModal("Dossier introuvable", "<p>Aucun assuré en base pour le matricule <b>" + escapeHtml(formatNag(entry.matricule)) + "</b>.</p>");
+      return;
+    }
+    openDossierPatient(patient, { fromSheet: true, focusId: head.id });
+  } catch (err) {
+    showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>");
+  }
+}
+document.getElementById("topbarHistoryBtn").addEventListener("click", openHistoryFromSheet);
+document.getElementById("dpBackToSheetBtn").addEventListener("click", () => {
+  if (viewHistory[viewHistory.length - 1] === "soins") viewHistory.pop();
+  goToView("soins", { fromBack: true });
+});
+
+document.getElementById("saveSoinsBtn").addEventListener("click", openVisitValidation);
+document.getElementById("cancelSoinsBtn").addEventListener("click", () => goToView("medecin"));
 
 // Correspondance Patient.fonds (code 1-4, voir FONDS_LABELS) → libellé du
 // menu "Fonds" de la feuille de soins (trois valeurs fixes, sans équivalent
@@ -1641,13 +2680,14 @@ const SOINS_FONDS_LABEL = { 1: "Fonds Secteur Public", 2: "Fonds Secteur Privé"
 // déjà connues à ce stade (patient, ticket modérateur, médecin) ; le détail
 // (prestations, ordonnance, bon d'examen) sera rempli par le médecin à la
 // validation — comme aujourd'hui pour une entrée créée par l'agent.
-document.getElementById("enregistrerPecBtn").addEventListener("click", () => {
+document.getElementById("enregistrerPecBtn").addEventListener("click", async () => {
   const patient = state.currentPatient;
   const medecin = state.currentMedecin;
   if (!state.currentAssure || !patient || !state.currentTM || !medecin) return;
+  if (isSuspended(state.currentAssure)) { refuseSuspendedPec(); return; }
 
   const entry = {
-    id: Date.now(),
+    id: newFeuilleId(),
     numero: nextFeuilleNum(),
     date: todayFR(),
     type: "Consultation",
@@ -1660,6 +2700,7 @@ document.getElementById("enregistrerPecBtn").addEventListener("click", () => {
     medecin: "Dr. " + medecin.prenom + " " + medecin.nom,
     medecinEtab: medecin.etablissement,
     medecinCode: medecin.code,
+    medecinId: medecin.id,
     medecinType: medecin.type,
     quartier: document.getElementById("pec-quartier").value.trim(),
     telephone: document.getElementById("pec-telephone").value.trim(),
@@ -1686,10 +2727,21 @@ document.getElementById("enregistrerPecBtn").addEventListener("click", () => {
     totalTm: "0",
     totalPart: "0"
   };
+  const submitBtn = document.getElementById("enregistrerPecBtn");
+  submitBtn.disabled = true;
   state.historique.unshift(entry);
-  saveJSON("pec_historique", state.historique);
+  try {
+    await persistFeuilles();
+  } catch (err) {
+    state.historique = state.historique.filter(h => h.id !== entry.id);
+    feuilleSnapshot.delete(entry.id);
+    updateActionButtons();
+    showInfoModal("Enregistrement impossible", "<p>" + escapeHtml(err.message) + "</p>");
+    return;
+  }
   state.historiquePage = 1;
   refreshPendingBadge();
+  audit("pec.creer", { nag: entry.matricule, ressourceType: "Feuille de soins", ressourceId: entry.id, ressourceLibelle: entry.numero, apres: { ticketModerateur: entry.ticketModerateur, medecin: entry.medecin, statut: entry.statut } });
   showInfoModal("Prise en charge enregistrée", "<p>La feuille a été envoyée en attente de validation par le médecin.</p>", () => resetSearch());
 });
 
@@ -1698,13 +2750,14 @@ document.getElementById("enregistrerPecBtn").addEventListener("click", () => {
 // aussi directement une entrée "En attente" dans la file du médecin — même
 // action qu'« Enregistrer » ci-dessus (voir ce commentaire pour le
 // pourquoi : c'est le médecin qui décide du détail à la validation).
-document.getElementById("nouvellePecConsultationBtn").addEventListener("click", () => {
+document.getElementById("nouvellePecConsultationBtn").addEventListener("click", async () => {
   const patient = state.currentPatient;
   const medecin = state.currentMedecin;
   if (!state.currentAssure || !patient || !state.currentTM || !medecin) return;
+  if (isSuspended(state.currentAssure)) { refuseSuspendedPec(); return; }
 
   const entry = {
-    id: Date.now(),
+    id: newFeuilleId(),
     numero: nextFeuilleNum(),
     date: todayFR(),
     type: "Consultation",
@@ -1717,6 +2770,7 @@ document.getElementById("nouvellePecConsultationBtn").addEventListener("click", 
     medecin: "Dr. " + medecin.prenom + " " + medecin.nom,
     medecinEtab: medecin.etablissement,
     medecinCode: medecin.code,
+    medecinId: medecin.id,
     medecinType: medecin.type,
     quartier: document.getElementById("pec-quartier").value.trim(),
     telephone: document.getElementById("pec-telephone").value.trim(),
@@ -1743,37 +2797,57 @@ document.getElementById("nouvellePecConsultationBtn").addEventListener("click", 
     totalTm: "0",
     totalPart: "0"
   };
+  const submitBtn2 = document.getElementById("nouvellePecConsultationBtn");
+  submitBtn2.disabled = true;
   state.historique.unshift(entry);
-  saveJSON("pec_historique", state.historique);
+  try {
+    await persistFeuilles();
+  } catch (err) {
+    state.historique = state.historique.filter(h => h.id !== entry.id);
+    feuilleSnapshot.delete(entry.id);
+    updateActionButtons();
+    showInfoModal("Enregistrement impossible", "<p>" + escapeHtml(err.message) + "</p>");
+    return;
+  }
   state.historiquePage = 1;
   refreshPendingBadge();
   showInfoModal("Nouvelle consultation enregistrée", "<p>La feuille a été envoyée en attente de validation par le médecin.</p>", () => resetSearch());
 });
 
-/* ---- Bascule animée Consultation ⇄ Examen (bon d'examen lié) ------------ */
+/* ---- Bascule animée Consultation ⇄ Examen (feuille d'examen liée) -------- */
 
-// Met à jour les deux cartes de bascule (vers l'examen depuis une Consultation,
-// vers la consultation depuis un Examen) selon la feuille actuellement affichée.
+let soinsFlipBusy = false; // évite deux bascules (ou deux feuilles d'examen) sur un double clic
+
+function newEntryId() {
+  let id = newFeuilleId();
+  while (state.historique.some(h => h.id === id)) id++;
+  return id;
+}
+
+// Met à jour les deux cartes de bascule : sur la consultation, le bouton bleu
+// « Ajouter la feuille d'examen » (ou « Voir la feuille d'examen » si elle
+// existe déjà) ; sur la feuille d'examen, le retour vers la consultation.
 function updateExamSwitchUI(entry) {
   const isExam = entry.type === "Examen";
   const forwardBox = document.getElementById("recommandExamenSection");
   const backBox = document.getElementById("retourConsultationSection");
 
-  forwardBox.hidden = isExam;
+  const linked = isExam ? [] : (entry.linkedExamenIds || [])
+    .map(id => state.historique.find(h => h.id === id))
+    .filter(Boolean);
+  const last = linked[linked.length - 1];
+  // Ajouter n'a de sens que tant que la consultation n'est pas validée ; voir la feuille existante reste toujours possible.
+  forwardBox.hidden = isExam || (!last && entry.statut === "Validée");
   if (!isExam) {
-    const linked = (entry.linkedExamenIds || [])
-      .map(id => state.historique.find(h => h.id === id))
-      .filter(Boolean);
-    const last = linked[linked.length - 1];
     const btn = document.getElementById("examSwitchBtn");
     if (last) {
-      document.getElementById("examSwitchBtnLabel").textContent = "Voir le bon d'examen " + last.numero;
-      document.getElementById("examSwitchSub").textContent = "Un examen a déjà été recommandé pour cette consultation.";
+      document.getElementById("examSwitchBtnLabel").textContent = "Voir la feuille d'examen " + last.numero;
+      document.getElementById("examSwitchSub").textContent = "Une feuille d'examen a déjà été ajoutée pour cette consultation.";
       btn.dataset.mode = "goto";
       btn.dataset.targetId = String(last.id);
     } else {
-      document.getElementById("examSwitchBtnLabel").textContent = "Créer un bon d'examen";
-      document.getElementById("examSwitchSub").textContent = "Génère un bon d'examen lié, pré-rempli avec les informations du patient.";
+      document.getElementById("examSwitchBtnLabel").textContent = "Ajouter la feuille d'examen";
+      document.getElementById("examSwitchSub").textContent = "Ajoute une feuille d'examen liée, pré-remplie avec les informations du patient.";
       btn.dataset.mode = "create";
       btn.dataset.targetId = "";
     }
@@ -1783,50 +2857,69 @@ function updateExamSwitchUI(entry) {
     ? state.historique.find(h => h.id === entry.linkedConsultationId)
     : null;
   backBox.hidden = !src;
-  // "+ Créer un autre bon d'examen" / "Retirer le bon d'examen" retirés de
-  // l'interface : les boutons restent dans le DOM (masqués en permanence)
-  // pour ne pas casser les autres références à ces id, mais ne s'affichent
-  // plus jamais.
-  const addAnother = document.getElementById("examSwitchAddAnother");
-  const removeBtn = document.getElementById("examSwitchRemove");
-  addAnother.hidden = true;
-  removeBtn.hidden = true;
   if (src) {
-    document.getElementById("retourConsultationSub").textContent = "Lié à la consultation " + src.numero;
+    document.getElementById("retourConsultationSub").textContent = "Liée à la consultation " + src.numero;
     document.getElementById("retourConsultationBtn").dataset.targetId = String(src.id);
   }
 }
 
-// Anime la carte (léger flip 3D) puis recharge la feuille demandée à la place,
-// sans quitter la vue — donne l'impression de "retourner" la feuille.
+// Anime la feuille (léger flip 3D) puis recharge la feuille demandée à la
+// place, sans quitter la vue — donne l'impression de « retourner » le papier.
 // La saisie en cours sur la feuille quittée est d'abord sauvegardée (brouillon,
-// statut inchangé) pour ne rien perdre en allant-venant entre les deux bons.
+// statut inchangé) pour ne rien perdre en allant-venant entre les deux feuilles.
 function flipSoinsTo(entryId) {
-  const current = state.historique.find(h => h.id === state.editingEntryId);
-  if (current) {
-    captureFormIntoEntry(current);
-    saveJSON("pec_historique", state.historique);
-  }
+  if (soinsFlipBusy || entryId === state.editingEntryId) return;
+  if (!state.historique.some(h => h.id === entryId)) return;
+  soinsFlipBusy = true;
+  saveSoinsDraft();
 
   const wrap = document.getElementById("soinsWrap");
+  const reduced = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   wrap.classList.add("flip-leave");
   window.setTimeout(() => {
-    openSoinsForValidation(entryId, { skipNav: true });
-    wrap.classList.remove("flip-leave");
-    wrap.classList.add("flip-enter");
-    void wrap.offsetWidth; // force le reflow pour que la transition rejoue à la sortie de la classe
-    wrap.classList.remove("flip-enter");
-  }, 260);
+    try {
+      openSoinsForValidation(entryId, { skipNav: true });
+      // La nouvelle feuille entre par le côté opposé : on la place d'abord sans
+      // transition, puis on rend la main à la transition vers l'état normal.
+      wrap.style.transition = "none";
+      wrap.classList.remove("flip-leave");
+      wrap.classList.add("flip-enter");
+      void wrap.offsetWidth; // force le reflow
+      wrap.style.transition = "";
+      wrap.classList.remove("flip-enter");
+      window.scrollTo({ top: 0 });
+    } finally {
+      soinsFlipBusy = false;
+    }
+  }, reduced ? 0 : 260);
 }
 
-function createLinkedExamAndFlip(consultId) {
+// « Ajouter la feuille d'examen » : crée la feuille d'examen liée à la
+// consultation, pré-remplie avec les informations du patient et la signature
+// déjà saisie, puis bascule dessus.
+let creatingLinkedExam = false;
+async function createLinkedExamAndFlip(consultId) {
+  if (soinsFlipBusy || creatingLinkedExam) return;
   const consultEntry = state.historique.find(h => h.id === consultId);
-  if (!consultEntry) return;
-  const examEntry = examEntryFromConsultation(consultEntry);
+  if (!consultEntry || consultEntry.statut === "Validée") return;
+  const liveSignature = document.getElementById("pr-signature").value.trim();
+  saveSoinsDraft();
+  const examEntry = examEntryFromConsultation(consultEntry, liveSignature || consultEntry.signature || "");
+  const previousLinks = consultEntry.linkedExamenIds;
   consultEntry.linkedExamenIds = (consultEntry.linkedExamenIds || []).concat([examEntry.id]);
   state.historique.unshift(examEntry);
-  saveJSON("pec_historique", state.historique);
+  creatingLinkedExam = true;
+  try {
+    await persistFeuilles();
+  } catch (err) {
+    state.historique = state.historique.filter(h => h.id !== examEntry.id);
+    feuilleSnapshot.delete(examEntry.id);
+    consultEntry.linkedExamenIds = previousLinks;
+    showInfoModal("Feuille d'examen non créée", "<p>" + escapeHtml(err.message) + "</p>");
+    return;
+  } finally { creatingLinkedExam = false; }
   refreshPendingBadge();
+  audit("examen.recommander", { nag: consultEntry.matricule, ressourceType: "Feuille d'examen", ressourceId: examEntry.id, ressourceLibelle: examEntry.numero, apres: { consultation: consultEntry.numero } });
   flipSoinsTo(examEntry.id);
 }
 
@@ -1835,44 +2928,10 @@ document.getElementById("examSwitchBtn").addEventListener("click", () => {
   if (btn.dataset.mode === "goto" && btn.dataset.targetId) {
     flipSoinsTo(parseInt(btn.dataset.targetId, 10));
   } else {
-    createLinkedExamAndFlip(state.editingEntryId);
+    const current = currentSoinsEntry();
+    if (current && current.type === "Consultation") createLinkedExamAndFlip(current.id);
   }
 });
-// Affiché côté examen : crée un nouveau bon d'examen lié à la même consultation.
-document.getElementById("examSwitchAddAnother").addEventListener("click", () => {
-  const targetId = document.getElementById("examSwitchAddAnother").dataset.targetId;
-  if (targetId) createLinkedExamAndFlip(parseInt(targetId, 10));
-});
-
-// Retire (supprime) le bon d'examen actuellement affiché — délie les deux
-// feuilles, retire l'examen de l'historique / de la file médecin, puis
-// revient sur la consultation d'origine (l'examen affiché n'existe plus).
-function removeLinkedExam(examId, consultId) {
-  const consultEntry = consultId ? state.historique.find(h => h.id === consultId) : null;
-  const examEntry = state.historique.find(h => h.id === examId);
-  askConfirm(
-    "Le bon d'examen " + (examEntry ? examEntry.numero : "") + " lié à cette consultation sera définitivement supprimé.",
-    () => {
-      state.historique = state.historique.filter(h => h.id !== examId);
-      if (consultEntry) consultEntry.linkedExamenIds = (consultEntry.linkedExamenIds || []).filter(id => id !== examId);
-      saveJSON("pec_historique", state.historique);
-      refreshPendingBadge();
-      if (consultEntry) {
-        flipSoinsTo(consultEntry.id);
-      } else {
-        goToView(state.soinsMode === "medecin" ? "medecin" : "nouvelle-pec");
-      }
-    },
-    { title: "Retirer ce bon d'examen ?" }
-  );
-}
-document.getElementById("examSwitchRemove").addEventListener("click", () => {
-  const removeBtn = document.getElementById("examSwitchRemove");
-  const examId = removeBtn.dataset.examId;
-  const consultId = removeBtn.dataset.targetId;
-  if (examId) removeLinkedExam(parseInt(examId, 10), consultId ? parseInt(consultId, 10) : null);
-});
-
 document.getElementById("retourConsultationBtn").addEventListener("click", () => {
   const targetId = document.getElementById("retourConsultationBtn").dataset.targetId;
   if (targetId) flipSoinsTo(parseInt(targetId, 10));
@@ -1938,13 +2997,13 @@ function renderOrdoRows() {
   const locked = !!state.ordoLocked;
   state.ordoRows.forEach((row, i) => {
     const tr = document.createElement("tr");
-    const options = '<option value=""></option>' + MEDICAMENTS.map(m =>
+    const options = '<option value=""></option>' + state.catalogue.map(m =>
       '<option value="' + m.designation.replace(/"/g, "&quot;") + '"' + (row.designation === m.designation ? " selected" : "") + ">" + m.designation + "</option>"
     ).join("");
     tr.innerHTML =
       '<td><select data-key="designation"' + (locked ? " disabled" : "") + ">" + options + "</select></td>" +
-      '<td><input type="text" class="num" data-key="quantite" value="' + (row.quantite ? String(row.quantite).replace(/"/g, "&quot;") : "") + '"' + (locked ? " disabled" : "") + " /></td>" +
-      '<td><input type="text" data-key="posologie" value="' + (row.posologie ? String(row.posologie).replace(/"/g, "&quot;") : "") + '"' + (locked ? " disabled" : "") + " /></td>";
+      '<td><input type="text" class="num" data-key="quantite" maxlength="9" value="' + (row.quantite ? String(row.quantite).replace(/"/g, "&quot;") : "") + '"' + (locked ? " disabled" : "") + " /></td>" +
+      '<td><input type="text" data-key="posologie" maxlength="100" value="' + (row.posologie ? String(row.posologie).replace(/"/g, "&quot;") : "") + '"' + (locked ? " disabled" : "") + " /></td>";
     body.appendChild(tr);
 
     if (!locked) {
@@ -1981,60 +3040,13 @@ function updateExamTotals() {
   document.getElementById("examTotalPart").value = fmt(sum("part"));
 }
 
-function submitAgentFeuille() {
-  const medecin = state.currentMedecin;
-  const entry = {
-    id: Date.now(),
-    numero: document.getElementById("soinsNum").value,
-    date: document.getElementById("soinsDate").value,
-    type: state.currentType,
-    patientNom: document.getElementById("p-patientNom").value,
-    dateNaissance: document.getElementById("p-dateNaissance").value,
-    matricule: document.getElementById("p-matriculePatient").value,
-    estAssure: document.getElementById("chk-assure").checked,
-    fonds: document.getElementById("soinsFonds").value,
-    ticketModerateur: state.currentTM,
-    medecin: medecin ? ("Dr. " + medecin.prenom + " " + medecin.nom) : "",
-    medecinEtab: medecin ? medecin.etablissement : "",
-    medecinCode: medecin ? medecin.code : "",
-    medecinType: medecin ? medecin.type : "",
-    quartier: document.getElementById("pec-quartier").value.trim(),
-    telephone: document.getElementById("pec-telephone").value.trim(),
-    service: document.getElementById("pec-service").value,
-    accidentTiers: (document.querySelector('input[name=tiers]:checked') || {}).value || "",
-    grossesse: (document.querySelector('input[name=grossesse]:checked') || {}).value || "",
-    statut: "En attente",
-    prestations: [],
-    ordonnance: [],
-    prestaDate: "",
-    prestaDomicile: "",
-    prestaCode: "",
-    examens: [],
-    examNature: "",
-    examSituation: "",
-    examCodePraticien: "",
-    examEtablissement: "",
-    examCodeEtablissement: "",
-    examDate: "",
-    examMotif: "",
-    examPubSignature: "",
-    examSpecialisteSignature: "",
-    totalMontant: "0",
-    totalTm: "0",
-    totalPart: "0"
-  };
-  state.historique.unshift(entry);
-  saveJSON("pec_historique", state.historique);
-  state.historiquePage = 1;
-  goToView("dashboard");
-}
-
-// Bon d'examen créé par le médecin depuis la validation d'une Consultation
-// (bouton "Créer un bon d'examen") — reprend les données partagées du
-// patient/praticien, prêt à être complété par un médecin.
-function examEntryFromConsultation(consultEntry) {
+// Bon d'examen créé par le médecin depuis la consultation (bouton
+// « Recommander un examen ») — reprend les données partagées du patient et du
+// praticien, prêt à être complété. `signature` : celle déjà saisie par le
+// médecin, reprise pour lui éviter de la ressaisir (elle reste modifiable).
+function examEntryFromConsultation(consultEntry, signature) {
   return {
-    id: Date.now() + 1,
+    id: newEntryId(),
     numero: nextFeuilleNum(),
     date: todayFR(),
     type: "Examen",
@@ -2046,6 +3058,7 @@ function examEntryFromConsultation(consultEntry) {
     ticketModerateur: consultEntry.ticketModerateur,
     medecin: consultEntry.medecin,
     medecinEtab: consultEntry.medecinEtab,
+    medecinId: consultEntry.medecinId,
     medecinCode: consultEntry.medecinCode,
     medecinType: consultEntry.medecinType,
     quartier: consultEntry.quartier,
@@ -2072,15 +3085,15 @@ function examEntryFromConsultation(consultEntry) {
     totalMontant: "0",
     totalTm: "0",
     totalPart: "0",
-    signature: "",
+    signature: signature || "",
     linkedConsultationId: consultEntry.id
   };
 }
 
-// Recopie l'état actuel du formulaire (Prestations/Ordonnance ou bon d'examen)
+// Recopie l'état actuel du formulaire (Prestation/Ordonnance ou bon d'examen)
 // dans l'entrée d'historique correspondante — sans toucher à son statut.
-// Utilisé à la fois par la validation finale et par la bascule Consultation ⇄ Examen,
-// pour qu'aucune saisie en cours ne soit perdue en changeant de feuille.
+// Utilisé en quittant la feuille, en changeant de feuille dans la visite et
+// avant la validation, pour qu'aucune saisie en cours ne soit perdue.
 function captureFormIntoEntry(entry) {
   entry.signature = document.getElementById("pr-signature").value;
 
@@ -2099,9 +3112,14 @@ function captureFormIntoEntry(entry) {
     entry.totalTm = document.getElementById("examTotalTm").value;
     entry.totalPart = document.getElementById("examTotalPart").value;
   } else {
+    // Une ligne partiellement remplie reste en brouillon (rien ne disparaît en
+    // silence) ; c'est la validation qui exige des lignes complètes.
     entry.ordonnance = state.ordoRows
-      .filter(r => r.designation && r.quantite)
-      .map(r => ({ designation: r.designation, quantite: r.quantite, posologie: r.posologie || "", statut: "Non servi", servicePar: "", dateService: "", prixUnitaire: "", partAssurance: "", partPatient: "" }));
+      .filter(r => !ordoRowIsBlank(r))
+      .map(r => ({
+        designation: r.designation, quantite: String(r.quantite || "").trim(), posologie: String(r.posologie || "").trim(),
+        statut: "Non servi", servicePar: "", dateService: "", prixUnitaire: "", partAssurance: "", partPatient: ""
+      }));
     entry.totalMontant = document.getElementById("totalMontant").value;
     entry.totalTm = document.getElementById("totalTm").value;
     entry.totalPart = document.getElementById("totalPart").value;
@@ -2109,17 +3127,6 @@ function captureFormIntoEntry(entry) {
     entry.prestaDomicile = (document.querySelector('input[name=domicile]:checked') || {}).value || "";
     entry.prestaCode = document.getElementById("presta-code").value;
   }
-}
-
-function submitMedecinValidation() {
-  const entry = state.historique.find(h => h.id === state.editingEntryId);
-  if (!entry) return;
-  captureFormIntoEntry(entry);
-  entry.statut = "Validée";
-  saveJSON("pec_historique", state.historique);
-  state.editingEntryId = null;
-  goToView("medecin");
-  syncValidatedEntryToDossierPatient(entry);
 }
 
 // AAAA-MM-JJ à partir d'une date française JJ/MM/AAAA (state.historique
@@ -2130,15 +3137,13 @@ function frDateToISO(s) {
   return m ? (m[3] + "-" + m[2] + "-" + m[1]) : new Date().toISOString().slice(0, 10);
 }
 
-// C'est le médecin qui décide, au moment de la validation, si une feuille
-// est une Consultation ou un Examen (et, pour une Consultation, s'il y
-// rattache un bon d'examen — voir createLinkedExamAndFlip, qui crée sa
-// propre entrée "En attente", synchronisée à son tour quand ELLE sera
-// validée). Une fois la feuille validée, le dossier patient (Consultations/
-// Examens, alimentés par l'API — voir ConsultationController/
-// ExamenController) doit refléter automatiquement cette décision, sans
-// action supplémentaire. Best-effort : une erreur ici n'annule jamais la
-// validation déjà enregistrée dans state.historique ci-dessus.
+// C'est le médecin qui décide, au moment de la validation de la visite, ce qui
+// entre au dossier : la consultation et chacun de ses bons d'examen (voir
+// commitVisitValidation). Une fois la feuille validée, le dossier patient
+// (Consultations / Examens, alimentés par l'API — voir ConsultationController /
+// ExamenController) doit refléter automatiquement cette décision, sans action
+// supplémentaire. Best-effort : une erreur ici n'annule jamais la validation
+// déjà enregistrée dans state.historique.
 function syncValidatedEntryToDossierPatient(entry) {
   findPatientByMatricule(entry.matricule).then(patient => {
     if (!patient || patient.idPatient == null) {
@@ -2151,7 +3156,10 @@ function syncValidatedEntryToDossierPatient(entry) {
         date_examen: frDateToISO(entry.date),
         type_examen: entry.examNature || "Examen",
         montant: parseFloat(entry.totalMontant) || 0,
-        statut: "validee"
+        // Examen.statut : en_attente | en_cours | termine | annule (CK_Examen_statut) —
+        // « validee » n'existe que pour la prise en charge d'une consultation.
+        // La feuille validée prescrit l'examen ; il reste à réaliser.
+        statut: "en_attente"
       }).catch(err => console.warn("[Dossier patient] Synchronisation examen échouée : " + err.message));
     } else {
       apiCreateConsultation({
@@ -2167,29 +3175,26 @@ function syncValidatedEntryToDossierPatient(entry) {
   }).catch(err => console.warn("[Dossier patient] Recherche patient échouée : " + err.message));
 }
 
-document.getElementById("saveSoinsBtn").addEventListener("click", () => {
-  if (state.soinsMode === "medecin") {
-    submitMedecinValidation();
-  } else {
-    submitAgentFeuille();
-  }
-});
-
 /* ---------------------------------------------------------------------- */
 /* Tableau de bord : statistiques, courbes d'évolution, répartition,       */
 /* dernières opérations médicales                                         */
 /* ---------------------------------------------------------------------- */
 
-function pendingCount() { return state.historique.filter(h => h.statut === "En attente").length; }
+// Feuilles « En attente » qui concernent l'utilisateur connecté : celles de ses
+// patients s'il est médecin reconnu dans le catalogue (matchCurrentUserToMedecin),
+// toutes sinon (agent, administrateur…).
+function myPendingEntries() {
+  const pending = state.historique.filter(h => h.statut === "En attente");
+  const me = matchCurrentUserToMedecin();
+  return me ? pending.filter(h => isMyPatient(h, me)) : pending;
+}
+function pendingCount() { return waitingVisits(myPendingEntries()).length; }
 
-// count optionnel : nombre déjà calculé par renderMedecinQueue (qui exclut
-// les patients ayant déjà un dossier, voir plus bas) ; sinon, compte brut
-// de state.historique (utilisé par renderDashboardStats, sans ce filtrage
-// asynchrone).
-function refreshPendingBadge(count) {
+// Pastille de la sidebar : nombre de patients en attente pour l'utilisateur connecté.
+function refreshPendingBadge() {
   const badge = document.getElementById("medecinNavBadge");
   if (!badge) return;
-  const n = count != null ? count : pendingCount();
+  const n = pendingCount();
   badge.textContent = n;
   badge.hidden = n === 0;
 }
@@ -2213,88 +3218,124 @@ function parseFRDate(s) {
   return new Date(parseInt(m[3], 10), parseInt(m[2], 10) - 1, parseInt(m[1], 10));
 }
 
-/* ---------------------------------------------------------------------- */
-/* Espace Médecin : liste des dossiers patients                           */
-/* ---------------------------------------------------------------------- */
-
-let medecinPatientsCache = [];
-
-function renderMedecinPatients() {
-  apiListPatients().then(list => {
-    medecinPatientsCache = list || [];
-    renderMedecinPatientsTable(document.getElementById("medecinPatientsSearch").value);
-  }).catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
+// Première date JJ/MM/AAAA valide trouvée dans un texte libre ("12/09/2026",
+// "12/09/2026 14h30"…) — la date de prestation est saisie à la main par le
+// médecin. Renvoie "" si aucune date réelle (le 31/02 est refusé).
+function extractFRDate(s) {
+  const m = /(\d{2})\/(\d{2})\/(\d{4})/.exec(s || "");
+  if (!m) return "";
+  const y = parseInt(m[3], 10), mo = parseInt(m[2], 10), d = parseInt(m[1], 10);
+  const dt = new Date(y, mo - 1, d);
+  return dt.getFullYear() === y && dt.getMonth() === mo - 1 && dt.getDate() === d ? m[0] : "";
 }
-
-function renderMedecinPatientsTable(filterText) {
-  const body = document.getElementById("medecinPatientsBody");
-  const empty = document.getElementById("medecinPatientsEmpty");
-  const needle = (filterText || "").trim().toLowerCase();
-  const list = !needle ? medecinPatientsCache : medecinPatientsCache.filter(p => {
-    const hay = ((p.prenom || "") + " " + (p.nom || "") + " " + (p.matricule_nag || "")).toLowerCase();
-    return hay.includes(needle);
-  });
-  empty.hidden = list.length > 0;
-  body.innerHTML = list.map(p => (
-    "<tr>" +
-      "<td>" + escapeHtml((p.prenom || "") + " " + (p.nom || "")) + "</td>" +
-      "<td>" + escapeHtml(p.matricule_nag || "—") + "</td>" +
-      "<td>" + (p.sex === "F" ? "Féminin" : (p.sex === "M" ? "Masculin" : "—")) + "</td>" +
-      "<td>" + (p.statut_assure ? "Assuré" : "Non assuré") + "</td>" +
-      "<td><button type=\"button\" class=\"btn-secondary btn-sm\" data-action=\"open-dossier\" data-id=\"" + p.id_patient + "\">Ouvrir le dossier</button></td>" +
-    "</tr>"
-  )).join("");
-  body.querySelectorAll('[data-action="open-dossier"]').forEach(btn => {
-    btn.addEventListener("click", () => {
-      const id = parseInt(btn.dataset.id, 10);
-      const p = medecinPatientsCache.find(x => x.id_patient === id);
-      if (p) openDossierPatient(mapBackendPatient(p));
-    });
-  });
+// Une même date s'affiche toujours en JJ/MM/AAAA : les dates de naissance
+// viennent parfois de l'API en AAAA-MM-JJ, parfois des données de démo en JJ/MM/AAAA.
+function displayDateFR(s) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(s || "") ? dossierDateFR(s) : (s || "");
 }
-
-document.getElementById("medecinPatientsSearch").addEventListener("input", e => {
-  renderMedecinPatientsTable(e.target.value);
-});
+// AAAA-MM-JJ d'une date française saisie librement, "" si elle est invalide
+// (contrairement à frDateToISO, qui retombe sur aujourd'hui).
+function frToISO(s) {
+  const f = extractFRDate(s);
+  if (!f) return "";
+  const p = f.split("/");
+  return p[2] + "-" + p[1] + "-" + p[0];
+}
 
 /* ---------------------------------------------------------------------- */
 /* Espace Médecin : file d'attente des feuilles à valider                  */
 /* ---------------------------------------------------------------------- */
 
-// Vrai si ce patient (par matricule) a déjà au moins une consultation ou un
-// examen dans son Dossier Patient (voir apiListConsultations/
-// apiListExamensPatient). Utilisé pour ne plus montrer dans la file
-// d'attente les feuilles d'un patient déjà pris en charge par ailleurs —
-// évite les doublons quand plusieurs feuilles "En attente" existent pour la
-// même personne.
+// « Patients en attente » : une ligne par patient (visite en cours), avec ses
+// feuilles rattachées — la consultation et, en retrait, la feuille d'examen
+// qu'elle a fait ajouter. Une feuille d'examen dont la consultation est déjà
+// validée reste avec elle tant qu'elle n'est pas validée à son tour ; une
+// feuille d'examen isolée forme une visite à elle seule. Un médecin reconnu dans
+// le catalogue ne voit par défaut que ses patients ; « Tous les médecins » lève ce
+// filtre. Avoir déjà un dossier ne dispense jamais une nouvelle visite de passer
+// par la validation.
+
+// Visites en attente d'après des feuilles « En attente » : chaque visite regroupe
+// la consultation (tête) et ses feuilles d'examen, ou une feuille d'examen seule.
+// `open` est la première feuille encore à valider (la consultation d'abord).
+function waitingVisits(pendingEntries) {
+  const seen = new Set();
+  const visits = [];
+  pendingEntries.forEach(e => {
+    const head = visitRootOf(e) || e;
+    if (seen.has(head.id)) return;
+    seen.add(head.id);
+    const sheets = visitEntries(e);
+    visits.push({ head: head, sheets: sheets, open: sheets.find(s => s.statut !== "Validée") || e });
+  });
+  return visits;
+}
+
+function queueScope() {
+  return matchCurrentUserToMedecin() ? (state.queueScope || "mine") : "all";
+}
+
 function renderMedecinQueue() {
   const body = document.getElementById("medecinQueueBody");
   const empty = document.getElementById("medecinQueueEmpty");
-  // Une nouvelle consultation "En attente" reste dans la file du médecin même
-  // si le patient a déjà un dossier avec des consultations/examens validés
-  // par ailleurs — avoir déjà un dossier ne dispense jamais une nouvelle
-  // visite de passer par la validation médecin.
-  const pending = state.historique.filter(h => h.statut === "En attente");
+  const toggle = document.getElementById("queueScopeToggle");
+  const me = matchCurrentUserToMedecin();
+  const scope = queueScope();
+  toggle.hidden = !me;
+  toggle.querySelectorAll(".chip").forEach(c => c.classList.toggle("active", c.dataset.scope === scope));
+
+  const all = waitingVisits(state.historique.filter(h => h.statut === "En attente"));
+  const visits = me && scope === "mine" ? all.filter(v => isMyPatient(v.head, me)) : all;
+
   body.innerHTML = "";
-  empty.hidden = pending.length > 0;
-  pending.forEach(h => {
+  empty.hidden = visits.length > 0;
+  empty.textContent = me && scope === "mine" && all.length
+    ? "Aucun patient en attente pour vous — " + all.length + " chez d'autres médecins (« Tous les médecins »)."
+    : "Aucun patient en attente.";
+  const count = document.getElementById("medecinQueueCount");
+  count.textContent = visits.length + " en attente";
+  count.hidden = visits.length === 0;
+
+  const info = pageSlice("queue", visits, 8);
+  info.items.forEach(v => {
+    const h = v.head;
+    const isExam = h.type === "Examen";
+    const sheets = v.sheets.map((s, i) =>
+      '<div class="queue-sheet' + (i > 0 ? " child" : "") + '">' +
+        '<span class="pill ' + (s.type === "Examen" ? "examen" : "consultation") + '">' + (s.type === "Examen" ? "Examen" : "Consultation") + "</span>" +
+        '<span class="queue-sheet-num">' + escapeHtml(s.numero) + "</span>" +
+        (s.statut === "Validée" ? ' <span class="pill validee">Validée</span>' : "") +
+      "</div>"
+    ).join("");
     const tr = document.createElement("tr");
-    const pillClass = h.type === "Consultation" ? "consultation" : "examen";
+    tr.className = isExam ? "queue-exam" : "queue-consult";
     tr.innerHTML =
-      "<td>" + h.numero + "</td>" +
-      "<td>" + h.date + "</td>" +
-      "<td>" + (h.patientNom || "") + "</td>" +
-      "<td>" + (h.matricule || "") + "</td>" +
-      '<td><span class="pill ' + pillClass + '">' + h.type + "</span></td>" +
-      "<td>" + (h.medecin || "") + "</td>" +
-      '<td class="row-actions"><button type="button" class="btn-secondary btn-sm" data-action="examine" data-id="' + h.id + '">Examiner</button></td>';
+      '<td class="queue-patient">' + escapeHtml(h.patientNom || "") + "</td>" +
+      "<td>" + escapeHtml(formatNag(h.matricule)) + "</td>" +
+      '<td><div class="queue-sheets">' + sheets + "</div></td>" +
+      "<td>" + escapeHtml(h.medecin || "") + "</td>" +
+      "<td>" + escapeHtml(h.date) + "</td>" +
+      '<td class="row-actions"><button type="button" class="btn-secondary btn-sm" data-action="examine" data-id="' + v.open.id + '">Examiner</button></td>';
     body.appendChild(tr);
   });
   body.querySelectorAll('[data-action="examine"]').forEach(btn => {
-    btn.addEventListener("click", () => openSoinsForValidation(parseInt(btn.dataset.id, 10)));
+    btn.addEventListener("click", () => {
+      const id = parseInt(btn.dataset.id, 10);
+      const e = state.historique.find(h => h.id === id);
+      guardSuspended(e && e.matricule, e && e.patientNom, "la feuille ne peut être ni examinée ni validée.", () => openSoinsForValidation(id), "feuille.ouvrir");
+    });
   });
-  refreshPendingBadge(pending.length);
+  renderPager("medecinQueuePager", "queue", info, renderMedecinQueue, "patients");
+  refreshPendingBadge();
 }
+
+document.querySelectorAll("#queueScopeToggle .chip").forEach(chip => {
+  chip.addEventListener("click", () => {
+    state.queueScope = chip.dataset.scope;
+    resetPage("queue");
+    renderMedecinQueue();
+  });
+});
 
 /* ---------------------------------------------------------------------- */
 /* Historique : filtres, pagination, aperçu, suppression                   */
@@ -2308,7 +3349,7 @@ function getFilteredHistorique() {
     if (f.type && h.type !== f.type) return false;
     if (f.statut && h.statut !== f.statut) return false;
     if (f.search) {
-      const hay = ((h.patientNom || h.patient || "") + " " + (h.matricule || "")).toLowerCase();
+      const hay = ((h.patientNom || h.patient || "") + " " + (h.matricule || "") + " " + formatNag(h.matricule)).toLowerCase();
       if (!hay.includes(f.search.toLowerCase())) return false;
     }
     if (f.from || f.to) {
@@ -2323,11 +3364,8 @@ function getFilteredHistorique() {
 
 function renderHistorique() {
   const all = getFilteredHistorique();
-  const totalPages = Math.max(1, Math.ceil(all.length / HIST_PAGE_SIZE));
-  if (state.historiquePage > totalPages) state.historiquePage = totalPages;
-  if (state.historiquePage < 1) state.historiquePage = 1;
-  const start = (state.historiquePage - 1) * HIST_PAGE_SIZE;
-  const pageItems = all.slice(start, start + HIST_PAGE_SIZE);
+  const info = pageSlice("historique", all, HIST_PAGE_SIZE);
+  const pageItems = info.items;
 
   const body = document.getElementById("historiqueBody");
   const empty = document.getElementById("historiqueEmpty");
@@ -2342,7 +3380,7 @@ function renderHistorique() {
       "<td>" + h.numero + "</td>" +
       "<td>" + h.date + "</td>" +
       "<td>" + (h.patientNom || h.patient || "") + "</td>" +
-      "<td>" + (h.matricule || "") + "</td>" +
+      "<td>" + formatNag(h.matricule) + "</td>" +
       '<td><span class="pill ' + pillClass + '">' + h.type + "</span></td>" +
       '<td><span class="pill ' + statutClass + '">' + (h.statut || "Validée") + "</span></td>" +
       "<td>" + h.totalMontant + "</td>" +
@@ -2361,31 +3399,19 @@ function renderHistorique() {
       const id = parseInt(btn.dataset.id, 10);
       askConfirm("Cette prise en charge sera définitivement supprimée de l'historique. Cette action est irréversible.", () => {
         state.historique = state.historique.filter(h => h.id !== id);
-        saveJSON("pec_historique", state.historique);
-        renderHistorique();
-        renderDashboardStats();
-        refreshPendingBadge();
+        persistFeuilles().then(() => {
+          renderHistorique();
+          renderDashboardStats();
+          refreshPendingBadge();
+        }).catch(err => {
+          showInfoModal("Suppression impossible", "<p>" + escapeHtml(err.message) + "</p>");
+          pullFeuilles(true).then(() => { renderHistorique(); renderDashboardStats(); refreshPendingBadge(); }).catch(() => {});
+        });
       }, { title: "Supprimer cette prise en charge ?" });
     });
   });
 
-  renderPagination(totalPages, all.length);
-}
-
-function renderPagination(totalPages, totalItems) {
-  const el = document.getElementById("historiquePagination");
-  if (totalItems === 0) { el.innerHTML = ""; return; }
-  const p = state.historiquePage;
-  el.innerHTML =
-    '<div class="pg-info">Page ' + p + " sur " + totalPages + " · " + totalItems + " résultat(s)</div>" +
-    '<div class="pg-btns">' +
-      '<button type="button" class="btn-secondary btn-sm" id="pgPrev"' + (p <= 1 ? " disabled" : "") + ">‹ Précédent</button>" +
-      '<button type="button" class="btn-secondary btn-sm" id="pgNext"' + (p >= totalPages ? " disabled" : "") + ">Suivant ›</button>" +
-    "</div>";
-  const prevBtn = document.getElementById("pgPrev");
-  const nextBtn = document.getElementById("pgNext");
-  if (prevBtn) prevBtn.addEventListener("click", () => { state.historiquePage--; renderHistorique(); });
-  if (nextBtn) nextBtn.addEventListener("click", () => { state.historiquePage++; renderHistorique(); });
+  renderPager("historiquePagination", "historique", info, renderHistorique, "prises en charge");
 }
 
 ["filterSearch", "filterType", "filterStatut", "filterFrom", "filterTo"].forEach(id => {
@@ -2418,73 +3444,99 @@ function previewEntry(id) {
   const pillClass = h.type === "Consultation" ? "consultation" : "examen";
   const statutClass = h.statut === "Validée" ? "validee" : "attente";
   const isExam = h.type === "Examen";
+  const esc = escapeHtml;
 
-  let tableHead, rowsHtml;
+  // Tableau principal : examens désignés (bon d'examen) ou prestations chiffrées
+  // (feuilles de démonstration) — omis quand il n'y a rien à montrer.
+  let tableHtml = "";
   if (isExam) {
     const rows = (h.examens || []).filter(r => r.designation || r.cotation);
-    tableHead = "<tr><th>Désignation de l'examen</th><th>Cotation</th><th>TM</th><th>Part CNAMGS</th></tr>";
-    rowsHtml = rows.length
-      ? rows.map(r =>
-          "<tr><td>" + (r.designation || "") + "</td><td>" + (r.cotation || "") + "</td><td>" + (r.tm || "") + "</td><td>" + (r.part || "") + "</td></tr>"
-        ).join("")
-      : '<tr><td colspan="4" style="text-align:center;color:var(--muted)">Aucun examen renseigné</td></tr>';
+    tableHtml = '<table class="data-table"><thead><tr><th>Désignation de l\'examen</th></tr></thead><tbody>' +
+      (rows.length
+        ? rows.map(r => "<tr><td>" + esc(r.designation || "") + "</td></tr>").join("")
+        : '<tr><td style="text-align:center;color:var(--muted)">Aucun examen renseigné</td></tr>') +
+      "</tbody></table>";
   } else {
     const rows = (h.prestations || []).filter(r => r.designation || r.montant);
-    tableHead = "<tr><th>Désignation</th><th>Qté</th><th>Montant</th><th>TM</th><th>Part CNAMGS</th></tr>";
-    rowsHtml = rows.length
-      ? rows.map(r =>
-          "<tr><td>" + (r.designation || "") + "</td><td>" + (r.qte || "") + "</td><td>" + (r.montant || "") + "</td><td>" + (r.tm || "") + "</td><td>" + (r.part || "") + "</td></tr>"
-        ).join("")
-      : '<tr><td colspan="5" style="text-align:center;color:var(--muted)">Aucune prestation renseignée</td></tr>';
+    if (rows.length) {
+      tableHtml = '<table class="data-table"><thead><tr><th>Désignation</th><th>Qté</th><th>Montant</th><th>TM</th><th>Part CNAMGS</th></tr></thead><tbody>' +
+        rows.map(r =>
+          "<tr><td>" + esc(r.designation || "") + "</td><td>" + esc(r.qte || "") + "</td><td>" + esc(r.montant || "") + "</td><td>" + esc(r.tm || "") + "</td><td>" + esc(r.part || "") + "</td></tr>"
+        ).join("") + "</tbody></table>";
+    }
+  }
+
+  // Ordonnance : exactement ce que le médecin a prescrit (médicament, quantité,
+  // posologie / durée) et l'état de délivrance en pharmacie.
+  let ordoHtml = "";
+  if (!isExam) {
+    const ord = h.ordonnance || [];
+    ordoHtml = '<h4 class="preview-sub">Ordonnance</h4>' + (ord.length
+      ? '<table class="data-table"><thead><tr><th>Désignation</th><th>Qté</th><th>Posologie / Durée</th><th>Délivrance</th></tr></thead><tbody>' +
+        ord.map(r =>
+          "<tr><td>" + esc(r.designation) + "</td><td>" + esc(r.quantite) + "</td><td>" + esc(r.posologie || "—") + "</td><td>" +
+          (r.statut === "Servi" ? "Servi le " + esc(r.dateService) + (r.servicePar ? " — " + esc(r.servicePar) : "") : "Non servi") + "</td></tr>"
+        ).join("") + "</tbody></table>"
+      : '<p class="hint" style="margin:0">Aucune ordonnance.</p>');
   }
 
   const extraGrid = isExam
-    ? "<div><b>Nature de la prestation</b><span>" + (h.examNature || "—") + "</span></div>" +
-      "<div><b>Situation du patient</b><span>" + (h.examSituation || "—") + "</span></div>" +
-      "<div><b>Établissement réalisant l'examen</b><span>" + (h.examEtablissement || "—") + "</span></div>"
-    : "";
+    ? "<div><b>Date de la prestation</b><span>" + esc(h.examDate || "—") + "</span></div>" +
+      "<div><b>Nature de la prestation</b><span>" + esc(h.examNature || "—") + "</span></div>" +
+      "<div><b>Situation du patient</b><span>" + esc(h.examSituation || "—") + "</span></div>" +
+      "<div><b>Établissement réalisant l'examen</b><span>" + esc(h.examEtablissement || "—") + "</span></div>" +
+      "<div><b>Bilan / motif</b><span>" + esc(h.examMotif || "—") + "</span></div>"
+    : "<div><b>Date de la prestation</b><span>" + esc(h.prestaDate || h.date || "—") + "</span></div>" +
+      "<div><b>Code affection</b><span>" + esc(h.prestaCode || "—") + "</span></div>" +
+      "<div><b>Visite à domicile</b><span>" + esc(h.prestaDomicile || "—") + "</span></div>";
 
   let linkHtml = "";
   if (isExam && h.linkedConsultationId) {
     const src = state.historique.find(e => e.id === h.linkedConsultationId);
     if (src) {
-      linkHtml = '<div class="preview-link">Examen recommandé suite à la feuille <a href="#" data-preview-link="' + src.id + '">' + src.numero + "</a></div>";
+      linkHtml = '<div class="preview-link">Examen recommandé suite à la feuille <a href="#" data-preview-link="' + src.id + '">' + esc(src.numero) + "</a></div>";
     }
   } else if (!isExam && h.linkedExamenIds && h.linkedExamenIds.length) {
     const links = h.linkedExamenIds
       .map(examId => state.historique.find(e => e.id === examId))
       .filter(Boolean)
-      .map(ex => '<a href="#" data-preview-link="' + ex.id + '">' + ex.numero + "</a>");
+      .map(ex => '<a href="#" data-preview-link="' + ex.id + '">' + esc(ex.numero) + "</a>");
     if (links.length) linkHtml = '<div class="preview-link">Examen(s) recommandé(s) : ' + links.join(", ") + "</div>";
   }
 
+  const hasTotals = [h.totalMontant, h.totalTm, h.totalPart].some(v => parseFloat(v) > 0);
+
   document.getElementById("previewBody").innerHTML =
     '<div class="preview-head"><img src="CNAMGS.png" alt="CNAMGS" /><div>' +
-      '<span class="pill ' + pillClass + '">' + h.type + "</span> " +
-      '<span class="pill ' + statutClass + '">' + (h.statut || "Validée") + "</span>" +
-      '<div class="preview-num">' + h.numero + "</div>" +
+      '<span class="pill ' + pillClass + '">' + esc(h.type) + "</span> " +
+      '<span class="pill ' + statutClass + '">' + esc(h.statut || "Validée") + "</span>" +
+      '<div class="preview-num">' + esc(h.numero) + "</div>" +
     "</div></div>" +
     linkHtml +
     '<div class="preview-grid">' +
-      "<div><b>Patient</b><span>" + (h.patientNom || h.patient || "—") + "</span></div>" +
-      "<div><b>Matricule</b><span>" + (h.matricule || "—") + "</span></div>" +
-      "<div><b>Date</b><span>" + h.date + "</span></div>" +
-      "<div><b>Fonds</b><span>" + (h.fonds || "—") + "</span></div>" +
-      "<div><b>Ticket modérateur</b><span>" + (h.ticketModerateur || "—") + "</span></div>" +
-      "<div><b>Médecin</b><span>" + (h.medecin || "—") + "</span></div>" +
-      "<div><b>Quartier</b><span>" + escapeHtml(h.quartier || "—") + "</span></div>" +
-      "<div><b>Téléphone</b><span>" + escapeHtml(h.telephone || "—") + "</span></div>" +
-      "<div><b>Service</b><span>" + escapeHtml(h.service || "—") + "</span></div>" +
-      "<div><b>Accident causé par un tiers</b><span>" + (h.accidentTiers || "—") + "</span></div>" +
-      "<div><b>Soins liés à la grossesse</b><span>" + (h.grossesse || "—") + "</span></div>" +
+      "<div><b>Patient</b><span>" + esc(h.patientNom || h.patient || "—") + "</span></div>" +
+      "<div><b>Matricule</b><span>" + esc(formatNag(h.matricule) || "—") + "</span></div>" +
+      "<div><b>Date de réception</b><span>" + esc(h.date) + "</span></div>" +
+      "<div><b>Fonds</b><span>" + esc(h.fonds || "—") + "</span></div>" +
+      "<div><b>Ticket modérateur</b><span>" + esc(h.ticketModerateur || "—") + "</span></div>" +
+      "<div><b>Médecin</b><span>" + esc(h.medecin || "—") + "</span></div>" +
+      "<div><b>Quartier</b><span>" + esc(h.quartier || "—") + "</span></div>" +
+      "<div><b>Téléphone</b><span>" + esc(h.telephone || "—") + "</span></div>" +
+      "<div><b>Service</b><span>" + esc(h.service || "—") + "</span></div>" +
+      "<div><b>Accident causé par un tiers</b><span>" + esc(h.accidentTiers || "—") + "</span></div>" +
+      "<div><b>Soins liés à la grossesse</b><span>" + esc(h.grossesse || "—") + "</span></div>" +
       extraGrid +
+      "<div><b>Signature du praticien</b><span>" + esc(h.signature || "—") + "</span></div>" +
     "</div>" +
-    '<table class="data-table"><thead>' + tableHead + "</thead><tbody>" + rowsHtml + "</tbody></table>" +
-    '<div class="preview-totals">' +
-      "<div>Total montant <b>" + h.totalMontant + "</b></div>" +
-      "<div>Total TM <b>" + h.totalTm + "</b></div>" +
-      "<div>Total CNAMGS <b>" + h.totalPart + "</b></div>" +
-    "</div>";
+    tableHtml +
+    ordoHtml +
+    (hasTotals
+      ? '<div class="preview-totals">' +
+          "<div>Total montant <b>" + esc(h.totalMontant) + "</b></div>" +
+          "<div>Total TM <b>" + esc(h.totalTm) + "</b></div>" +
+          "<div>Total CNAMGS <b>" + esc(h.totalPart) + "</b></div>" +
+        "</div>"
+      : "");
 
   document.getElementById("previewBody").querySelectorAll('[data-preview-link]').forEach(a => {
     a.addEventListener("click", e => {
@@ -2518,45 +3570,34 @@ function iconKey() {
 /* Gestion des utilisateurs                                               */
 /* ---------------------------------------------------------------------- */
 
-// "Gestion des utilisateurs" essaie d'abord le vrai backend
-// (GET /api/utilisateurs, nécessite le token JWT obtenu à la connexion).
-// S'il est injoignable ou refuse (pas connecté via le backend, permission
-// manquante...), la page retombe sur les comptes de démonstration locaux —
-// state.usersSource indique laquelle des deux sources est active, et une
-// puce dans l'en-tête le rappelle visuellement (voir renderUsersSourceBadge).
+// « Gestion des utilisateurs » : les comptes viennent de la base (GET /api/utilisateurs, permission utilisateur.lire).
 function renderUsers() {
   const body = document.getElementById("usersBody");
   body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted)">Chargement…</td></tr>';
-
   apiListUtilisateurs().then(list => {
     state.apiUsers = list.map(mapBackendUser);
-    state.usersSource = "api";
     renderUsersTable(state.apiUsers);
-    renderUsersSourceBadge();
+    renderUsersSourceBadge(true);
   }).catch(err => {
-    state.usersSource = "local";
-    renderUsersTable(state.users);
-    renderUsersSourceBadge();
+    body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--red)">' + escapeHtml(err.message) + "</td></tr>";
+    document.getElementById("usersPager").innerHTML = "";
+    renderUsersSourceBadge(false);
   });
 }
 
-function renderUsersSourceBadge() {
+function renderUsersSourceBadge(ok) {
   const el = document.getElementById("usersSourceBadge");
   if (!el) return;
-  if (state.usersSource === "api") {
-    el.textContent = "Connecté à l'API";
-    el.className = "pill validee";
-  } else {
-    el.textContent = "Mode démo local (backend injoignable)";
-    el.className = "pill attente";
-  }
+  el.textContent = ok ? "Base de données CNAMGS" : "Serveur injoignable";
+  el.className = "pill " + (ok ? "validee" : "attente");
 }
 
 function renderUsersTable(list) {
   const body = document.getElementById("usersBody");
   body.innerHTML = "";
-  const isApi = state.usersSource === "api";
-  list.forEach(u => {
+  const isApi = true;
+  const info = pageSlice("users", list, 10);
+  info.items.forEach(u => {
     const tr = document.createElement("tr");
     const statutClass = u.statut === "Actif" ? "actif" : "inactif";
     tr.innerHTML =
@@ -2575,11 +3616,12 @@ function renderUsersTable(list) {
     body.appendChild(tr);
   });
 
+  renderPager("usersPager", "users", info, () => renderUsersTable(list), "utilisateurs");
   body.querySelectorAll('[data-action="edit"]').forEach(btn => {
     btn.addEventListener("click", () => {
       const id = parseInt(btn.dataset.id, 10);
       apiGetUtilisateur(id).then(u => openUserModalForEdit(u))
-        .catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
+        .catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
     });
   });
   body.querySelectorAll('[data-action="reset-pass"]').forEach(btn => {
@@ -2592,32 +3634,22 @@ function renderUsersTable(list) {
   body.querySelectorAll('[data-action="toggle"]').forEach(btn => {
     btn.addEventListener("click", () => {
       const id = parseInt(btn.dataset.id, 10);
-      if (state.usersSource === "api") {
-        const u = state.apiUsers.find(x => x.id === id);
-        apiSetUtilisateurActif(id, u.statut !== "Actif").then(() => renderUsers())
-          .catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
-        return;
-      }
-      const u = state.users.find(x => x.id === id);
-      u.statut = u.statut === "Actif" ? "Inactif" : "Actif";
-      saveJSON("pec_users", state.users);
-      renderUsers();
+      const u = state.apiUsers.find(x => x.id === id);
+      apiSetUtilisateurActif(id, u.statut !== "Actif").then(() => {
+        audit(u.statut !== "Actif" ? "utilisateur.activer" : "utilisateur.desactiver", { ressourceType: "Utilisateur", ressourceId: id, ressourceLibelle: fullName(u), avant: { statut: u.statut } });
+        renderUsers();
+      }).catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
     });
   });
   body.querySelectorAll('[data-action="delete"]').forEach(btn => {
     btn.addEventListener("click", () => {
       const id = parseInt(btn.dataset.id, 10);
-      const source = state.usersSource === "api" ? state.apiUsers : state.users;
-      const u = source.find(x => x.id === id);
+      const u = state.apiUsers.find(x => x.id === id);
       askConfirm("Le compte de " + (u ? u.prenom + " " + u.nom : "cet utilisateur") + " sera définitivement supprimé et perdra tout accès à la plateforme.", () => {
-        if (state.usersSource === "api") {
-          apiDeleteUtilisateur(id).then(() => renderUsers())
-            .catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
-          return;
-        }
-        state.users = state.users.filter(x => x.id !== id);
-        saveJSON("pec_users", state.users);
-        renderUsers();
+        apiDeleteUtilisateur(id).then(() => {
+          audit("utilisateur.supprimer", { ressourceType: "Utilisateur", ressourceId: id, ressourceLibelle: u ? fullName(u) : "#" + id });
+          renderUsers();
+        }).catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
       }, { title: "Supprimer cet utilisateur ?" });
     });
   });
@@ -2625,6 +3657,7 @@ function renderUsersTable(list) {
 
 const userModal = document.getElementById("userModal");
 let editingUserId = null; // id_utilisateur en cours de modification (mode édition), null = création
+let editingUserRole = "";  // rôle du compte avant modification (pour tracer un changement de rôle)
 
 function setUserModalMode(editing) {
   document.getElementById("userModalTitle").textContent = editing ? "Modifier l'utilisateur" : "Ajouter un utilisateur";
@@ -2639,7 +3672,13 @@ function setUserModalMode(editing) {
   document.getElementById("u-username-hint").hidden = !editing;
 }
 
+function fillUserStructureSelect() {
+  const sel = document.getElementById("u-structure");
+  sel.innerHTML = '<option value="">— Choisir une structure —</option>' + (state.structures || []).map(st =>
+    '<option value="' + st.id_structure + '">' + escapeHtml(st.raison_sociale) + " (" + escapeHtml(st.type_structure) + ")</option>").join("");
+}
 document.getElementById("addUserBtn").addEventListener("click", () => {
+  fillUserStructureSelect();
   editingUserId = null;
   document.getElementById("userForm").reset();
   document.getElementById("u-id").value = "";
@@ -2657,7 +3696,9 @@ function openUserModalForEdit(u) {
   document.getElementById("u-email").value = u.email || "";
   document.getElementById("u-username").value = u.username || "";
   document.getElementById("u-role").value = API_ROLE_TO_FRONT_ROLE[u.role] || u.role;
-  document.getElementById("u-structure").value = u.structure_nom || "";
+  editingUserRole = API_ROLE_TO_FRONT_ROLE[u.role] || u.role;
+  fillUserStructureSelect();
+  document.getElementById("u-structure").value = u.id_structure != null ? String(u.id_structure) : "";
   document.getElementById("u-pass").value = "";
   document.getElementById("u-date-creation").value = apiFormatDate(u.date_creation);
   setUserModalMode(true);
@@ -2689,48 +3730,30 @@ document.getElementById("userForm").addEventListener("submit", e => {
       email: email,
       role: FRONT_ROLE_TO_API_ROLE[role] || role
     }).then(() => {
+      audit("utilisateur.modifier", { ressourceType: "Utilisateur", ressourceId: editingUserId, ressourceLibelle: nomComplet, avant: { role: editingUserRole }, apres: { role: role, roleModifie: role !== editingUserRole } });
       closeUserModal();
       renderUsers();
-    }).catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
+    }).catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
     return;
   }
 
-  if (state.usersSource === "api") {
-    // POST /api/auth/register — id_structure vaut 1 par défaut, faute d'un
-    // module "Structure" exposé par l'API pour choisir la vraie structure
-    // (voir le PDF, "Périmètre connecté").
-    apiRegister({
-      username: username,
-      mot_de_passe: document.getElementById("u-pass").value || "changeme123",
-      nom: nomComplet,
-      email: email,
-      telephone: "",
-      role: FRONT_ROLE_TO_API_ROLE[role] || role,
-      id_structure: 1
-    }).then(() => {
-      document.getElementById("userForm").reset();
-      userModal.hidden = true;
-      renderUsers();
-    }).catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
-    return;
-  }
-
-  const newUser = {
-    id: Date.now(),
-    nom: nom,
-    prenom: prenom,
-    email: email,
+  // POST /api/auth/register : le compte est créé dans la base, rattaché à la structure choisie.
+  const idStructure = parseInt(document.getElementById("u-structure").value, 10);
+  if (!idStructure) { showInfoModal("Structure obligatoire", "<p>Choisissez la structure de rattachement du compte.</p>"); return; }
+  apiRegister({
     username: username,
-    role: role,
-    structure: document.getElementById("u-structure").value.trim(),
-    dateCreation: todayFR(),
-    statut: "Actif"
-  };
-  state.users.push(newUser);
-  saveJSON("pec_users", state.users);
-  document.getElementById("userForm").reset();
-  userModal.hidden = true;
-  renderUsers();
+    mot_de_passe: document.getElementById("u-pass").value,
+    nom: nomComplet,
+    email: email,
+    telephone: "",
+    role: FRONT_ROLE_TO_API_ROLE[role] || role,
+    id_structure: idStructure
+  }).then(() => {
+    audit("utilisateur.creer", { ressourceType: "Utilisateur", ressourceLibelle: nomComplet, apres: { role: role, username: username } });
+    document.getElementById("userForm").reset();
+    userModal.hidden = true;
+    renderUsers();
+  }).catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
 });
 
 /* ---- Réinitialisation du mot de passe (admin) : POST /api/auth/reset-password ---- */
@@ -2753,73 +3776,481 @@ document.getElementById("resetPasswordForm").addEventListener("submit", e => {
   const nouveau = document.getElementById("rp-nouveau").value;
   if (resetPasswordTargetId == null) { closeResetPasswordModal(); return; }
   apiResetPassword(resetPasswordTargetId, nouveau).then(() => {
+    audit("utilisateur.mdp.reinitialiser", { ressourceType: "Utilisateur", ressourceId: resetPasswordTargetId });
     closeResetPasswordModal();
     showInfoModal("Mot de passe réinitialisé", "<p>Le nouveau mot de passe a été enregistré.</p>");
-  }).catch(err => showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>"));
+  }).catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
 });
 
 /* ---------------------------------------------------------------------- */
-/* Journalisation : filtres + tableau des connexions                       */
+/* Pagination générique : une page mémorisée par liste (clé), pager masqué   */
+/* quand la liste tient sur une page.                                       */
 /* ---------------------------------------------------------------------- */
 
-function populateJournalRoleFilter() {
-  const sel = document.getElementById("logFilterRole");
-  const current = sel.value;
-  const roles = Array.from(new Set(state.connexionLog.map(l => l.role).filter(Boolean))).sort();
-  sel.innerHTML = '<option value="">Tous les rôles</option>' + roles.map(r => '<option value="' + r.replace(/"/g, "&quot;") + '">' + r + "</option>").join("");
-  sel.value = current;
+const PAGER_STATE = {};
+function pageSlice(key, list, size) {
+  const pages = Math.max(1, Math.ceil(list.length / size));
+  let p = PAGER_STATE[key] || 1;
+  if (p > pages) p = pages;
+  if (p < 1) p = 1;
+  PAGER_STATE[key] = p;
+  return {
+    page: p, pages: pages, size: size, total: list.length,
+    from: list.length ? (p - 1) * size + 1 : 0,
+    to: Math.min(list.length, p * size),
+    items: list.slice((p - 1) * size, p * size)
+  };
+}
+function resetPage(key) { PAGER_STATE[key] = 1; }
+// Les remises à 1 déjà présentes (state.historiquePage = 1) continuent de fonctionner : c'est le même compteur.
+Object.defineProperty(state, "historiquePage", { get() { return PAGER_STATE.historique || 1; }, set(v) { PAGER_STATE.historique = v; }, enumerable: true, configurable: true });
+
+// Numéros de page : première, dernière, page courante et ses voisines, « … » entre les trous.
+function pagerNumbers(page, pages) {
+  const set = new Set([1, pages, page - 1, page, page + 1]);
+  if (page <= 3) { set.add(2); set.add(3); }
+  if (page >= pages - 2) { set.add(pages - 1); set.add(pages - 2); }
+  const list = Array.from(set).filter(n => n >= 1 && n <= pages).sort((a, b) => a - b);
+  const out = [];
+  list.forEach((n, i) => { if (i && n - list[i - 1] > 1) out.push("…"); out.push(n); });
+  return out;
+}
+function renderPager(hostId, key, info, rerender, unit) {
+  const host = typeof hostId === "string" ? document.getElementById(hostId) : hostId;
+  if (!host) return;
+  if (info.pages <= 1) { host.innerHTML = ""; return; }
+  const noun = unit || "résultats";
+  host.innerHTML =
+    '<div class="pager" role="navigation" aria-label="Pagination">' +
+      '<div class="pg-info">Affichage de <b>' + info.from + "–" + info.to + "</b> sur <b>" + info.total + "</b> " + noun + "</div>" +
+      '<div class="pg-btns">' +
+        '<button type="button" class="pg-btn pg-nav" data-p="' + (info.page - 1) + '" aria-label="Page précédente"' + (info.page <= 1 ? " disabled" : "") + ">‹</button>" +
+        pagerNumbers(info.page, info.pages).map(n => n === "…"
+          ? '<span class="pg-gap">…</span>'
+          : '<button type="button" class="pg-btn' + (n === info.page ? " active" : "") + '" data-p="' + n + '"' + (n === info.page ? ' aria-current="page"' : "") + ">" + n + "</button>").join("") +
+        '<button type="button" class="pg-btn pg-nav" data-p="' + (info.page + 1) + '" aria-label="Page suivante"' + (info.page >= info.pages ? " disabled" : "") + ">›</button>" +
+      "</div>" +
+    "</div>";
+  host.querySelectorAll(".pg-btn").forEach(b => b.addEventListener("click", () => {
+    const p = parseInt(b.dataset.p, 10);
+    if (!p || p === info.page) return;
+    PAGER_STATE[key] = p;
+    rerender();
+    // La liste change sous les yeux : on remonte en haut de sa carte si celle-ci a défilé hors de l'écran.
+    const card = host.closest(".card") || host.parentElement;
+    if (card && card.getBoundingClientRect().top < 70) card.scrollIntoView({ block: "start" });
+  }));
 }
 
-function getFilteredJournal() {
-  const f = state.journalFilters;
-  return state.connexionLog.filter(l => {
-    if (f.role && l.role !== f.role) return false;
-    if (f.statut && l.statut !== f.statut) return false;
-    if (f.search) {
-      const hay = ((l.nom || "") + " " + (l.email || "")).toLowerCase();
-      if (!hay.includes(f.search.toLowerCase())) return false;
-    }
-    if (f.from || f.to) {
-      const d = parseFRDate(l.date);
-      if (!d) return false;
-      if (f.from && d < new Date(f.from)) return false;
-      if (f.to && d > new Date(f.to + "T23:59:59")) return false;
-    }
-    return true;
-  });
+/* ---------------------------------------------------------------------- */
+/* Journal d'audit : qui a fait quoi, quand, d'où — et ce qui sort de       */
+/* l'ordinaire. Local pour l'instant (pec_audit) ; les champs sont ceux qu'un */
+/* back-end devra porter (voir README §14).                                  */
+/* ---------------------------------------------------------------------- */
+
+/* ---------------------------------------------------------------------- */
+/* Journalisation : tout est dans la base. Le serveur trace lui-même ce qui  */
+/* passe par l'API (connexions, échecs, modifications…) avec l'adresse IP,    */
+/* calcule le score de risque, chaîne les empreintes et notifie l'admin.      */
+/* Ici, l'interface n'envoie que ses propres actions (pages ouvertes,         */
+/* recherches, exports…) et affiche ce que le serveur lui renvoie.            */
+/* ---------------------------------------------------------------------- */
+
+const AUDIT_ACTIONS = {
+  "auth.deconnexion": ["AUTH", "Déconnexion"],
+  "vue.ouvrir": ["NAVIGATION", "Ouverture d'une page"],
+  "ui.refuse": ["SECURITE", "Accès refusé"],
+  "patient.rechercher": ["ASSURE", "Recherche d'un assuré"],
+  "dossier.ouvrir": ["ASSURE", "Ouverture du dossier patient"],
+  "pec.creer": ["PEC", "Prise en charge créée"],
+  "feuille.ouvrir": ["CONSULTATION", "Ouverture d'une feuille de soins"],
+  "feuille.valider": ["CONSULTATION", "Feuille validée"],
+  "examen.recommander": ["EXAMEN", "Feuille d'examen ajoutée"],
+  "pharma.rechercher": ["PHARMACIE", "Recherche d'ordonnance"],
+  "pharma.servir": ["PHARMACIE", "Médicament servi"],
+  "paiement.enregistrer": ["PAIEMENT", "Paiement enregistré"],
+  "rapport.consulter": ["EXPORT", "Consultation d'un rapport"],
+  "rapport.exporter": ["EXPORT", "Export d'un rapport"],
+  "utilisateur.creer": ["ADMIN", "Compte créé"],
+  "utilisateur.modifier": ["ADMIN", "Compte modifié"],
+  "utilisateur.activer": ["ADMIN", "Compte activé"],
+  "utilisateur.desactiver": ["ADMIN", "Compte désactivé"],
+  "utilisateur.supprimer": ["ADMIN", "Compte supprimé"],
+  "utilisateur.mdp.reinitialiser": ["ADMIN", "Mot de passe réinitialisé"],
+  "permissions.modifier": ["ADMIN", "Permissions modifiées"],
+  "notification.envoyer": ["NOTIFICATION", "Message envoyé"],
+  "notification.lire": ["NOTIFICATION", "Message lu"],
+  "notification.accuser": ["NOTIFICATION", "Accusé de lecture"],
+  "journal.verifier": ["SECURITE", "Vérification d'intégrité du journal"],
+  "journal.exporter": ["EXPORT", "Export du journal d'audit"],
+  "journal.revue": ["SECURITE", "Revue d'une alerte"]
+};
+const AUDIT_CATEGORIES = ["AUTH", "NAVIGATION", "ASSURE", "PEC", "CONSULTATION", "EXAMEN", "PHARMACIE", "PAIEMENT", "ADMIN", "EXPORT", "NOTIFICATION", "SECURITE"];
+const AUDIT_CATEGORY_LABEL = {
+  AUTH: "Authentification", NAVIGATION: "Navigation", ASSURE: "Assurés", PEC: "Prises en charge", CONSULTATION: "Consultations",
+  EXAMEN: "Examens", PHARMACIE: "Pharmacie", PAIEMENT: "Paiements", ADMIN: "Administration", EXPORT: "Exports", NOTIFICATION: "Notifications", SECURITE: "Sécurité"
+};
+const AUDIT_SEV_LABEL = { INFO: "Info", ATTENTION: "Attention", ALERTE: "Alerte", CRITIQUE: "Critique" };
+
+state.auditFilters = { search: "", categorie: "", resultat: "", severite: "", from: "", to: "" };
+state.journalTab = "connexions";
+
+function maskNag(nag) {
+  const d = nagDigits(nag);
+  return d.length === 10 ? d.slice(0, 3) + " *** *** " + d.slice(9) : "";
+}
+function deviceLabel() {
+  const ua = navigator.userAgent || "";
+  const browser = /Edg\//.test(ua) ? "Edge" : /OPR\//.test(ua) ? "Opera" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "Navigateur";
+  const os = /Windows/.test(ua) ? "Windows" : /Android/.test(ua) ? "Android" : /iPhone|iPad/.test(ua) ? "iOS" : /Mac OS/.test(ua) ? "macOS" : /Linux/.test(ua) ? "Linux" : "Système inconnu";
+  return browser + " · " + os;
 }
 
+// Envoi des actions de l'interface au serveur (par lots). Le serveur connaît l'utilisateur par son jeton et
+// ajoute l'adresse IP ; ce que le navigateur envoie n'est que déclaratif.
+const auditQueue = [];
+let auditFlushTimer = null;
+let journalUnavailable = false;
+function audit(action, o) {
+  if (!state.currentUser || journalUnavailable) return null;
+  o = o || {};
+  const reg = AUDIT_ACTIONS[action] || ["AUTRE", action];
+  const ev = {
+    horodatage: new Date().toISOString(),
+    sessionId: sessionMeta ? sessionMeta.sessionId : "",
+    correlationId: o.correlationId || "",
+    categorie: reg[0], action: action, libelle: o.libelle || reg[1],
+    resultat: o.resultat || "SUCCES", codeErreur: o.codeErreur || "", message: o.message || "",
+    ressource: { type: o.ressourceType || "", id: o.ressourceId != null ? String(o.ressourceId) : "", libelle: o.ressourceLibelle || "", nag: o.nag ? maskNag(o.nag) : "" },
+    avant: o.avant || null, apres: o.apres || null,
+    contexte: { vue: o.vue || currentViewName || "", ecran: window.innerWidth + "×" + window.innerHeight, appareil: deviceLabel(), canal: "web", langue: navigator.language || "", fuseau: (Intl.DateTimeFormat().resolvedOptions().timeZone || "") }
+  };
+  auditQueue.push(ev);
+  if (auditQueue.length >= 20) flushAudit();
+  else if (!auditFlushTimer) auditFlushTimer = window.setTimeout(flushAudit, 1500);
+  return ev;
+}
+function flushAudit() {
+  window.clearTimeout(auditFlushTimer);
+  auditFlushTimer = null;
+  if (!auditQueue.length || !apiIsConnected()) return;
+  const batch = auditQueue.splice(0, auditQueue.length);
+  apiPostJournalEvenements(batch).catch(err => { if (err.unavailable) journalUnavailable = true; });
+}
+
+/* ---- Journalisation : onglets Connexions / Activité / Alertes / Messages ---- */
+
+const JOURNAL_TABS = ["connexions", "activite", "alertes", "messages"];
+function setJournalTab(tab) {
+  state.journalTab = JOURNAL_TABS.indexOf(tab) >= 0 ? tab : "connexions";
+  renderJournalisation();
+}
+document.querySelectorAll("#logTabToggle .chip").forEach(c => c.addEventListener("click", () => setJournalTab(c.dataset.tab)));
+
+function journalErrorText(err, route) {
+  return err && err.unavailable ? "Cette fonction n'est pas encore disponible côté serveur (" + route + " à créer)." : (err && err.message) || "Erreur";
+}
+function setEmptyState(id, show, text) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (el.dataset.def === undefined) el.dataset.def = el.textContent;
+  el.hidden = !show;
+  el.textContent = text || el.dataset.def;
+}
+// Pagination côté serveur : le tableau ne reçoit que la page demandée ; le pager s'appuie sur le total renvoyé.
+function serverPageInfo(key, total, size, count) {
+  const pages = Math.max(1, Math.ceil(total / size));
+  let p = PAGER_STATE[key] || 1;
+  if (p > pages) p = pages;
+  PAGER_STATE[key] = p;
+  return { page: p, pages: pages, size: size, total: total, from: total ? (p - 1) * size + 1 : 0, to: total ? (p - 1) * size + count : 0 };
+}
+function pageOf(key) { return PAGER_STATE[key] || 1; }
+
+let journalRenderToken = 0;
 function renderJournalisation() {
-  populateJournalRoleFilter();
-  const list = getFilteredJournal();
+  document.querySelectorAll("#logTabToggle .chip").forEach(c => c.classList.toggle("active", c.dataset.tab === state.journalTab));
+  JOURNAL_TABS.forEach(t => { document.getElementById("log-tab-" + t).hidden = t !== state.journalTab; });
+  const token = ++journalRenderToken;
+  apiListAlertes({ statut: "Nouveau", taille: 1 }).then(r => {
+    if (token !== journalRenderToken) return;
+    const n = r && r.total ? r.total : 0;
+    const badge = document.getElementById("logAlertCount");
+    badge.hidden = n === 0;
+    badge.textContent = n;
+  }).catch(() => { document.getElementById("logAlertCount").hidden = true; });
+  if (state.journalTab === "activite") renderAuditActivity();
+  else if (state.journalTab === "alertes") renderAuditAlerts();
+  else if (state.journalTab === "messages") renderMessagesOutbox();
+  else renderJournalConnexions();
+}
 
-  const todayStr = todayFR();
-  const since30 = new Date();
-  since30.setDate(since30.getDate() - 30);
-  const recent = state.connexionLog.filter(l => {
-    const d = parseFRDate(l.date);
-    return d && d >= since30;
-  });
-  document.getElementById("logKpiToday").textContent = state.connexionLog.filter(l => l.date === todayStr && l.statut === "Succès").length;
-  document.getElementById("logKpiUniques").textContent = new Set(recent.filter(l => l.statut === "Succès").map(l => l.email)).size;
-  document.getElementById("logKpiEchecs").textContent = recent.filter(l => l.statut === "Échec").length;
-  document.getElementById("logKpiDerniere").textContent = state.connexionLog.length ? (state.connexionLog[0].date + " " + state.connexionLog[0].heure) : "—";
+function sevPill(e) { return '<span class="pill sev-' + String(e.severite || "INFO").toLowerCase() + '">' + (AUDIT_SEV_LABEL[e.severite] || e.severite) + (e.score ? " · " + e.score : "") + "</span>"; }
+function resultPill(r) { return '<span class="pill ' + (r === "SUCCES" ? "validee" : (r === "ECHEC" ? "inactif" : "attente")) + '">' + (r === "SUCCES" ? "Succès" : (r === "ECHEC" ? "Échec" : (r === "REFUSE" ? "Refusé" : r))) + "</span>"; }
+function evDate(e) { return new Date(e.horodatage || e.ts); }
 
-  const body = document.getElementById("journalBody");
-  const empty = document.getElementById("journalEmpty");
-  body.innerHTML = "";
-  empty.hidden = list.length > 0;
-  list.forEach(l => {
-    const tr = document.createElement("tr");
-    const statutClass = l.statut === "Succès" ? "actif" : "inactif";
-    tr.innerHTML =
-      "<td>" + (l.nom || "—") + " <span style=\"color:var(--muted)\">(" + (l.email || "—") + ")</span></td>" +
-      "<td>" + (l.role || "—") + "</td>" +
-      "<td>" + l.date + "</td>" +
-      "<td>" + l.heure + "</td>" +
-      '<td><span class="pill ' + statutClass + '">' + l.statut + "</span></td>";
-    body.appendChild(tr);
+function auditParams(size) {
+  const f = state.auditFilters;
+  return { page: pageOf("audit"), taille: size, recherche: f.search, categorie: f.categorie, resultat: f.resultat, severite: f.severite, du: f.from, au: f.to };
+}
+
+async function renderAuditActivity() {
+  const token = journalRenderToken;
+  const cat = document.getElementById("auditFilterCat");
+  if (cat.options.length <= 1) cat.innerHTML = '<option value="">Toutes les catégories</option>' + AUDIT_CATEGORIES.map(c => '<option value="' + c + '">' + AUDIT_CATEGORY_LABEL[c] + "</option>").join("");
+  cat.value = state.auditFilters.categorie;
+  apiJournalResume().then(r => {
+    document.getElementById("auditKpiToday").textContent = r.evenements_aujourdhui != null ? r.evenements_aujourdhui : "—";
+    document.getElementById("auditKpiUsers").textContent = r.utilisateurs_actifs_24h != null ? r.utilisateurs_actifs_24h : "—";
+    document.getElementById("auditKpiAlerts").textContent = r.alertes_a_examiner != null ? r.alertes_a_examiner : "—";
+  }).catch(() => { ["auditKpiToday", "auditKpiUsers", "auditKpiAlerts"].forEach(id => { document.getElementById(id).textContent = "—"; }); });
+  try {
+    const res = await apiListJournalEvenements(auditParams(12));
+    if (token !== journalRenderToken || state.journalTab !== "activite") return;
+    const items = (res && res.items) || [];
+    const total = (res && res.total) || 0;
+    document.getElementById("auditCount").textContent = total;
+    setEmptyState("auditEmpty", items.length === 0);
+    const info = serverPageInfo("audit", total, 12, items.length);
+    document.getElementById("auditBody").innerHTML = items.map(e => {
+      const d = evDate(e);
+      return '<tr class="audit-row" data-id="' + escapeHtml(String(e.id)) + '" tabindex="0">' +
+        "<td>" + pad(d.getDate()) + "/" + pad(d.getMonth() + 1) + "/" + d.getFullYear() + '<div class="hint" style="margin:2px 0 0">' + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds()) + "</div></td>" +
+        '<td><span class="rapport-name">' + escapeHtml(e.acteur.nom) + '</span><div class="hint" style="margin:2px 0 0">' + escapeHtml(e.acteur.role) + "</div></td>" +
+        "<td>" + escapeHtml(e.libelle) + '<div class="hint" style="margin:2px 0 0">' + escapeHtml(e.action) + "</div></td>" +
+        "<td>" + (e.ressource && (e.ressource.libelle || e.ressource.type) ? escapeHtml(e.ressource.libelle || e.ressource.type) : "—") + (e.ressource && e.ressource.nag ? '<div class="hint" style="margin:2px 0 0">' + escapeHtml(e.ressource.nag) + "</div>" : "") + "</td>" +
+        "<td>" + resultPill(e.resultat) + "</td>" +
+        "<td>" + sevPill(e) + "</td>" +
+      "</tr>";
+    }).join("");
+    state.auditPageItems = items;
+    renderPager("auditPager", "audit", info, renderAuditActivity, "événements");
+  } catch (err) {
+    document.getElementById("auditBody").innerHTML = "";
+    document.getElementById("auditPager").innerHTML = "";
+    document.getElementById("auditCount").textContent = "0";
+    setEmptyState("auditEmpty", true, journalErrorText(err, "GET /api/journal/evenements"));
+  }
+}
+
+const AUDIT_FILTER_IDS = { auditFilterSearch: "search", auditFilterCat: "categorie", auditFilterResult: "resultat", auditFilterSev: "severite", auditFilterFrom: "from", auditFilterTo: "to" };
+Object.keys(AUDIT_FILTER_IDS).forEach(id => {
+  document.getElementById(id).addEventListener("input", e => {
+    state.auditFilters[AUDIT_FILTER_IDS[id]] = e.target.value.trim();
+    resetPage("audit");
+    renderAuditActivity();
   });
+});
+document.getElementById("auditFilterResetBtn").addEventListener("click", () => {
+  Object.keys(AUDIT_FILTER_IDS).forEach(id => { document.getElementById(id).value = ""; });
+  state.auditFilters = { search: "", categorie: "", resultat: "", severite: "", from: "", to: "" };
+  resetPage("audit");
+  renderAuditActivity();
+});
+
+function auditDetailHtml(e) {
+  const row = (k, v) => v === "" || v == null ? "" : "<div><dt>" + k + "</dt><dd>" + v + "</dd></div>";
+  const json = v => v ? "<pre>" + escapeHtml(JSON.stringify(v, null, 2)) + "</pre>" : "";
+  const ctx = e.contexte || {}, res = e.ressource || {}, act = e.acteur || {};
+  return '<dl class="audit-dl">' +
+    row("Événement", escapeHtml(String(e.id)) + (e.seq ? " · n° " + e.seq : "")) +
+    row("Date et heure", fullDateTime(e.horodatage || e.ts) + " (" + escapeHtml(ctx.fuseau || "fuseau inconnu") + ")") +
+    row("Action", escapeHtml(e.libelle) + ' <span class="hint">(' + escapeHtml(e.action) + ")</span>") +
+    row("Catégorie", AUDIT_CATEGORY_LABEL[e.categorie] || e.categorie) +
+    row("Utilisateur", escapeHtml(act.nom || "—") + " — " + escapeHtml(act.role || "") + (act.login ? " (" + escapeHtml(act.login) + ")" : "") + (act.etab ? " · " + escapeHtml(act.etab) : "")) +
+    row("Résultat", resultPill(e.resultat) + (e.message ? " " + escapeHtml(e.message) : "")) +
+    row("Ressource", res.type || res.libelle ? escapeHtml((res.type ? res.type + " " : "") + (res.libelle || "")) + (res.id ? ' <span class="hint">#' + escapeHtml(res.id) + "</span>" : "") : "") +
+    row("Assuré (NAG masqué)", escapeHtml(res.nag)) +
+    row("Avant", json(e.avant)) + row("Après", json(e.apres)) +
+    row("Session", escapeHtml(e.sessionId)) + row("Corrélation", escapeHtml(e.correlationId)) +
+    row("Page", escapeHtml(ctx.vue)) +
+    row("Appareil", escapeHtml(ctx.appareil) + " · écran " + escapeHtml(ctx.ecran) + " · " + escapeHtml(ctx.langue)) +
+    row("Adresse IP", ctx.ip ? escapeHtml(ctx.ip) : '<span class="hint">non renseignée</span>') +
+    row("Risque", sevPill(e) + (e.regles && e.regles.length ? "<ul class=\"audit-rules\">" + e.regles.map(r => "<li><b>+" + r.points + "</b> " + escapeHtml(r.label) + "</li>").join("") + "</ul>" : "")) +
+    (e.statutRevue ? row("Revue", escapeHtml(e.statutRevue) + (e.revuePar ? " par " + escapeHtml(e.revuePar) + " le " + fullDateTime(e.revueLe) : "")) : "") +
+    row("Empreinte", e.hash ? '<code>' + escapeHtml(e.hash) + '</code> <span class="hint">précédente : ' + escapeHtml(e.hashPrec || "") + "</span>" : "") +
+  "</dl>";
+}
+function openAuditDetail(id) {
+  const pool = (state.auditPageItems || []).concat(state.alertPageItems || []);
+  const e = pool.find(x => String(x.id) === String(id));
+  if (e) showInfoModal("Détail de l'événement", auditDetailHtml(e));
+}
+document.getElementById("auditBody").addEventListener("click", e => { const tr = e.target.closest(".audit-row"); if (tr) openAuditDetail(tr.dataset.id); });
+document.getElementById("auditBody").addEventListener("keydown", e => { if (e.key === "Enter") { const tr = e.target.closest(".audit-row"); if (tr) openAuditDetail(tr.dataset.id); } });
+
+document.getElementById("auditVerifyBtn").addEventListener("click", () => {
+  apiJournalIntegrite().then(r => {
+    audit("journal.verifier", { resultat: r.ok ? "SUCCES" : "ECHEC", message: r.ok ? (r.verifies || 0) + " événements vérifiés" : "Rupture détectée" });
+    const el = document.getElementById("auditKpiIntegrity");
+    el.textContent = r.ok ? "Intact" : "Rompu";
+    el.classList.toggle("bad", !r.ok);
+    toast(r.ok
+      ? { kind: "success", title: "Journal intact", text: (r.verifies || 0) + " événements vérifiés : aucune modification, aucun trou dans la chaîne.", ms: 5200 }
+      : { kind: "urgent", title: "Intégrité compromise", text: "Événement n° " + (r.rupture && r.rupture.seq) + " : " + (r.rupture && r.rupture.why || "chaîne rompue") + ".", sticky: true });
+  }).catch(err => toast({ kind: "warn", title: "Vérification impossible", text: journalErrorText(err, "GET /api/journal/integrite"), ms: 6000 }));
+});
+
+function csvCell(v) { return '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"'; }
+function auditToCsv(list) {
+  const head = ["id", "horodatage", "n°", "session", "correlation", "utilisateur", "login", "role", "etablissement", "categorie", "action", "resultat", "message",
+    "ressource_type", "ressource_id", "ressource_libelle", "nag_masque", "page", "appareil", "ecran", "ip", "severite", "score", "regles", "statut_revue", "hash", "hash_precedent"];
+  const rows = list.map(e => [e.id, e.horodatage || e.ts, e.seq, e.sessionId, e.correlationId, e.acteur.nom, e.acteur.login, e.acteur.role, e.acteur.etab, e.categorie, e.action, e.resultat, e.message,
+    (e.ressource || {}).type, (e.ressource || {}).id, (e.ressource || {}).libelle, (e.ressource || {}).nag, (e.contexte || {}).vue, (e.contexte || {}).appareil, (e.contexte || {}).ecran, (e.contexte || {}).ip, e.severite, e.score,
+    (e.regles || []).map(r => r.code).join("|"), e.statutRevue, e.hash, e.hashPrec]);
+  return "﻿" + [head].concat(rows).map(r => r.map(csvCell).join(";")).join("\r\n");
+}
+document.getElementById("auditExportBtn").addEventListener("click", async () => {
+  try {
+    const p = auditParams(5000);
+    p.page = 1;
+    const res = await apiListJournalEvenements(p);
+    const list = (res && res.items) || [];
+    audit("journal.exporter", { message: list.length + " événements exportés (CSV)", apres: { lignes: list.length } });
+    const blob = new Blob([auditToCsv(list)], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "journal-audit-" + new Date().toISOString().slice(0, 10) + ".csv";
+    document.body.appendChild(a);
+    a.click();
+    window.setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+    toast({ kind: "success", title: "Export prêt", text: list.length + " événements dans le fichier CSV.", ms: 3800 });
+  } catch (err) { toast({ kind: "warn", title: "Export impossible", text: journalErrorText(err, "GET /api/journal/evenements"), ms: 6000 }); }
+});
+
+/* ---- Alertes : activités inhabituelles à examiner (calculées par le serveur) ---- */
+
+async function renderAuditAlerts() {
+  const token = journalRenderToken;
+  const sel = document.getElementById("alertFilterStatut").value;
+  try {
+    const res = await apiListAlertes({ statut: sel, page: pageOf("alertes"), taille: 6 });
+    if (token !== journalRenderToken || state.journalTab !== "alertes") return;
+    const items = (res && res.items) || [];
+    const total = (res && res.total) || 0;
+    state.alertPageItems = items;
+    document.getElementById("alertCount").textContent = (res && res.a_examiner != null ? res.a_examiner : items.filter(e => e.statutRevue === "Nouveau").length) + " à examiner";
+    setEmptyState("alertEmpty", items.length === 0);
+    const info = serverPageInfo("alertes", total, 6, items.length);
+    document.getElementById("alertList").innerHTML = items.map(e =>
+      '<div class="alert-card sev-' + String(e.severite || "attention").toLowerCase() + (e.statutRevue !== "Nouveau" ? " reviewed" : "") + '" data-id="' + escapeHtml(String(e.id)) + '">' +
+        '<div class="alert-main">' +
+          '<div class="alert-title">' + sevPill(e) + " <b>" + escapeHtml((e.regles || []).slice().sort((a, b) => b.points - a.points).map(r => r.label)[0] || e.libelle) + "</b></div>" +
+          '<div class="alert-meta">' + escapeHtml(e.acteur.nom) + " (" + escapeHtml(e.acteur.role) + ") · " + escapeHtml(e.libelle) + " · " + fullDateTime(e.horodatage || e.ts) + "</div>" +
+          ((e.regles || []).length > 1 ? '<ul class="audit-rules">' + e.regles.map(r => "<li><b>+" + r.points + "</b> " + escapeHtml(r.label) + "</li>").join("") + "</ul>" : "") +
+          (e.revuePar ? '<div class="alert-meta">Revue : ' + escapeHtml(e.statutRevue) + " par " + escapeHtml(e.revuePar) + (e.revueNote ? " — " + escapeHtml(e.revueNote) : "") + "</div>" : "") +
+        "</div>" +
+        '<div class="alert-actions">' +
+          '<span class="pill ' + (e.statutRevue === "Nouveau" ? "attente" : (e.statutRevue === "Confirmé" ? "inactif" : "validee")) + '">' + escapeHtml(e.statutRevue || "") + "</span>" +
+          '<button type="button" class="btn-secondary btn-sm" data-review="Vu">Vu</button>' +
+          '<button type="button" class="btn-secondary btn-sm" data-review="Faux positif">Faux positif</button>' +
+          '<button type="button" class="btn-danger-outline btn-sm" data-review="Confirmé">Confirmer</button>' +
+          '<button type="button" class="link-btn" data-detail="1">Détail</button>' +
+        "</div>" +
+      "</div>"
+    ).join("");
+    renderPager("alertPager", "alertes", info, renderAuditAlerts, "alertes");
+  } catch (err) {
+    document.getElementById("alertList").innerHTML = "";
+    document.getElementById("alertPager").innerHTML = "";
+    document.getElementById("alertCount").textContent = "0 à examiner";
+    setEmptyState("alertEmpty", true, journalErrorText(err, "GET /api/journal/alertes"));
+  }
+}
+document.getElementById("alertFilterStatut").addEventListener("change", () => { resetPage("alertes"); renderAuditAlerts(); });
+document.getElementById("alertList").addEventListener("click", e => {
+  const card = e.target.closest(".alert-card");
+  if (!card) return;
+  const id = card.dataset.id;
+  if (e.target.closest("[data-detail]")) { openAuditDetail(id); return; }
+  const btn = e.target.closest("[data-review]");
+  if (!btn) return;
+  apiReviewAlerte(id, { statut: btn.dataset.review, note: "" }).then(() => {
+    audit("journal.revue", { ressourceType: "Événement", ressourceId: id, message: "Alerte marquée « " + btn.dataset.review + " »" });
+    renderJournalisation();
+  }).catch(err => toast({ kind: "urgent", title: "Revue non enregistrée", text: err.message, ms: 6000 }));
+});
+
+/* ---- Messages : messages envoyés (avec suivi de lecture) ---- */
+
+async function renderMessagesOutbox() {
+  const token = journalRenderToken;
+  document.getElementById("msgComposeBtn").hidden = !canSendNotifications();
+  try {
+    const res = await apiListNotificationsEnvoyees({ page: pageOf("messages"), taille: 8 });
+    if (token !== journalRenderToken || state.journalTab !== "messages") return;
+    const items = (res && res.items) || [];
+    const total = (res && res.total) || 0;
+    document.getElementById("msgCount").textContent = total;
+    setEmptyState("msgEmpty", items.length === 0);
+    const info = serverPageInfo("messages", total, 8, items.length);
+    document.getElementById("msgBody").innerHTML = items.map(n => {
+      const dest = Number(n.destinataires) || 0, lu = Number(n.lus) || 0, ack = Number(n.accuses) || 0;
+      const pct = dest ? Math.round(lu / dest * 100) : 0;
+      const sec = n.categorie === "securite";
+      return "<tr>" +
+        "<td>" + fullDateTime(n.date_envoi) + "</td>" +
+        "<td>" + escapeHtml(n.expediteur_nom || "—") + '<div class="hint" style="margin:2px 0 0">' + escapeHtml(n.expediteur_role || "") + "</div></td>" +
+        "<td>" + escapeHtml(n.cible_libelle || n.cible_type || "") + '<div class="hint" style="margin:2px 0 0">' + dest + " destinataire" + (dest > 1 ? "s" : "") + "</div></td>" +
+        '<td><span class="pill ' + (sec ? "examen" : (n.priorite === "urgente" ? "inactif" : (n.priorite === "importante" ? "attente" : "consultation"))) + '">' + (sec ? "Sécurité" : NOTIF_PRIO_LABEL[n.priorite] || "Information") + "</span></td>" +
+        '<td class="msg-cell"><b>' + escapeHtml(n.titre) + '</b><div class="hint" style="margin:2px 0 0">' + escapeHtml((n.message || "").length > 90 ? n.message.slice(0, 87) + "…" : (n.message || "")) + "</div></td>" +
+        '<td class="num"><div class="mini-bar"><i style="width:' + pct + '%"></i></div>' + lu + " / " + dest + "</td>" +
+        '<td class="num">' + (n.accuse_requis ? ack + " / " + dest : "—") + "</td>" +
+      "</tr>";
+    }).join("");
+    renderPager("msgPager", "messages", info, renderMessagesOutbox, "messages");
+  } catch (err) {
+    document.getElementById("msgBody").innerHTML = "";
+    document.getElementById("msgPager").innerHTML = "";
+    document.getElementById("msgCount").textContent = "0";
+    setEmptyState("msgEmpty", true, journalErrorText(err, "GET /api/notifications/envoyees"));
+  }
+}
+document.getElementById("msgComposeBtn").addEventListener("click", openComposeModal);
+
+/* ---- Onglet Connexions (qui s'est connecté, quand, avec quel résultat) ---- */
+
+function fillJournalRoleFilter() {
+  const sel = document.getElementById("logFilterRole");
+  if (sel.options.length > 1) return;
+  sel.innerHTML = '<option value="">Tous les rôles</option>' + Object.keys(FRONT_ROLE_TO_API_ROLE).map(r => '<option value="' + escapeHtml(FRONT_ROLE_TO_API_ROLE[r]) + '">' + escapeHtml(r) + "</option>").join("");
+}
+function connexionParams() {
+  const f = state.journalFilters;
+  return { page: pageOf("connexions"), taille: 12, recherche: f.search, role: f.role, resultat: f.statut === "Succès" ? "succes" : (f.statut === "Échec" ? "echec" : ""), du: f.from, au: f.to };
+}
+async function renderJournalConnexions() {
+  const token = journalRenderToken;
+  fillJournalRoleFilter();
+  try {
+    const res = await apiListJournalConnexions(connexionParams());
+    if (token !== journalRenderToken || state.journalTab !== "connexions") return;
+    const items = (res && res.items) || [];
+    const total = (res && res.total) || 0;
+    const r = (res && res.resume) || {};
+    document.getElementById("logKpiToday").textContent = r.connexions_aujourdhui != null ? r.connexions_aujourdhui : "—";
+    document.getElementById("logKpiUniques").textContent = r.utilisateurs_uniques_30j != null ? r.utilisateurs_uniques_30j : "—";
+    document.getElementById("logKpiEchecs").textContent = r.echecs_30j != null ? r.echecs_30j : "—";
+    document.getElementById("logKpiDerniere").textContent = r.derniere_connexion ? fullDateTime(r.derniere_connexion).replace(" à ", " ") : "—";
+    setEmptyState("journalEmpty", items.length === 0);
+    const info = serverPageInfo("connexions", total, 12, items.length);
+    document.getElementById("journalBody").innerHTML = items.map(l => {
+      const d = new Date(l.date_heure);
+      const ok = l.resultat === "succes";
+      return "<tr>" +
+        "<td>" + escapeHtml(l.nom || "—") + ' <span style="color:var(--muted)">(' + escapeHtml(l.username || "—") + ")</span></td>" +
+        "<td>" + escapeHtml(API_ROLE_TO_FRONT_ROLE[l.role] || l.role || "—") + "</td>" +
+        "<td>" + pad(d.getDate()) + "/" + pad(d.getMonth() + 1) + "/" + d.getFullYear() + "</td>" +
+        "<td>" + pad(d.getHours()) + ":" + pad(d.getMinutes()) + "</td>" +
+        '<td><span class="pill ' + (ok ? "actif" : "inactif") + '">' + (ok ? "Succès" : "Échec") + "</span></td>" +
+      "</tr>";
+    }).join("");
+    renderPager("journalPager", "connexions", info, renderJournalConnexions, "connexions");
+  } catch (err) {
+    document.getElementById("journalBody").innerHTML = "";
+    document.getElementById("journalPager").innerHTML = "";
+    setEmptyState("journalEmpty", true, journalErrorText(err, "GET /api/journal/connexions"));
+  }
 }
 
 ["logFilterSearch", "logFilterRole", "logFilterStatut", "logFilterFrom", "logFilterTo"].forEach(id => {
@@ -2831,7 +4262,8 @@ function renderJournalisation() {
       from: document.getElementById("logFilterFrom").value,
       to: document.getElementById("logFilterTo").value
     };
-    renderJournalisation();
+    resetPage("connexions");
+    renderJournalConnexions();
   });
 });
 document.getElementById("logFilterResetBtn").addEventListener("click", () => {
@@ -2841,11 +4273,14 @@ document.getElementById("logFilterResetBtn").addEventListener("click", () => {
   document.getElementById("logFilterFrom").value = "";
   document.getElementById("logFilterTo").value = "";
   state.journalFilters = { search: "", role: "", statut: "", from: "", to: "" };
-  renderJournalisation();
+  resetPage("connexions");
+  renderJournalConnexions();
 });
 
 /* ---------------------------------------------------------------------- */
-/* Espace Pharmacien : recherche d'ordonnance par NAG et délivrance        */
+/* Espace Pharmacien : NAG → date de la prestation → ordonnance précise       */
+/* → délivrance. Trois étapes, une seule ordonnance affichée à la fois : le    */
+/* pharmacien ne peut pas servir celle d'un autre jour par erreur.            */
 /* ---------------------------------------------------------------------- */
 
 // Taux de remboursement CNAMGS appliqué au tarif de base du médicament, selon
@@ -2854,27 +4289,118 @@ document.getElementById("logFilterResetBtn").addEventListener("click", () => {
 const TM_RATE = { "Plein": 0.8, "Plein (ALD)": 1, "Exonéré": 1 };
 
 function medicamentPrix(designation) {
-  const m = MEDICAMENTS.find(x => x.designation === designation);
+  const m = state.catalogue.find(x => x.designation === designation);
   return m ? m.prix : 0;
+}
+
+// « Date de la prestation » d'une feuille : celle saisie par le médecin (« Date
+// et heure » de la section Prestation), à défaut la date de réception de la
+// feuille. C'est la même date qui est proposée et filtrée en pharmacie.
+function prestationDateFR(entry) {
+  return extractFRDate(entry.prestaDate) || extractFRDate(entry.date) || "";
+}
+function prestationDateISO(entry) {
+  return frToISO(prestationDateFR(entry));
+}
+
+function pharmaLines(entry) { return entry.ordonnance || []; }
+
+// Une consultation n'arrive à la pharmacie que si elle est validée ET porte au moins
+// un médicament prescrit. Validée sans médicaments, elle reste au dossier du patient
+// mais n'est jamais transmise (le médecin l'a confirmé au moment de valider).
+function isSentToPharmacy(h) {
+  return h.type === "Consultation" && h.statut === "Validée" && pharmaLines(h).some(m => m.designation);
+}
+function pharmaQty(med) { return Math.max(1, parseInt(med.quantite, 10) || 1); }
+function pharmaRate(entry) { return TM_RATE[entry.ticketModerateur] != null ? TM_RATE[entry.ticketModerateur] : 0.8; }
+
+// Efface tout ce qui dépend du NAG (identité, dates, ordonnance), sans toucher
+// au champ NAG lui-même. `prices` garde le prix unitaire saisi à la main pour chaque
+// ligne (clé « id de la feuille : rang de la ligne ») tant que le patient reste le même.
+function pharmaPrices() { return state.pharma.prices || (state.pharma.prices = {}); }
+function clearPharmaResults() {
+  state.pharma = { nag: "", entries: [], selectedId: null, prices: {} };
+  resetPage("pharmaDates");
+  document.getElementById("pharmaDateInput").value = "";
+  document.getElementById("pharmaNotFound").hidden = true;
+  document.getElementById("pharmaAssureCard").hidden = true;
+  document.getElementById("pharmaDatesCard").hidden = true;
+  document.getElementById("pharmaDateMsg").hidden = true;
+  document.getElementById("pharmaDatesList").innerHTML = "";
+  document.getElementById("pharmaDatesPager").innerHTML = "";
+  document.getElementById("pharmaResults").innerHTML = "";
+  renderPharmaStepper();
+  renderPharmaSuspension();
+}
+
+// Nombres qui « comptent » jusqu'à leur valeur (désactivé pour qui préfère moins de mouvement).
+const NUM_ANIM = new WeakMap();
+function prefersReducedMotion() { return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); }
+function animateNumber(el, to, ms) {
+  if (!el) return;
+  const from = parseInt(el.dataset.v || "0", 10) || 0;
+  el.dataset.v = String(to);
+  if (prefersReducedMotion() || !ms || from === to) { NUM_ANIM.delete(el); el.textContent = fmt(to); return; }
+  const token = {}, t0 = performance.now();
+  NUM_ANIM.set(el, token);
+  (function step(t) {
+    if (NUM_ANIM.get(el) !== token) return;
+    const k = Math.min(1, (t - t0) / ms), e = 1 - Math.pow(1 - k, 3);
+    el.textContent = fmt(Math.round(from + (to - from) * e));
+    if (k < 1) window.requestAnimationFrame(step);
+  })(t0);
+}
+
+// Bandeau du haut : ordonnances à servir, délivrances et prise en charge du jour (de cette pharmacie).
+function refreshPharmaHero(animate) {
+  const today = todayFR();
+  const todayRows = pharmaHistoryRows().filter(r => r.med.dateService === today);
+  animateNumber(document.getElementById("phKpiRx"), pharmaPendingCount(), animate ? 900 : 0);
+  animateNumber(document.getElementById("phKpiToday"), todayRows.length, animate ? 900 : 0);
+  animateNumber(document.getElementById("phKpiAss"), todayRows.reduce((a, r) => a + num(r.med.partAssurance), 0), animate ? 1100 : 0);
+}
+
+// Progression Patient → Prestation → Délivrance : la ligne se remplit au fil des étapes franchies.
+function renderPharmaStepper() {
+  const stepper = document.getElementById("phStepper");
+  if (!stepper) return;
+  const p = state.pharma;
+  const entry = p.entries.find(e => e.id === p.selectedId);
+  const done = [
+    !!p.nag && p.entries.length > 0,
+    !!entry,
+    !!entry && pharmaLines(entry).length > 0 && pharmaLines(entry).every(m => m.statut === "Servi")
+  ];
+  const current = done[2] ? 3 : (done[1] ? 3 : (done[0] ? 2 : 1));
+  stepper.querySelectorAll(".ph-step").forEach((el, i) => {
+    el.classList.toggle("done", done[i]);
+    el.classList.toggle("active", i + 1 === current && !done[i]);
+  });
+  const lines = stepper.querySelectorAll(".ph-step-line i");
+  lines[0].style.width = done[0] ? "100%" : "0%";
+  lines[1].style.width = done[1] ? "100%" : "0%";
 }
 
 function resetPharmaSearch() {
   document.getElementById("pharmaNagInput").value = "";
-  document.getElementById("pharmaDateInput").value = "";
-  document.getElementById("pharmaNotFound").hidden = true;
-  document.getElementById("pharmaAssureCard").hidden = true;
-  document.getElementById("pharmaResults").innerHTML = "";
+  clearPharmaResults();
+  setPharmaTab("delivrer");
+  refreshPharmaHero(true);
+  document.getElementById("pharmaTestHint").hidden = true;
+  // Prêt à saisir : le curseur est déjà dans le champ NAG (sauf sur écran tactile, où le clavier surgirait sans prévenir).
+  if (!window.matchMedia("(pointer: coarse)").matches) window.setTimeout(() => document.getElementById("pharmaNagInput").focus({ preventScroll: true }), 150);
 }
 
-function isSameDay(d1, d2) {
-  return d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
-}
-
-// L'identité s'affiche dès que le NAG correspond à une consultation connue,
-// même si la date renseignée ne donne aucune ordonnance — le pharmacien voit
-// alors que le patient existe bien, seule la prestation recherchée manque.
+// L'identité s'affiche dès que le NAG correspond à une feuille connue, même
+// sans ordonnance : le pharmacien voit alors que le patient existe bien, seule
+// l'ordonnance recherchée manque.
+const pharmaPatientCache = {};
 function findPharmaIdentity(nag) {
-  return state.historique.find(h => h.type === "Consultation" && h.matricule === nag && h.patientNom) || null;
+  return state.historique.find(h => String(h.matricule) === nag && h.patientNom) || pharmaPatientCache[nag] || null;
+}
+let pharmaSearchToken = 0;
+async function refreshFeuillesByNag(nag) {
+  mergeFeuilles(await apiListFeuilles({ nag: nag }), false, true);
 }
 
 function renderPharmaAssureCard(identity) {
@@ -2882,104 +4408,875 @@ function renderPharmaAssureCard(identity) {
   if (!identity) { card.hidden = true; return; }
   card.hidden = false;
   document.getElementById("pa-nom").textContent = identity.patientNom || "—";
-  document.getElementById("pa-matricule").textContent = identity.matricule || "—";
-  document.getElementById("pa-naissance").textContent = identity.dateNaissance || "—";
+  document.getElementById("pa-matricule").textContent = formatNag(identity.matricule) || "—";
+  document.getElementById("pa-naissance").textContent = displayDateFR(identity.dateNaissance) || "—";
   document.getElementById("pa-fonds").textContent = identity.fonds || "—";
   const parts = (identity.patientNom || "").split(" ");
   setAvatar(document.getElementById("pa-avatar"), parts[0], parts.slice(1).join(" "));
 }
 
-function runPharmaSearch(nag, dateStr) {
-  nag = (nag || "").trim();
-  const targetDate = dateStr ? new Date(dateStr + "T00:00:00") : null;
-  const entries = state.historique.filter(h => {
-    if (h.type !== "Consultation" || h.statut !== "Validée") return false;
-    if (h.matricule !== nag) return false;
-    if (!(h.ordonnance || []).length) return false;
-    if (targetDate) {
-      const d = parseFRDate(h.date);
-      if (!d || !isSameDay(d, targetDate)) return false;
+// Feuilles qu'une pharmacie peut servir : consultations validées qui portent
+// une ordonnance, de la prestation la plus récente à la plus ancienne.
+function pharmaEligibleEntries(nag) {
+  return state.historique
+    .filter(h => isSentToPharmacy(h) && String(h.matricule) === nag)
+    .sort((a, b) => prestationDateISO(b).localeCompare(prestationDateISO(a)));
+}
+
+// Étape 1 : recherche du patient par NAG. keepSelection : rafraîchit l'affichage
+// (après une délivrance) sans perdre la date déjà choisie ni les prix déjà saisis.
+async function runPharmaSearch(nag, keepSelection) {
+  nag = nagDigits(nag);
+  if (!keepSelection) clearPharmaResults();
+  if (!nag) return;
+  if (!keepSelection) {
+    // les ordonnances de ce patient sont demandées au serveur (validées, avec au moins un médicament)
+    const token = ++pharmaSearchToken;
+    const notFoundEl = document.getElementById("pharmaNotFound");
+    try {
+      const list = await apiListFeuilles({ nag: nag, statut: "Validée", avec_ordonnance: 1 });
+      if (token !== pharmaSearchToken) return;
+      mergeFeuilles(list, false, false);
+      if (!pharmaEligibleEntries(nag).length && !pharmaPatientCache[nag]) {
+        const p = await findPatientByMatricule(nag).catch(() => null);
+        if (token !== pharmaSearchToken) return;
+        if (p) pharmaPatientCache[nag] = { patientNom: (p.prenom + " " + p.nom).trim(), matricule: nag, dateNaissance: p.dateNaissance, fonds: fondsLabel(p.fonds) };
+      }
+    } catch (err) {
+      if (token !== pharmaSearchToken) return;
+      notFoundEl.hidden = false;
+      notFoundEl.textContent = err.unavailable ? "La recherche d'ordonnances n'est pas encore disponible côté serveur (GET /api/feuilles à créer)." : err.message;
+      return;
+    }
+  }
+
+  const identity = findPharmaIdentity(nag);
+  const entries = pharmaEligibleEntries(nag);
+  const previous = state.pharma.selectedId;
+  const prices = keepSelection ? pharmaPrices() : {};
+  const carried = keepSelection ? (state.pharma.justServed || []) : [];
+  const wasSuspended = keepSelection && !!state.pharma.suspended;
+  state.pharma = { nag: nag, entries: entries, selectedId: keepSelection && entries.some(e => e.id === previous) ? previous : null, prices: prices, justServed: carried, suspended: wasSuspended };
+  if (!keepSelection) {
+    audit("pharma.rechercher", {
+      nag: nag, ressourceType: "Assuré", ressourceLibelle: identity ? identity.patientNom : "",
+      message: entries.length ? entries.length + " ordonnance(s) à servir" : (identity ? "Aucune ordonnance à servir" : "Aucun patient pour ce NAG"),
+      apres: { trouve: entries.length > 0, ordonnances: entries.length }
+    });
+  }
+
+  const notFound = document.getElementById("pharmaNotFound");
+  notFound.hidden = entries.length > 0;
+  if (!entries.length) {
+    notFound.textContent = identity
+      ? "Ce patient n'a aucune ordonnance validée à servir."
+      : "Aucun patient trouvé pour ce NAG.";
+  }
+  renderPharmaAssureCard(identity);
+  renderPharmaSuspension();
+  if (!keepSelection && (identity || entries.length)) checkPharmaSuspension(nag);
+  document.getElementById("pharmaDatesCard").hidden = !entries.length;
+  revealPharmaCards();
+
+  // Une seule prestation possible : sa date est proposée d'office.
+  if (!keepSelection && entries.length === 1) selectPharmaEntry(entries[0].id);
+  else { renderPharmaDates(); renderPharmaOrdonnance(); }
+}
+
+// Assuré suspendu : bandeau rouge, et plus aucune délivrance possible (les prix restent visibles mais figés).
+function renderPharmaSuspension() {
+  const s = !!state.pharma.suspended;
+  const el = document.getElementById("pharmaSuspendedAlert");
+  const was = !el.hidden;
+  el.hidden = !s;
+  if (s && !was) { el.style.animation = "none"; void el.offsetWidth; el.style.animation = ""; }
+  document.getElementById("pharmaAssureCard").classList.toggle("is-suspended", s);
+}
+function checkPharmaSuspension(nag) {
+  checkNagSuspended(nag).then(p => {
+    if (state.pharma.nag !== nag) return;                 // le NAG a changé entre-temps
+    const s = !!p;
+    if (!!state.pharma.suspended === s) return;
+    state.pharma.suspended = s;
+    renderPharmaSuspension();
+    renderPharmaOrdonnance();
+    if (s) audit("pharma.rechercher", { resultat: "REFUSE", nag: nag, ressourceType: "Assuré", ressourceLibelle: fullName(p), message: "Assuré suspendu : délivrance bloquée" });
+  });
+}
+
+// Les cartes qui apparaissent après une recherche arrivent l'une après l'autre.
+function revealPharmaCards() {
+  ["pharmaAssureCard", "pharmaDatesCard"].forEach((id, i) => {
+    const el = document.getElementById(id);
+    if (el.hidden) return;
+    el.classList.remove("ph-reveal");
+    void el.offsetWidth;
+    el.style.setProperty("--d", (i * 90) + "ms");
+    el.classList.add("ph-reveal");
+  });
+}
+
+// Étape 2 : liste des dates de prestation du patient (cliquables, 5 par page). Toutes les
+// dates restent accessibles pour pouvoir en changer d'un clic ; celle choisie est
+// surlignée, et une date saisie à la main met en évidence les prestations de ce jour.
+function renderPharmaDates() {
+  const list = document.getElementById("pharmaDatesList");
+  const iso = document.getElementById("pharmaDateInput").value;
+  const info = pageSlice("pharmaDates", state.pharma.entries, 5);
+  list.innerHTML = info.items.map((e, i) => {
+    const lines = pharmaLines(e);
+    const left = lines.filter(m => m.statut !== "Servi").length;
+    const active = e.id === state.pharma.selectedId;
+    const match = !active && !!iso && prestationDateISO(e) === iso;
+    return '<button type="button" class="pharma-date-item' + (active ? " active" : "") + (match ? " match" : "") + '" data-id="' + e.id + '" style="--i:' + i + '">' +
+      '<span class="pd-date">' + escapeHtml(prestationDateFR(e)) + "</span>" +
+      '<span class="pd-info"><b>' + escapeHtml(e.medecin || "—") + "</b>" + (e.medecinEtab ? " — " + escapeHtml(e.medecinEtab) : "") + " · feuille " + escapeHtml(e.numero) + "</span>" +
+      '<span class="pill ' + (left ? "attente" : "validee") + '">' + (left ? left + " sur " + lines.length + " à servir" : "Tout servi") + "</span>" +
+    "</button>";
+  }).join("");
+  renderPager("pharmaDatesPager", "pharmaDates", info, renderPharmaDates, "prestations");
+}
+
+function selectPharmaEntry(id, opts) {
+  const entry = state.pharma.entries.find(e => e.id === id);
+  if (!entry) return;
+  state.pharma.selectedId = id;
+  const at = state.pharma.entries.indexOf(entry);
+  PAGER_STATE.pharmaDates = Math.floor(at / 5) + 1;   // la page de la liste suit la date choisie
+  document.getElementById("pharmaDateInput").value = prestationDateISO(entry);
+  document.getElementById("pharmaDateMsg").hidden = true;
+  renderPharmaDates();
+  renderPharmaOrdonnance();
+  // Automatisme : on amène l'ordonnance à l'écran et le curseur sur le premier prix à saisir.
+  if (!(opts && opts.quiet)) window.setTimeout(() => focusNextPrice(true), 60);
+}
+
+// Date saisie à la main : une prestation ce jour-là → son ordonnance ; plusieurs →
+// on demande de choisir la feuille ; aucune → on indique les dates disponibles.
+function applyPharmaDate() {
+  const iso = document.getElementById("pharmaDateInput").value;
+  const msg = document.getElementById("pharmaDateMsg");
+  msg.hidden = true;
+  state.pharma.selectedId = null;
+  if (iso) {
+    const matches = state.pharma.entries.filter(e => prestationDateISO(e) === iso);
+    if (matches.length === 1) { selectPharmaEntry(matches[0].id); return; }
+    if (matches.length > 1) PAGER_STATE.pharmaDates = Math.floor(state.pharma.entries.indexOf(matches[0]) / 5) + 1;
+    msg.style.color = matches.length ? "var(--muted)" : "var(--red)";
+    msg.textContent = matches.length
+      ? "Plusieurs prestations ce jour-là : choisissez la feuille ci-dessus."
+      : "Aucune ordonnance pour le " + dossierDateFR(iso) + ". Dates disponibles : " +
+        state.pharma.entries.map(prestationDateFR).filter((d, i, a) => a.indexOf(d) === i).join(", ") + ".";
+    msg.hidden = false;
+  }
+  renderPharmaDates();
+  renderPharmaOrdonnance();
+}
+
+/* ---- Étape 3 : l'ordonnance, ligne par ligne, avec prix unitaire saisi à la main ---- */
+
+// Montants d'une ligne à partir du prix unitaire saisi : total = prix × quantité,
+// part assurance = taux de prise en charge du ticket modérateur (80 % en plein tarif),
+// part patient = le reste. Tant que le prix n'est pas saisi, rien n'est calculé.
+function pharmaAmounts(entry, med, idx) {
+  const prix = Math.min(99999999, Math.max(0, Math.floor(num(pharmaPrices()[entry.id + ":" + idx]))));
+  const qte = pharmaQty(med);
+  if (!prix) return { prix: 0, qte: qte, valid: false, total: 0, ass: 0, pat: 0 };
+  const total = prix * qte;
+  const ass = Math.round(total * pharmaRate(entry));
+  return { prix: prix, qte: qte, valid: true, total: total, ass: ass, pat: total - ass };
+}
+
+const RX_CHECK_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path class="rx-check-path" d="M20 6L9 17l-5-5"/></svg>';
+
+function rxAmountsHtml(a, pct, locked) {
+  return '<div class="rx-amounts' + (locked ? " is-locked" : "") + '">' +
+    '<div class="rx-amt total"><span>Prix total</span><b><em data-amt="total">' + (locked ? "—" : fmt(a.total)) + "</em><small> FCFA</small></b></div>" +
+    '<div class="rx-amt ass"><span>Part assurance (' + pct + ' %)</span><b><em data-amt="ass">' + (locked ? "—" : fmt(a.ass)) + "</em><small> FCFA</small></b></div>" +
+    '<div class="rx-amt pat"><span>Part patient</span><b><em data-amt="pat">' + (locked ? "—" : fmt(a.pat)) + "</em><small> FCFA</small></b></div>" +
+  "</div>";
+}
+
+function rxLineHtml(entry, med, i, pct) {
+  const servi = med.statut === "Servi";
+  const ref = medicamentPrix(med.designation);
+  const head =
+    '<div class="rx-line-head">' +
+      '<span class="rx-line-num">' + (servi ? RX_CHECK_SVG : (i + 1)) + "</span>" +
+      '<div class="rx-line-title"><b>' + escapeHtml(med.designation) + "</b><small>" + escapeHtml(med.posologie || "Posologie non précisée") + "</small></div>" +
+      '<span class="rx-qty">× ' + pharmaQty(med) + "</span>" +
+      '<span class="pill ' + (servi ? "validee" : "attente") + '">' + (servi ? "Servi" : "À servir") + "</span>" +
+    "</div>";
+  if (servi) {
+    const a = { total: num(med.prixUnitaire) * pharmaQty(med), ass: num(med.partAssurance), pat: num(med.partPatient) };
+    return '<article class="rx-line served" data-idx="' + i + '">' + head +
+      '<div class="rx-line-body">' +
+        '<div class="rx-served-info">Servi le ' + escapeHtml(med.dateService) + (med.servicePar ? " — " + escapeHtml(med.servicePar) : "") + "<br />Prix unitaire " + fmtFCFA(num(med.prixUnitaire)) + "</div>" +
+        rxAmountsHtml(a, pct, false) +
+      "</div></article>";
+  }
+  const a = pharmaAmounts(entry, med, i);
+  const stored = pharmaPrices()[entry.id + ":" + i] || "";
+  const blocked = !!state.pharma.suspended;
+  return '<article class="rx-line' + (a.valid && !blocked ? " ready" : "") + (blocked ? " blocked" : "") + '" data-idx="' + i + '">' + head +
+    '<div class="rx-line-body">' +
+      '<div class="rx-price-field">' +
+        '<label for="rxPrice' + i + '">Prix unitaire</label>' +
+        '<span class="rx-price-input"><input type="text" id="rxPrice' + i + '" class="rx-price" data-idx="' + i + '" inputmode="numeric" autocomplete="off" maxlength="12" placeholder="Saisir le prix" value="' + escapeHtml(stored ? fmt(num(stored)) : "") + '"' + (blocked ? " disabled" : "") + ' /><em>FCFA</em></span>' +
+        (ref && !blocked ? '<button type="button" class="rx-ref" data-action="ref" data-idx="' + i + '" data-ref="' + ref + '" title="Utiliser le tarif de référence">Tarif de référence : ' + fmt(ref) + " FCFA — utiliser</button>" : "") +
+      "</div>" +
+      rxAmountsHtml(a, pct, !a.valid) +
+      '<div class="rx-line-actions"><button type="button" class="btn-serve" data-action="servir" data-idx="' + i + '"' + (a.valid && !blocked ? "" : " disabled") + ' title="' + (blocked ? "Assuré suspendu : délivrance impossible" : (a.valid ? "" : "Saisissez d'abord le prix unitaire")) + '">Servir</button></div>' +
+    "</div></article>";
+}
+
+function renderPharmaOrdonnance() {
+  const wrap = document.getElementById("pharmaResults");
+  wrap.innerHTML = "";
+  renderPharmaStepper();
+  const entry = state.pharma.entries.find(e => e.id === state.pharma.selectedId);
+  if (!entry) return;
+  const rate = pharmaRate(entry), pct = Math.round(rate * 100);
+  const lines = pharmaLines(entry);
+  const fresh = state.pharma.justServed || [];
+  state.pharma.justServed = [];
+
+  const card = document.createElement("div");
+  card.className = "card ph-card ph-rx ph-reveal";
+  card.dataset.entry = entry.id;
+  card.innerHTML =
+    '<div class="card-head"><h3><span class="step-num">3</span> Ordonnance du ' + escapeHtml(prestationDateFR(entry)) + "</h3>" +
+      '<span class="pill consultation">Feuille ' + escapeHtml(entry.numero) + "</span>" +
+    "</div>" +
+    '<div class="rx-meta">' +
+      "<div>Patient<b>" + escapeHtml(entry.patientNom || "—") + "</b></div>" +
+      "<div>Prescrit par<b>" + escapeHtml(entry.medecin || "—") + (entry.medecinType ? " (" + escapeHtml(entry.medecinType) + ")" : "") + "</b></div>" +
+      "<div>Établissement<b>" + escapeHtml(entry.medecinEtab || "—") + "</b></div>" +
+      "<div>Date de la prestation<b>" + escapeHtml(prestationDateFR(entry)) + "</b></div>" +
+      "<div>Ticket modérateur<b>" + escapeHtml(entry.ticketModerateur || "—") + " — prise en charge " + pct + " %</b></div>" +
+    "</div>" +
+    '<div class="rx-lines">' + lines.map((med, i) => rxLineHtml(entry, med, i, pct)).join("") + "</div>" +
+    '<div class="rx-summary">' +
+      '<div class="rx-ring" aria-hidden="true"><svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="26"/><circle class="fg" cx="32" cy="32" r="26"/></svg><b class="rx-ring-txt">0/0</b></div>' +
+      '<div class="rx-sum-stats">' +
+        '<div class="rx-sum total"><span>Total</span><b><em id="rxSumTotal">0</em> <small>FCFA</small></b></div>' +
+        '<div class="rx-sum ass"><span>Part assurance</span><b><em id="rxSumAss">0</em> <small>FCFA</small></b></div>' +
+        '<div class="rx-sum pat"><span>Part patient</span><b><em id="rxSumPat">0</em> <small>FCFA</small></b></div>' +
+      "</div>" +
+      '<div class="rx-sum-actions"><p class="rx-hint" id="rxHint"></p><button type="button" class="btn-serve big" id="rxServeAll" data-action="servir-tout" hidden></button></div>' +
+    "</div>";
+  wrap.appendChild(card);
+  refreshRxSummary(card, entry, false);
+  card.querySelectorAll(".rx-line").forEach(el => { if (fresh.indexOf(parseInt(el.dataset.idx, 10)) >= 0) el.classList.add("just-served"); });
+
+  if (lines.length && lines.every(m => m.statut === "Servi")) {
+    const tot = lines.reduce((a, m) => a + num(m.partAssurance) + num(m.partPatient), 0);
+    const ass = lines.reduce((a, m) => a + num(m.partAssurance), 0);
+    const done = document.createElement("div");
+    done.className = "rx-done";
+    done.innerHTML =
+      '<span class="rx-done-check"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path class="rx-check-path" d="M20 6L9 17l-5-5"/></svg></span>' +
+      "<div><b>Ordonnance entièrement servie</b><span>Total " + fmtFCFA(tot) + " · CNAMGS " + fmtFCFA(ass) + " · patient " + fmtFCFA(tot - ass) + "</span></div>" +
+      '<button type="button" class="btn-primary" id="phNextPatientBtn">Servir un autre patient</button>';
+    card.appendChild(done);
+    done.querySelector("#phNextPatientBtn").addEventListener("click", () => {
+      resetPharmaSearch();
+      window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? "auto" : "smooth" });
+    });
+  }
+}
+
+// Recalcule une ligne (montants, état du bouton « Servir ») sans redessiner la carte : le curseur reste dans le champ.
+function refreshRxLine(lineEl, entry, idx, animate) {
+  const med = pharmaLines(entry)[idx];
+  const a = pharmaAmounts(entry, med, idx);
+  const amounts = lineEl.querySelector(".rx-amounts");
+  const wasLocked = amounts.classList.contains("is-locked");
+  amounts.classList.toggle("is-locked", !a.valid);
+  lineEl.classList.toggle("ready", a.valid);
+  const set = (key, v) => {
+    const el = amounts.querySelector('[data-amt="' + key + '"]');
+    if (!a.valid) { el.textContent = "—"; el.dataset.v = "0"; return; }
+    animateNumber(el, v, animate ? 480 : 0);
+  };
+  set("total", a.total); set("ass", a.ass); set("pat", a.pat);
+  if (a.valid && wasLocked && animate) { amounts.classList.remove("pop"); void amounts.offsetWidth; amounts.classList.add("pop"); }
+  const btn = lineEl.querySelector('[data-action="servir"]');
+  btn.disabled = !a.valid || !!state.pharma.suspended;
+  btn.title = state.pharma.suspended ? "Assuré suspendu : délivrance impossible" : (a.valid ? "" : "Saisissez d'abord le prix unitaire");
+}
+
+function rxProgress(entry) {
+  const lines = pharmaLines(entry);
+  let total = 0, ass = 0, pat = 0, served = 0, ready = 0, missing = 0;
+  lines.forEach((med, i) => {
+    if (med.statut === "Servi") { served++; ass += num(med.partAssurance); pat += num(med.partPatient); total += num(med.partAssurance) + num(med.partPatient); return; }
+    const a = pharmaAmounts(entry, med, i);
+    if (a.valid) { ready++; total += a.total; ass += a.ass; pat += a.pat; } else missing++;
+  });
+  return { lines: lines.length, served: served, ready: ready, missing: missing, total: total, ass: ass, pat: pat, left: lines.length - served };
+}
+
+function refreshRxSummary(card, entry, animate) {
+  const p = rxProgress(entry);
+  animateNumber(card.querySelector("#rxSumTotal"), p.total, animate ? 480 : 0);
+  animateNumber(card.querySelector("#rxSumAss"), p.ass, animate ? 480 : 0);
+  animateNumber(card.querySelector("#rxSumPat"), p.pat, animate ? 480 : 0);
+  card.querySelector(".rx-ring-txt").textContent = p.served + "/" + p.lines;
+  const C = 2 * Math.PI * 26;
+  const fg = card.querySelector(".rx-ring .fg");
+  fg.style.strokeDasharray = C.toFixed(2);
+  fg.style.strokeDashoffset = (C * (1 - (p.lines ? p.served / p.lines : 0))).toFixed(2);
+  const all = card.querySelector("#rxServeAll");
+  all.hidden = p.left <= 1;
+  all.textContent = "Tout servir (" + p.left + " médicaments)";
+  all.disabled = p.missing > 0 || p.left === 0 || !!state.pharma.suspended;
+  const hint = card.querySelector("#rxHint");
+  hint.textContent = p.left === 0 ? "" : (state.pharma.suspended ? "Assuré suspendu : aucune délivrance possible." : p.missing > 0
+    ? "Saisissez le prix unitaire " + (p.missing === 1 ? "du médicament restant" : "des " + p.missing + " médicaments restants") + " pour débloquer la délivrance."
+    : (p.left > 1 ? "Tous les prix sont saisis : vous pouvez servir l'ordonnance." : "Prix saisi : vous pouvez servir."));
+  hint.classList.toggle("ok", p.left > 0 && p.missing === 0 && !state.pharma.suspended);
+  hint.classList.toggle("bad", !!state.pharma.suspended && p.left > 0);
+}
+
+// Curseur sur le premier prix encore à saisir ; l'ordonnance est amenée à l'écran si elle est trop bas.
+function focusNextPrice(scroll) {
+  const card = document.querySelector("#pharmaResults .ph-rx");
+  if (!card) return;
+  const empty = Array.from(card.querySelectorAll(".rx-price")).find(el => !num(el.value));
+  const coarse = window.matchMedia("(pointer: coarse)").matches;
+  if (scroll && card.getBoundingClientRect().top > window.innerHeight * 0.5) card.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
+  if (empty && !coarse) empty.focus({ preventScroll: true });
+}
+
+// Feux d'artifice de fin d'ordonnance.
+function burstConfetti(originEl) {
+  if (prefersReducedMotion()) return;
+  const r = originEl.getBoundingClientRect();
+  const box = document.createElement("div");
+  box.className = "confetti";
+  box.style.left = (r.left + r.width / 2) + "px";
+  box.style.top = Math.max(120, Math.min(window.innerHeight * 0.55, r.top + 60)) + "px";
+  const colors = ["#0fb5a6", "#2f6bff", "#7b4dff", "#f6c445", "#43e08e", "#ff6b6b"];
+  for (let i = 0; i < 34; i++) {
+    const p = document.createElement("i");
+    const ang = Math.random() * Math.PI * 2, dist = 90 + Math.random() * 190;
+    p.style.setProperty("--dx", Math.round(Math.cos(ang) * dist) + "px");
+    p.style.setProperty("--dy", Math.round(Math.sin(ang) * dist - 60) + "px");
+    p.style.setProperty("--r", Math.round(Math.random() * 720 - 360) + "deg");
+    p.style.setProperty("--c", colors[i % colors.length]);
+    p.style.animationDelay = Math.round(Math.random() * 120) + "ms";
+    box.appendChild(p);
+  }
+  document.body.appendChild(box);
+  window.setTimeout(() => box.remove(), 1800);
+}
+
+// La délivrance fige les montants de la ligne (prix unitaire saisi, part assurance et
+// part patient calculées sur la quantité prescrite) : ce sont eux qui alimentent
+// le suivi financier des pharmacies (tableau de bord / rapports).
+function serveMedicament(entry, med, correlationId) {
+  const idx = pharmaLines(entry).indexOf(med);
+  const a = pharmaAmounts(entry, med, idx);
+  if (!a.valid || med.statut === "Servi" || state.pharma.suspended) return false;
+  med.statut = "Servi";
+  med.dateService = todayFR();
+  med.servicePar = (state.currentUser && state.currentUser.etablissement) ? state.currentUser.etablissement : "Pharmacie";
+  med.prixUnitaire = String(a.prix);
+  med.partAssurance = String(a.ass);
+  med.partPatient = String(a.pat);
+  audit("pharma.servir", {
+    correlationId: correlationId || "", nag: entry.matricule,
+    ressourceType: "Ordonnance", ressourceId: entry.id, ressourceLibelle: entry.numero + " · " + med.designation,
+    apres: { medicament: med.designation, quantite: a.qte, prixUnitaire: a.prix, prixReference: medicamentPrix(med.designation), total: a.total, partAssurance: a.ass, partPatient: a.pat, pharmacie: med.servicePar }
+  });
+  return true;
+}
+
+async function finishServing(entry, servedIdx) {
+  // La délivrance est d'abord enregistrée dans la base ; en cas de refus, on revient à l'état du serveur.
+  try {
+    await persistFeuilles();
+  } catch (err) {
+    showInfoModal("Délivrance non enregistrée", "<p>" + escapeHtml(err.message) + "</p><p class=\"hint\">Rien n'a été servi : vérifiez la connexion puis recommencez.</p>");
+    try { await refreshFeuillesByNag(entry.matricule); } catch (e) { /* on garde l'affichage */ }
+    runPharmaSearch(state.pharma.nag, true);
+    return;
+  }
+  state.pharma.justServed = servedIdx || [];
+  const wasComplete = pharmaLines(entry).every(m => m.statut === "Servi");
+  runPharmaSearch(state.pharma.nag, true);
+  refreshNavLive();
+  refreshPharmaHero(true);
+  const card = document.querySelector("#pharmaResults .ph-rx");
+  if (wasComplete && card) {
+    burstConfetti(card);
+    const tot = pharmaLines(entry).reduce((a, m) => a + num(m.partAssurance) + num(m.partPatient), 0);
+    toast({ kind: "success", title: "Ordonnance servie", text: "Total " + fmtFCFA(tot) + " — les montants alimentent le suivi financier de la pharmacie.", ms: 5200 });
+    const next = document.getElementById("phNextPatientBtn");
+    if (next && !window.matchMedia("(pointer: coarse)").matches) next.focus({ preventScroll: true });
+  } else {
+    toast({ kind: "success", title: servedIdx && servedIdx.length > 1 ? servedIdx.length + " médicaments servis" : "Médicament servi", text: "Montants enregistrés.", ms: 3200 });
+    focusNextPrice(false);
+  }
+}
+
+// Une seule délégation d'événements pour toute l'ordonnance affichée.
+document.getElementById("pharmaResults").addEventListener("input", e => {
+  const input = e.target.closest(".rx-price");
+  if (!input) return;
+  const card = input.closest(".ph-rx");
+  const entry = state.pharma.entries.find(x => x.id === parseInt(card.dataset.entry, 10));
+  if (!entry) return;
+  const digits = input.value.replace(/\D/g, "").slice(0, 8);
+  const idx = parseInt(input.dataset.idx, 10);
+  pharmaPrices()[entry.id + ":" + idx] = digits;
+  if (input.value !== digits) input.value = digits;       // seuls les chiffres passent
+  refreshRxLine(input.closest(".rx-line"), entry, idx, true);
+  refreshRxSummary(card, entry, true);
+});
+document.getElementById("pharmaResults").addEventListener("focusin", e => {
+  const input = e.target.closest(".rx-price");
+  if (input) input.value = input.value.replace(/\D/g, "");   // édition sans espaces
+});
+document.getElementById("pharmaResults").addEventListener("focusout", e => {
+  const input = e.target.closest(".rx-price");
+  if (input && input.value) input.value = fmt(num(input.value));   // affichage 12 500
+});
+document.getElementById("pharmaResults").addEventListener("keydown", e => {
+  const input = e.target.closest(".rx-price");
+  if (!input || e.key !== "Enter") return;
+  e.preventDefault();
+  const card = input.closest(".ph-rx");
+  const prices = Array.from(card.querySelectorAll(".rx-price"));
+  const next = prices[prices.indexOf(input) + 1];
+  if (next) { next.focus(); return; }
+  const target = card.querySelector("#rxServeAll:not([hidden]):not(:disabled)") || input.closest(".rx-line").querySelector('[data-action="servir"]:not(:disabled)');
+  if (target) target.focus();
+});
+document.getElementById("pharmaResults").addEventListener("click", e => {
+  const btn = e.target.closest("[data-action]");
+  if (!btn) return;
+  const card = btn.closest(".ph-rx");
+  if (!card) return;
+  const entry = state.pharma.entries.find(x => x.id === parseInt(card.dataset.entry, 10));
+  if (!entry) return;
+  const lines = pharmaLines(entry);
+  if (state.pharma.suspended && (btn.dataset.action === "servir" || btn.dataset.action === "servir-tout")) {
+    audit("pharma.servir", { resultat: "REFUSE", nag: entry.matricule, ressourceType: "Ordonnance", ressourceId: entry.id, ressourceLibelle: entry.numero, message: "Délivrance refusée : assuré suspendu" });
+    showSuspendedModal(entry.patientNom, entry.matricule, "aucun médicament ne peut être servi.");
+    return;
+  }
+
+  if (btn.dataset.action === "ref") {
+    const idx = parseInt(btn.dataset.idx, 10);
+    const input = card.querySelector('.rx-price[data-idx="' + idx + '"]');
+    pharmaPrices()[entry.id + ":" + idx] = btn.dataset.ref;
+    input.value = fmt(num(btn.dataset.ref));
+    refreshRxLine(input.closest(".rx-line"), entry, idx, true);
+    refreshRxSummary(card, entry, true);
+    return;
+  }
+  if (btn.dataset.action === "servir") {
+    const idx = parseInt(btn.dataset.idx, 10);
+    const med = lines[idx], a = med ? pharmaAmounts(entry, med, idx) : null;
+    if (!med || med.statut === "Servi" || !a.valid) return;
+    askConfirm(
+      "Confirmer la délivrance de « " + med.designation + " » — quantité " + a.qte + ", prix unitaire " + fmtFCFA(a.prix) + ", total " + fmtFCFA(a.total) +
+      " (CNAMGS " + fmtFCFA(a.ass) + ", patient " + fmtFCFA(a.pat) + ") ?",
+      () => { if (serveMedicament(entry, med)) finishServing(entry, [idx]); },
+      { title: "Confirmer la délivrance", confirmLabel: "Servir", neutral: true }
+    );
+    return;
+  }
+  if (btn.dataset.action === "servir-tout") {
+    const todo = lines.map((med, i) => ({ med: med, i: i, a: pharmaAmounts(entry, med, i) })).filter(x => x.med.statut !== "Servi");
+    if (!todo.length || todo.some(x => !x.a.valid)) return;
+    const pat = todo.reduce((s, x) => s + x.a.pat, 0), ass = todo.reduce((s, x) => s + x.a.ass, 0);
+    askConfirm(
+      "Confirmer la délivrance des " + todo.length + " médicaments restants de cette ordonnance ? CNAMGS " + fmtFCFA(ass) + ", patient " + fmtFCFA(pat) + ".",
+      () => {
+        const ref = newId("D");
+        const done = todo.filter(x => serveMedicament(entry, x.med, ref)).map(x => x.i);
+        if (done.length) finishServing(entry, done);
+      },
+      { title: "Confirmer la délivrance", confirmLabel: "Tout servir", neutral: true }
+    );
+  }
+});
+
+document.getElementById("pharmaSearchBtn").addEventListener("click", () => runPharmaSearch(document.getElementById("pharmaNagInput").value));
+document.getElementById("pharmaNagInput").addEventListener("keydown", e => { if (e.key === "Enter") runPharmaSearch(e.target.value); });
+// Le NAG est numérique (10 chiffres, affiché 3-3-3-1 par le masque de saisie) :
+// la recherche part d'elle-même à la 10e saisie, et modifier le NAG efface
+// l'ordonnance affichée.
+document.getElementById("pharmaNagInput").addEventListener("input", e => {
+  const digits = nagDigits(e.target.value);
+  if (digits.length === 10) runPharmaSearch(digits);
+  else if (state.pharma.nag) clearPharmaResults();
+});
+document.getElementById("pharmaDateInput").addEventListener("change", applyPharmaDate);
+document.getElementById("pharmaDatesList").addEventListener("click", e => {
+  const btn = e.target.closest(".pharma-date-item");
+  if (btn) selectPharmaEntry(parseInt(btn.dataset.id, 10));
+});
+
+/* ---- Historique des délivrances (Espace Pharmacien) ---------------------- */
+
+// Une pharmacie ne voit que ses propres délivrances ; sans établissement
+// (administrateur), on voit toutes les pharmacies.
+function pharmaHistoryScope() {
+  const u = state.currentUser;
+  return u && u.role === "Pharmacie" && u.etablissement ? u.etablissement : null;
+}
+
+// Toutes les lignes d'ordonnance servies, de la délivrance la plus récente à la plus ancienne.
+function pharmaHistoryRows() {
+  const scope = pharmaHistoryScope();
+  const rows = [];
+  state.historique.forEach((h, order) => {
+    (h.ordonnance || []).forEach((med, idx) => {
+      if (med.statut !== "Servi" || !med.servicePar) return;
+      if (scope && med.servicePar !== scope) return;
+      rows.push({ h: h, med: med, order: order, idx: idx, iso: frToISO(med.dateService) });
+    });
+  });
+  rows.sort((a, b) => b.iso.localeCompare(a.iso) || a.order - b.order || a.idx - b.idx);
+  return rows;
+}
+
+function filteredPharmaHistory() {
+  const q = document.getElementById("pharmaHistSearch").value.trim().toLowerCase();
+  const from = document.getElementById("pharmaHistFrom").value;
+  const to = document.getElementById("pharmaHistTo").value;
+  return pharmaHistoryRows().filter(r => {
+    if (from && (!r.iso || r.iso < from)) return false;
+    if (to && (!r.iso || r.iso > to)) return false;
+    if (q) {
+      const hay = [r.h.patientNom, r.h.matricule, formatNag(r.h.matricule), r.med.designation, r.h.numero, r.h.medecin].join(" ").toLowerCase();
+      if (!hay.includes(q)) return false;
     }
     return true;
   });
-  document.getElementById("pharmaNotFound").hidden = !nag || entries.length > 0;
-  renderPharmaAssureCard(nag ? findPharmaIdentity(nag) : null);
-  renderPharmaResults(entries);
 }
 
-document.getElementById("pharmaSearchBtn").addEventListener("click", () => {
-  runPharmaSearch(document.getElementById("pharmaNagInput").value, document.getElementById("pharmaDateInput").value);
+function renderPharmaHistory() {
+  const scope = pharmaHistoryScope();
+  const rows = filteredPharmaHistory();
+  document.getElementById("pharmaHistScope").textContent = scope ? "Délivrances de " + scope : "Toutes les pharmacies";
+  document.getElementById("pharmaHistCount").textContent = rows.length;
+  document.getElementById("pharmaHistEmpty").hidden = rows.length > 0;
+  document.getElementById("pharmaHistHead").innerHTML =
+    "<tr><th>Délivré le</th><th>Patient</th><th>Médicament</th><th class=\"num\">Qté</th><th>Feuille · prestation</th><th>Prescripteur</th>" +
+    (scope ? "" : "<th>Pharmacie</th>") + '<th class="num">Part assurance</th><th class="num">Part patient</th></tr>';
+  const histInfo = pageSlice("pharmaHist", rows, 10);
+  renderPager("pharmaHistPager", "pharmaHist", histInfo, renderPharmaHistory, "délivrances");
+  document.getElementById("pharmaHistBody").innerHTML = histInfo.items.map(r =>
+    "<tr>" +
+      "<td>" + escapeHtml(r.med.dateService) + "</td>" +
+      '<td><span class="rapport-name">' + escapeHtml(r.h.patientNom || "—") + '</span><div class="hint" style="margin:2px 0 0">' + escapeHtml(formatNag(r.h.matricule)) + "</div></td>" +
+      "<td>" + escapeHtml(r.med.designation) + "</td>" +
+      '<td class="num">' + pharmaQty(r.med) + "</td>" +
+      "<td>" + escapeHtml(r.h.numero) + '<div class="hint" style="margin:2px 0 0">' + escapeHtml(prestationDateFR(r.h)) + "</div></td>" +
+      "<td>" + escapeHtml(r.h.medecin || "—") + "</td>" +
+      (scope ? "" : "<td>" + escapeHtml(r.med.servicePar) + "</td>") +
+      '<td class="num sum-paid">' + fmtFCFA(num(r.med.partAssurance)) + "</td>" +
+      '<td class="num">' + fmtFCFA(num(r.med.partPatient)) + "</td>" +
+    "</tr>"
+  ).join("");
+
+  const lead = document.getElementById("pharmaHistLead");
+  const dl = document.getElementById("pharmaHistSummary");
+  if (!rows.length) {
+    lead.textContent = "Aucune délivrance pour ces filtres.";
+    dl.innerHTML = "";
+    return;
+  }
+  const patients = new Set(rows.map(r => String(r.h.matricule))).size;
+  const ass = rows.reduce((a, r) => a + num(r.med.partAssurance), 0);
+  const pat = rows.reduce((a, r) => a + num(r.med.partPatient), 0);
+  lead.textContent = plural(rows.length, "médicament a été délivré", "médicaments ont été délivrés") + " à " + plural(patients, "patient", "patients") +
+    ". La CNAMGS prend en charge " + fmtFCFA(ass) + " et les patients règlent " + fmtFCFA(pat) + ".";
+  dl.innerHTML =
+    "<div><dt>Médicaments délivrés</dt><dd>" + rows.length + "</dd></div>" +
+    "<div><dt>Patients servis</dt><dd>" + patients + "</dd></div>" +
+    '<div class="sum-paid"><dt>Part assurance (CNAMGS)</dt><dd>' + fmtFCFA(ass) + "</dd></div>" +
+    "<div><dt>Part des patients</dt><dd>" + fmtFCFA(pat) + "</dd></div>" +
+    "<div><dt>Total délivré</dt><dd>" + fmtFCFA(ass + pat) + "</dd></div>";
+}
+
+function setPharmaTab(tab) {
+  document.getElementById("pharmaTabToggle").dataset.active = tab;
+  document.querySelectorAll("#pharmaTabToggle .chip").forEach(c => { c.classList.toggle("active", c.dataset.tab === tab); c.setAttribute("aria-selected", String(c.dataset.tab === tab)); });
+  document.getElementById("pharma-tab-delivrer").hidden = tab !== "delivrer";
+  document.getElementById("pharma-tab-historique").hidden = tab !== "historique";
+  if (tab === "historique") {
+    renderPharmaHistory();
+    pullFeuilles(false).then(renderPharmaHistory).catch(() => {});
+  }
+}
+document.querySelectorAll("#pharmaTabToggle .chip").forEach(c => c.addEventListener("click", () => setPharmaTab(c.dataset.tab)));
+["pharmaHistSearch", "pharmaHistFrom", "pharmaHistTo"].forEach(id => document.getElementById(id).addEventListener("input", () => { resetPage("pharmaHist"); renderPharmaHistory(); }));
+document.getElementById("pharmaHistReset").addEventListener("click", () => {
+  document.getElementById("pharmaHistSearch").value = "";
+  document.getElementById("pharmaHistFrom").value = "";
+  document.getElementById("pharmaHistTo").value = "";
+  resetPage("pharmaHist");
+  renderPharmaHistory();
 });
 
-function renderPharmaResults(entries) {
-  const wrap = document.getElementById("pharmaResults");
-  wrap.innerHTML = "";
+/* ---------------------------------------------------------------------- */
+/* Paiements : règlement du reste dû ou avance, avancement en barre        */
+/* ---------------------------------------------------------------------- */
 
-  entries.forEach(entry => {
-    const rate = TM_RATE[entry.ticketModerateur] != null ? TM_RATE[entry.ticketModerateur] : 0.8;
-
-    const rows = entry.ordonnance.map((med, i) => {
-      const prix = medicamentPrix(med.designation);
-      const servi = med.statut === "Servi";
-      const partAssurance = servi ? num(med.partAssurance) : Math.round(prix * rate);
-      const partPatient = servi ? num(med.partPatient) : (prix - Math.round(prix * rate));
-      const actionCell = servi
-        ? '<span class="rx-served-note">Servi le ' + med.dateService + "</span>"
-        : '<button type="button" class="btn-primary btn-sm" data-action="servir" data-entry="' + entry.id + '" data-idx="' + i + '">Servir</button>';
-      return '<tr class="' + (servi ? "rx-row-done" : "") + '">' +
-        "<td>" + med.designation + "</td>" +
-        "<td>" + med.quantite + "</td>" +
-        "<td>" + (med.posologie || "—") + "</td>" +
-        "<td>" + fmt(prix) + "</td>" +
-        "<td>" + fmt(partAssurance) + "</td>" +
-        "<td>" + fmt(partPatient) + "</td>" +
-        '<td><span class="pill ' + (servi ? "validee" : "attente") + '">' + med.statut + "</span></td>" +
-        "<td>" + actionCell + "</td>" +
-      "</tr>";
-    }).join("");
-
-    const card = document.createElement("div");
-    card.className = "card";
-    card.innerHTML =
-      '<div class="card-head"><h3>' + (entry.patientNom || "") + " — Feuille " + entry.numero + "</h3>" +
-        '<span class="pill consultation">Consultation du ' + entry.date + "</span>" +
-      "</div>" +
-      '<div class="card-body" style="padding-top:0">' +
-        '<p class="hint" style="margin-top:0">Prescrit par <b>' + (entry.medecin || "—") + "</b>" + (entry.medecinEtab ? " — " + entry.medecinEtab : "") + (entry.medecinType ? " (" + entry.medecinType + ")" : "") + "</p>" +
-      "</div>" +
-      '<div class="card-body" style="padding:0">' +
-        '<table class="data-table">' +
-          "<thead><tr><th>Désignation</th><th>Quantité</th><th>Posologie / Durée</th><th>Prix</th><th>Part assurance</th><th>Part patient</th><th>Statut</th><th>Action</th></tr></thead>" +
-          "<tbody>" + rows + "</tbody>" +
-        "</table>" +
-      "</div>";
-    wrap.appendChild(card);
-
-    card.querySelectorAll('[data-action="servir"]').forEach(btn => {
-      btn.addEventListener("click", () => {
-        if (!confirm("Confirmer la délivrance de ce médicament ?")) return;
-        const targetEntry = state.historique.find(h => h.id === parseInt(btn.dataset.entry, 10));
-        if (!targetEntry) return;
-        const med = targetEntry.ordonnance[parseInt(btn.dataset.idx, 10)];
-        if (!med || med.statut === "Servi") return;
-
-        const prix = medicamentPrix(med.designation);
-        const r = TM_RATE[targetEntry.ticketModerateur] != null ? TM_RATE[targetEntry.ticketModerateur] : 0.8;
-        const pa = Math.round(prix * r);
-
-        med.statut = "Servi";
-        med.dateService = todayFR();
-        med.servicePar = (state.currentUser && state.currentUser.etablissement) ? state.currentUser.etablissement : "Pharmacie";
-        med.prixUnitaire = String(prix);
-        med.partAssurance = String(pa);
-        med.partPatient = String(prix - pa);
-
-        saveJSON("pec_historique", state.historique);
-        runPharmaSearch(document.getElementById("pharmaNagInput").value, document.getElementById("pharmaDateInput").value);
-      });
-    });
-  });
+// Avancement d'un compte partenaire (hôpital ou pharmacie) : montant dû et
+// déjà payé. Ce qui est payé au-delà du dû est une avance ; elle se déduit
+// d'elle-même des prochaines prestations puisque le reste est toujours
+// « dû − payé ».
+function payProgress(montantTotal, paye) {
+  const reste = Math.max(0, montantTotal - paye);
+  const avance = Math.max(0, paye - montantTotal);
+  const pct = montantTotal > 0 ? Math.min(100, Math.round(paye / montantTotal * 100)) : (paye > 0 ? 100 : 0);
+  const statut = paye <= 0 ? "Impayé" : (reste <= 0 ? "Payé" : "Partiellement payé");
+  return { reste: reste, avance: avance, pct: pct, statut: statut };
 }
+
+function payStatutClass(statut) {
+  return statut === "Payé" ? "validee" : (statut === "Impayé" ? "inactif" : "attente");
+}
+function payResteClass(p) {
+  return p.reste <= 0 ? "" : (p.statut === "Impayé" ? "reste-unpaid" : "reste-partial");
+}
+// Couleur d'un avancement : rouge (0 %) → ambre → vert (100 %).
+function payHealthColor(pct) {
+  return "hsl(" + Math.round(pct * 1.15) + ", 62%, 40%)";
+}
+function attr(s) {
+  return escapeHtml(s).replace(/"/g, "&quot;");
+}
+
+// Barre d'avancement d'une ligne de tableau : % du montant dû déjà payé, et l'avance éventuelle.
+function payProgressCell(p) {
+  const color = payHealthColor(p.pct);
+  return '<div class="pay-cell"><div class="pay-bar"><span class="pay-seg" style="width:' + p.pct + "%;background:" + color + '"></span></div>' +
+    '<div class="pay-pct" style="color:' + color + '">' + p.pct + " %" +
+    (p.avance > 0 ? '<span class="pay-adv-tag">+ avance ' + fmtFCFA(p.avance) + "</span>" : "") + "</div></div>";
+}
+
+function plural(n, one, many) { return n + " " + (n > 1 ? many : one); }
+
+// Résumé écrit sous le détail : une phrase, puis quelques lignes « libellé — valeur ».
+function renderRapportSummary(kind, list) {
+  const isHop = kind === "hopital";
+  const lead = document.getElementById(isHop ? "hospLead" : "pharmaLead");
+  const dl = document.getElementById(isHop ? "hospSummary" : "pharmaSummary");
+  if (!list.length) {
+    lead.textContent = "Aucune prestation validée pour ces filtres.";
+    dl.innerHTML = "";
+    return;
+  }
+  const sum = key => list.reduce((a, p) => a + (p[key] || 0), 0);
+  const n = list.length, count = sum("count"), du = sum("montantTotal"), paye = sum("paye"), reste = sum("reste"), avance = sum("avance");
+  const payeSurDu = list.reduce((a, p) => a + Math.min(p.paye, p.montantTotal), 0);
+  const pct = du > 0 ? Math.round(payeSurDu / du * 100) : 0;
+
+  const who = isHop
+    ? plural(n, "hôpital a", "hôpitaux ont") + " réalisé " + plural(count, "prestation", "prestations") +
+      " (" + plural(sum("consult"), "consultation", "consultations") + " et " + plural(sum("exam"), "examen", "examens") + ")"
+    : plural(n, "pharmacie a", "pharmacies ont") + " servi " + plural(count, "médicament", "médicaments");
+  lead.textContent = who.charAt(0).toUpperCase() + who.slice(1) + ". La CNAMGS " + (n > 1 ? "leur" : "lui") + " doit " + fmtFCFA(du) +
+    " au total : " + fmtFCFA(paye) + " ont déjà été versés (" + pct + " % du montant dû)" +
+    (avance > 0 ? ", dont " + fmtFCFA(avance) + " d'avance" : "") + ", il reste " + fmtFCFA(reste) + " à payer.";
+
+  const rows = [
+    [isHop ? "Hôpitaux concernés" : "Pharmacies concernées", n, "", ""],
+    isHop
+      ? ["Prestations réalisées", count, "", plural(sum("consult"), "consultation", "consultations") + " · " + plural(sum("exam"), "examen", "examens")]
+      : ["Médicaments servis", count, "", ""],
+    ["Montant total dû", fmtFCFA(du), "", ""],
+    ["Déjà payé", fmtFCFA(paye), "sum-paid", pct + " % du montant dû"],
+    ["Reste à payer", fmtFCFA(reste), "sum-reste", ""],
+    ["Avances versées", fmtFCFA(avance), "sum-avance", avance > 0 ? "déduites des prochaines prestations" : ""]
+  ];
+  dl.innerHTML = rows.map(r =>
+    '<div class="' + r[2] + '"><dt>' + r[0] + "</dt><dd>" + r[1] + (r[3] ? "<small>" + r[3] + "</small>" : "") + "</dd></div>"
+  ).join("");
+}
+
+/* ---- Modale « Enregistrer un paiement » : règlement ou avance ------------ */
+
+const PAY_KINDS = {
+  hopital: { nom: "Hôpital", champ: "hopital", list: () => state.reglementsHopitaux, refresh: () => renderHopitalRapport() },
+  pharmacie: { nom: "Pharmacie", champ: "pharmacie", list: () => state.reglements, refresh: () => renderPharmaRapport() }
+};
+let payCtx = null;          // { kind, name, total, paye, reste } du compte affiché dans la modale
+let payType = "reglement";  // "reglement" (plafonné au reste dû) | "avance" (peut dépasser)
+let payBusy = false;        // paiement enregistré, animation de fin en cours
+let payTimer = null;
+let payView = { newPct: 0, advPct: 0, advBeforePct: 0 };
+
+function payEl(id) { return document.getElementById(id); }
+function payAmount() {
+  const n = Math.round(num(payEl("pay-montant").value));
+  return n > 0 ? n : 0;
+}
+
+function openPaymentModal(kind, row) {
+  if (!row) return;
+  const cfg = PAY_KINDS[kind];
+  const name = row[cfg.champ];
+  payCtx = { kind: kind, name: name, total: row.montantTotal, paye: row.paye, reste: row.reste };
+  payBusy = false;
+  window.clearTimeout(payTimer);
+  payEl("payNameLabel").textContent = cfg.nom;
+  payEl("pay-name").value = name;
+  payEl("pay-total").textContent = fmtFCFA(row.montantTotal);
+  payEl("pay-paye").textContent = fmtFCFA(row.paye);
+  payEl("pay-reste").textContent = fmtFCFA(row.reste);
+  payEl("pay-montant").value = "";
+  payEl("pay-montant").disabled = false;
+  payEl("pay-note").value = "";
+  payEl("payBar").classList.remove("saved");
+  payEl("payFillBtn").disabled = row.reste <= 0;
+  // La barre part de zéro et « avance » jusqu'à ce qui est déjà payé.
+  ["payBarPaid", "payBarNew", "payBarAdv"].forEach(id => { const el = payEl(id); el.style.transition = "none"; el.style.width = "0%"; });
+  document.getElementById("paymentModal").hidden = false;
+  void payEl("payBar").offsetWidth;
+  ["payBarPaid", "payBarNew", "payBarAdv"].forEach(id => { payEl(id).style.transition = ""; });
+  setPayType(row.reste > 0 ? "reglement" : "avance");
+  payEl("pay-montant").focus();
+}
+
+function closePaymentModal() {
+  window.clearTimeout(payTimer);
+  document.getElementById("paymentModal").hidden = true;
+  // Fermée pendant l'animation de fin : le paiement est déjà enregistré, on rafraîchit quand même l'écran.
+  if (payBusy && payCtx) PAY_KINDS[payCtx.kind].refresh();
+  payBusy = false;
+}
+
+function setPayType(type) {
+  payType = type;
+  document.querySelectorAll("#payTypeChoices .chip").forEach(ch => {
+    ch.classList.toggle("active", ch.dataset.type === type);
+    if (ch.dataset.type === "reglement") ch.disabled = !payCtx || payCtx.reste <= 0;
+  });
+  payEl("payTypeHint").textContent = type === "avance"
+    ? "Avance : peut dépasser le reste à payer ; l'excédent est crédité sur les prochaines prestations."
+    : "Règlement : solde tout ou partie du reste à payer (au maximum " + fmtFCFA(payCtx ? payCtx.reste : 0) + ").";
+  updatePayGauge();
+}
+
+// Barre du paiement : déjà payé (vert) + ce paiement (bleu) + avance (sarcelle),
+// sur une échelle qui s'allonge au-delà du montant dû (repère noir) quand il y a une avance.
+function updatePayGauge() {
+  const c = payCtx;
+  if (!c) return;
+  const amt = payAmount();
+  const applied = Math.min(amt, c.reste);            // part qui solde le reste dû
+  const extra = amt - applied;                        // au-delà du reste : avance
+  const over = payType === "reglement" && extra > 0;  // un règlement ne dépasse pas le reste
+  const counted = over ? applied : amt;               // ce que la barre montre
+  const extraShown = counted - applied;
+  const prevAdvance = Math.max(0, c.paye - c.total);
+  const paidDue = Math.min(c.paye, c.total);
+  const scale = Math.max(c.total, c.paye + counted, 1);
+  const pctW = v => v / scale * 100;
+
+  payView = { newPct: pctW(applied), advPct: pctW(prevAdvance + extraShown), advBeforePct: pctW(prevAdvance) };
+  payEl("payBarPaid").style.width = pctW(paidDue) + "%";
+  payEl("payBarNew").style.width = payView.newPct + "%";
+  payEl("payBarAdv").style.width = payView.advPct + "%";
+  const tick = payEl("payBarTick");
+  tick.hidden = scale <= c.total;
+  tick.style.left = "calc(" + pctW(c.total) + "% - 1px)";
+
+  const pct = paid => c.total > 0 ? Math.min(100, Math.round(Math.min(paid, c.total) / c.total * 100)) : (paid > 0 ? 100 : 0);
+  payEl("pay-pct-before").textContent = pct(c.paye) + " %";
+  payEl("pay-pct-after").textContent = pct(c.paye + counted) + " %";
+
+  let msg, cls;
+  if (!amt) { msg = "Saisissez le montant du paiement."; cls = ""; }
+  else if (over) { msg = "Un règlement ne peut pas dépasser le reste à payer (" + fmtFCFA(c.reste) + "). Choisissez « Avance » pour verser davantage."; cls = "err"; }
+  else if (extra > 0) { msg = fmtFCFA(extra) + " d'avance seront crédités sur les prochaines prestations" + (applied > 0 ? " ; " + fmtFCFA(applied) + " soldent le reste dû." : "."); cls = "adv"; }
+  else if (c.reste > 0 && applied >= c.reste) { msg = "Ce paiement solde le reste dû."; cls = "ok"; }
+  else { msg = "Après ce paiement, il restera " + fmtFCFA(c.reste - applied) + " à payer."; cls = "info"; }
+  if (!payBusy) {
+    payEl("payMsg").textContent = msg;
+    payEl("payMsg").className = "pay-msg" + (cls ? " " + cls : "");
+  }
+  payEl("paySubmitBtn").disabled = payBusy || !amt || over;
+}
+
+payEl("pay-montant").addEventListener("input", updatePayGauge);
+payEl("payFillBtn").addEventListener("click", () => {
+  if (!payCtx || payCtx.reste <= 0) return;
+  payEl("pay-montant").value = payCtx.reste;
+  setPayType("reglement");
+});
+document.querySelectorAll("#payTypeChoices .chip").forEach(ch => {
+  ch.addEventListener("click", () => { if (!ch.disabled && !payBusy) setPayType(ch.dataset.type); });
+});
+payEl("closePaymentModal").addEventListener("click", closePaymentModal);
+payEl("cancelPaymentModal").addEventListener("click", closePaymentModal);
+
+payEl("paymentForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const c = payCtx;
+  if (!c || payBusy) return;
+  const amt = payAmount();
+  if (!amt || (payType === "reglement" && amt > c.reste)) return;
+
+  const cfg = PAY_KINDS[c.kind];
+  // Le paiement est d'abord enregistré dans la base ; l'animation ne joue que si le serveur l'a accepté.
+  payBusy = true;
+  payEl("paySubmitBtn").disabled = true;
+  payEl("payMsg").textContent = "Enregistrement du paiement…";
+  payEl("payMsg").className = "pay-msg info";
+  const noteText = payEl("pay-note").value.trim();
+  let saved = null;
+  try {
+    saved = await apiCreateReglement({ kind: c.kind, structure: c.name, montant: amt, type: payType, note: noteText });
+  } catch (err) {
+    payBusy = false;
+    payEl("paySubmitBtn").disabled = false;
+    payEl("payMsg").textContent = err.unavailable ? "Le serveur ne propose pas encore l'enregistrement des paiements (POST /api/reglements à créer)." : err.message;
+    payEl("payMsg").className = "pay-msg err";
+    return;
+  }
+  const rec = mapReglement(Object.assign({ id_reglement: Date.now(), kind: c.kind, structure: c.name, montant: amt, type: payType, note: noteText, date: new Date().toISOString().slice(0, 10) }, saved || {}));
+  cfg.list().push(rec);
+  audit("paiement.enregistrer", { ressourceType: c.kind === "hopital" ? "Hôpital" : "Pharmacie", ressourceLibelle: c.name, apres: { montant: amt, type: payType, note: rec.note } });
+
+  // « Chargement » : la barre avance jusqu'au nouveau total, puis passe au vert.
+  payBusy = true;
+  payEl("pay-montant").disabled = true;
+  payEl("payFillBtn").disabled = true;
+  payEl("paySubmitBtn").disabled = true;
+  document.querySelectorAll("#payTypeChoices .chip").forEach(ch => { ch.disabled = true; });
+  payEl("payMsg").textContent = "Enregistrement du paiement…";
+  payEl("payMsg").className = "pay-msg info";
+  const reduced = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  const bar = payEl("payBar");
+  const seg = payEl("payBarNew");
+  const adv = payEl("payBarAdv");
+  if (!reduced) {
+    seg.style.transition = "none"; adv.style.transition = "none";
+    seg.style.width = "0%"; adv.style.width = payView.advBeforePct + "%";
+    void bar.offsetWidth;
+    seg.style.transition = "width .8s cubic-bezier(.4, 0, .2, 1), background-color .4s ease";
+    adv.style.transition = "width .8s cubic-bezier(.4, 0, .2, 1)";
+    seg.style.width = payView.newPct + "%";
+    adv.style.width = payView.advPct + "%";
+  }
+  payTimer = window.setTimeout(() => {
+    bar.classList.add("saved");
+    payEl("payMsg").textContent = "Paiement enregistré.";
+    payEl("payMsg").className = "pay-msg ok";
+    payEl("pay-pct-before").textContent = payEl("pay-pct-after").textContent;
+    payTimer = window.setTimeout(() => { closePaymentModal(); }, reduced ? 0 : 650);
+  }, reduced ? 0 : 850);
+});
 
 /* ---------------------------------------------------------------------- */
 /* Tableau de bord : suivi des prestations des pharmacies partenaires      */
@@ -3035,9 +5332,8 @@ function getPharmacieAggregates(filters) {
   let list = Object.keys(byPharma).map(key => {
     const p = byPharma[key];
     const paye = paidByPharma[key] || 0;
-    const reste = Math.max(0, p.montantTotal - paye);
-    const statut = paye <= 0 ? "Impayé" : (reste <= 0 ? "Payé" : "Partiellement payé");
-    return { pharmacie: p.pharmacie, count: p.count, montantTotal: p.montantTotal, paye: paye, reste: reste, statut: statut };
+    const pr = payProgress(p.montantTotal, paye);
+    return { pharmacie: p.pharmacie, count: p.count, montantTotal: p.montantTotal, paye: paye, reste: pr.reste, avance: pr.avance, pct: pr.pct, statut: pr.statut };
   });
 
   if (f.statut) list = list.filter(p => p.statut === f.statut);
@@ -3045,11 +5341,16 @@ function getPharmacieAggregates(filters) {
   return list;
 }
 
-// Nombre de pharmacies partenaires enregistrées (state.users, rôle Pharmacie) —
+// Noms des structures partenaires de la base (Structure.type_structure : « hopital » ou « pharmacie »).
+function partnerNames(type) {
+  return Array.from(new Set((state.structures || []).filter(st => st.type_structure === type).map(st => st.raison_sociale).filter(Boolean))).sort();
+}
+
+// Nombre de pharmacies partenaires enregistrées (table Structure, type pharmacie) —
 // un décompte du réseau, indépendant de la période/du statut de règlement.
 function getPartnerPharmacyCount(filters) {
   const f = filters || EMPTY_PHARMA_FILTERS;
-  const names = new Set(state.users.filter(u => u.role === "Pharmacie" && u.etablissement).map(u => u.etablissement));
+  const names = new Set(partnerNames("pharmacie"));
   if (f.pharmacie) return names.has(f.pharmacie) ? 1 : 0;
   return names.size;
 }
@@ -3057,19 +5358,6 @@ function getPartnerPharmacyCount(filters) {
 function monthLabel(b) {
   const name = MOIS[b.month];
   return name.charAt(0).toUpperCase() + name.slice(1) + " " + b.year;
-}
-
-function getPharmaEvolutionByMonth(meds) {
-  const buckets = {};
-  meds.forEach(med => {
-    const d = parseFRDate(med.dateService);
-    if (!d) return;
-    const key = d.getFullYear() + "-" + pad(d.getMonth() + 1);
-    if (!buckets[key]) buckets[key] = { key: key, year: d.getFullYear(), month: d.getMonth(), count: 0, montant: 0 };
-    buckets[key].count++;
-    buckets[key].montant += num(med.partAssurance);
-  });
-  return Object.values(buckets).sort((a, b) => a.key.localeCompare(b.key));
 }
 
 // Diagramme en barres générique (HTML/CSS, comme les marqueurs du graphique
@@ -3116,25 +5404,24 @@ function renderPharmaSuiviTable(list) {
   body.innerHTML = "";
   empty.hidden = list.length > 0;
 
-  list.forEach(p => {
-    const statutClass = p.statut === "Payé" ? "validee" : (p.statut === "Impayé" ? "inactif" : "attente");
-    const actionCell = p.reste > 0
-      ? '<button type="button" class="btn-secondary btn-sm" data-action="regler" data-pharmacie="' + p.pharmacie.replace(/"/g, "&quot;") + '">Enregistrer un paiement</button>'
-      : '<span class="rx-served-note">Soldé</span>';
+  const info = pageSlice("pharmaSuivi", list, 8);
+  renderPager("pharmaSuiviPager", "pharmaSuivi", info, () => renderPharmaSuiviTable(list), "pharmacies");
+  info.items.forEach(p => {
     const tr = document.createElement("tr");
     tr.innerHTML =
-      "<td>" + p.pharmacie + "</td>" +
-      "<td>" + p.count + "</td>" +
-      "<td>" + fmtFCFA(p.montantTotal) + "</td>" +
-      "<td>" + fmtFCFA(p.paye) + "</td>" +
-      "<td>" + fmtFCFA(p.reste) + "</td>" +
-      '<td><span class="pill ' + statutClass + '">' + p.statut + "</span></td>" +
-      '<td class="row-actions">' + actionCell + "</td>";
+      '<td class="rapport-name">' + escapeHtml(p.pharmacie) + "</td>" +
+      '<td class="num">' + p.count + "</td>" +
+      '<td class="num">' + fmtFCFA(p.montantTotal) + "</td>" +
+      '<td class="num sum-paid">' + fmtFCFA(p.paye) + "</td>" +
+      '<td class="num ' + payResteClass(p) + '">' + fmtFCFA(p.reste) + "</td>" +
+      "<td>" + payProgressCell(p) + "</td>" +
+      '<td><span class="pill ' + payStatutClass(p.statut) + '">' + p.statut + "</span></td>" +
+      '<td class="row-actions"><button type="button" class="btn-secondary btn-sm" data-action="regler" data-name="' + attr(p.pharmacie) + '">Enregistrer un paiement</button></td>';
     body.appendChild(tr);
   });
 
   body.querySelectorAll('[data-action="regler"]').forEach(btn => {
-    btn.addEventListener("click", () => openReglementModal(btn.dataset.pharmacie));
+    btn.addEventListener("click", () => openPaymentModal("pharmacie", list.find(x => x.pharmacie === btn.dataset.name)));
   });
 }
 
@@ -3156,28 +5443,18 @@ function renderPharmaDashboard() {
   renderPharmaOverview();
 }
 
-// Page Rapports (onglet Pharmacies) : tableau détaillé + les 2 graphiques
-// auparavant sur le dashboard (évolution des prestations, reste dû par pharmacie).
+// Page Rapports (onglet Pharmacies) : le détail par pharmacie d'abord, puis un
+// résumé écrit — plus de graphiques.
 function renderPharmaRapport() {
   const aggregates = getPharmacieAggregates(state.pharmaSuiviFilters);
   renderPharmaSuiviTable(aggregates);
-
-  renderBarChart("pharmaBarChart", "pharmaBarTooltip",
-    aggregates.map(p => ({ label: p.pharmacie, value: p.reste })),
-    { color: "var(--blue)", tooltip: it => "<b>" + it.label + "</b> — " + fmtFCFA(it.value) + " restant dû" }
-  );
-
-  const monthBuckets = getPharmaEvolutionByMonth(getPharmaSuiviPeriodFiltered(state.pharmaSuiviFilters));
-  renderBarChart("pharmaEvoChart", "pharmaEvoTooltip",
-    monthBuckets.map(b => ({ label: monthLabel(b), value: b.count, montant: b.montant })),
-    { color: "var(--green)", tooltip: it => "<b>" + it.label + "</b> — " + it.value + " prestation(s)" + (it.montant ? " — " + fmtFCFA(it.montant) : "") }
-  );
+  renderRapportSummary("pharmacie", aggregates);
 }
 
 function populatePharmaFilterOptions() {
   const sel = document.getElementById("pharmaFilterPharmacie");
   const current = sel.value;
-  const names = Array.from(new Set(state.users.filter(u => u.role === "Pharmacie" && u.etablissement).map(u => u.etablissement))).sort();
+  const names = partnerNames("pharmacie");
   sel.innerHTML = '<option value="">Toutes les pharmacies</option>' + names.map(n => '<option value="' + n.replace(/"/g, "&quot;") + '">' + n + "</option>").join("");
   sel.value = current;
 }
@@ -3199,31 +5476,6 @@ document.getElementById("pharmaFilterResetBtn").addEventListener("click", () => 
   document.getElementById("pharmaFilterPharmacie").value = "";
   document.getElementById("pharmaFilterStatut").value = "";
   state.pharmaSuiviFilters = { from: "", to: "", pharmacie: "", statut: "" };
-  renderPharmaRapport();
-});
-
-function openReglementModal(pharmacie) {
-  document.getElementById("reg-pharmacie").value = pharmacie;
-  document.getElementById("reg-montant").value = "";
-  document.getElementById("reg-note").value = "";
-  document.getElementById("reglementModal").hidden = false;
-}
-document.getElementById("closeReglementModal").addEventListener("click", () => { document.getElementById("reglementModal").hidden = true; });
-document.getElementById("cancelReglementModal").addEventListener("click", () => { document.getElementById("reglementModal").hidden = true; });
-document.getElementById("reglementForm").addEventListener("submit", e => {
-  e.preventDefault();
-  const pharmacie = document.getElementById("reg-pharmacie").value;
-  const montant = num(document.getElementById("reg-montant").value);
-  if (!pharmacie || montant <= 0) return;
-  state.reglements.push({
-    id: Date.now(),
-    pharmacie: pharmacie,
-    montant: montant,
-    date: todayFR(),
-    note: document.getElementById("reg-note").value.trim()
-  });
-  saveJSON("pec_reglements", state.reglements);
-  document.getElementById("reglementModal").hidden = true;
   renderPharmaRapport();
 });
 
@@ -3274,9 +5526,8 @@ function getHopitalAggregates(filters) {
   let list = Object.keys(byHopital).map(key => {
     const h = byHopital[key];
     const paye = paidByHopital[key] || 0;
-    const reste = Math.max(0, h.montantTotal - paye);
-    const statut = paye <= 0 ? "Impayé" : (reste <= 0 ? "Payé" : "Partiellement payé");
-    return { hopital: h.hopital, consult: h.consult, exam: h.exam, count: h.consult + h.exam, montantTotal: h.montantTotal, paye: paye, reste: reste, statut: statut };
+    const pr = payProgress(h.montantTotal, paye);
+    return { hopital: h.hopital, consult: h.consult, exam: h.exam, count: h.consult + h.exam, montantTotal: h.montantTotal, paye: paye, reste: pr.reste, avance: pr.avance, pct: pr.pct, statut: pr.statut };
   });
 
   if (f.statut) list = list.filter(p => p.statut === f.statut);
@@ -3284,11 +5535,11 @@ function getHopitalAggregates(filters) {
   return list;
 }
 
-// Nombre d'hôpitaux partenaires enregistrés (MEDECINS, champ etablissement) —
+// Nombre d'hôpitaux partenaires enregistrés (table Structure, type hôpital) —
 // un décompte du réseau, indépendant de la période/du statut de règlement.
 function getPartnerHospitalCount(filters) {
   const f = filters || EMPTY_HOPITAL_FILTERS;
-  const names = new Set(MEDECINS.map(m => m.etablissement).filter(Boolean));
+  const names = new Set(partnerNames("hopital"));
   if (f.hopital) return names.has(f.hopital) ? 1 : 0;
   return names.size;
 }
@@ -3355,27 +5606,26 @@ function renderHopitalSuiviTable(list) {
   body.innerHTML = "";
   empty.hidden = list.length > 0;
 
-  list.forEach(p => {
-    const statutClass = p.statut === "Payé" ? "validee" : (p.statut === "Impayé" ? "inactif" : "attente");
-    const actionCell = p.reste > 0
-      ? '<button type="button" class="btn-secondary btn-sm" data-action="regler-hopital" data-hopital="' + p.hopital.replace(/"/g, "&quot;") + '">Enregistrer un paiement</button>'
-      : '<span class="rx-served-note">Soldé</span>';
+  const info = pageSlice("hospSuivi", list, 8);
+  renderPager("hospSuiviPager", "hospSuivi", info, () => renderHopitalSuiviTable(list), "hôpitaux");
+  info.items.forEach(p => {
     const tr = document.createElement("tr");
     tr.innerHTML =
-      "<td>" + p.hopital + "</td>" +
-      "<td>" + p.consult + "</td>" +
-      "<td>" + p.exam + "</td>" +
-      "<td>" + p.count + "</td>" +
-      "<td>" + fmtFCFA(p.montantTotal) + "</td>" +
-      "<td>" + fmtFCFA(p.paye) + "</td>" +
-      "<td>" + fmtFCFA(p.reste) + "</td>" +
-      '<td><span class="pill ' + statutClass + '">' + p.statut + "</span></td>" +
-      '<td class="row-actions">' + actionCell + "</td>";
+      '<td class="rapport-name">' + escapeHtml(p.hopital) + "</td>" +
+      '<td class="num">' + p.consult + "</td>" +
+      '<td class="num">' + p.exam + "</td>" +
+      '<td class="num"><b>' + p.count + "</b></td>" +
+      '<td class="num">' + fmtFCFA(p.montantTotal) + "</td>" +
+      '<td class="num sum-paid">' + fmtFCFA(p.paye) + "</td>" +
+      '<td class="num ' + payResteClass(p) + '">' + fmtFCFA(p.reste) + "</td>" +
+      "<td>" + payProgressCell(p) + "</td>" +
+      '<td><span class="pill ' + payStatutClass(p.statut) + '">' + p.statut + "</span></td>" +
+      '<td class="row-actions"><button type="button" class="btn-secondary btn-sm" data-action="regler-hopital" data-name="' + attr(p.hopital) + '">Enregistrer un paiement</button></td>';
     body.appendChild(tr);
   });
 
   body.querySelectorAll('[data-action="regler-hopital"]').forEach(btn => {
-    btn.addEventListener("click", () => openReglementHopitalModal(btn.dataset.hopital));
+    btn.addEventListener("click", () => openPaymentModal("hopital", list.find(x => x.hopital === btn.dataset.name)));
   });
 }
 
@@ -3400,25 +5650,18 @@ function renderHopitalDashboard() {
   renderHopitalOverview();
 }
 
-// Page Rapports (onglet Hôpitaux) : tableau détaillé + comparaison
-// consultations/examens par hôpital + reste dû par hôpital (ex-dashboard).
+// Page Rapports (onglet Hôpitaux) : le détail par hôpital d'abord, puis un
+// résumé écrit — plus de graphiques.
 function renderHopitalRapport() {
   const aggregates = getHopitalAggregates(state.hopitalSuiviFilters);
   renderHopitalSuiviTable(aggregates);
-  renderGroupedBarChart("hospCompareChart", "hospCompareTooltip",
-    aggregates.map(p => ({ label: p.hopital, a: p.consult, b: p.exam })),
-    { tooltip: it => "<b>" + it.label + "</b><br>Consultations : " + it.a + "<br>Examens : " + it.b + "<br>Total : " + (it.a + it.b) + " prestation(s)" }
-  );
-  renderBarChart("hospResteChart", "hospResteTooltip",
-    aggregates.map(p => ({ label: p.hopital, value: p.reste })),
-    { color: "var(--blue)", tooltip: it => "<b>" + it.label + "</b> — " + fmtFCFA(it.value) + " restant dû" }
-  );
+  renderRapportSummary("hopital", aggregates);
 }
 
 function populateHospFilterOptions() {
   const sel = document.getElementById("hospFilterHopital");
   const current = sel.value;
-  const names = Array.from(new Set(MEDECINS.map(m => m.etablissement).filter(Boolean))).sort();
+  const names = partnerNames("hopital");
   sel.innerHTML = '<option value="">Tous les hôpitaux</option>' + names.map(n => '<option value="' + n.replace(/"/g, "&quot;") + '">' + n + "</option>").join("");
   sel.value = current;
 
@@ -3452,31 +5695,6 @@ document.getElementById("hospFilterResetBtn").addEventListener("click", () => {
   document.getElementById("hospFilterFonds").value = "";
   document.getElementById("hospFilterMedecin").value = "";
   state.hopitalSuiviFilters = { from: "", to: "", hopital: "", type: "", statut: "", fonds: "", medecin: "" };
-  renderHopitalRapport();
-});
-
-function openReglementHopitalModal(hopital) {
-  document.getElementById("regh-hopital").value = hopital;
-  document.getElementById("regh-montant").value = "";
-  document.getElementById("regh-note").value = "";
-  document.getElementById("reglementHopitalModal").hidden = false;
-}
-document.getElementById("closeReglementHopitalModal").addEventListener("click", () => { document.getElementById("reglementHopitalModal").hidden = true; });
-document.getElementById("cancelReglementHopitalModal").addEventListener("click", () => { document.getElementById("reglementHopitalModal").hidden = true; });
-document.getElementById("reglementHopitalForm").addEventListener("submit", e => {
-  e.preventDefault();
-  const hopital = document.getElementById("regh-hopital").value;
-  const montant = num(document.getElementById("regh-montant").value);
-  if (!hopital || montant <= 0) return;
-  state.reglementsHopitaux.push({
-    id: Date.now(),
-    hopital: hopital,
-    montant: montant,
-    date: todayFR(),
-    note: document.getElementById("regh-note").value.trim()
-  });
-  saveJSON("pec_reglements_hopitaux", state.reglementsHopitaux);
-  document.getElementById("reglementHopitalModal").hidden = true;
   renderHopitalRapport();
 });
 
@@ -3549,7 +5767,7 @@ function renderPharmaOverview() {
 // CNAMGS — imprimé seul, le reste de l'app étant masqué (voir @media print).
 function buildRapportReportHtml(tab) {
   let title, filtersParts, theadHtml, rowsHtml, totals;
-  const kpiLabels = { count: "Établissement(s)", montant: "Montant total", paye: "Montant payé", reste: "Reste à payer" };
+  const kpiLabels = { count: "Établissement(s)", montant: "Montant total dû", paye: "Déjà payé", reste: "Reste à payer", avance: "Avances versées" };
 
   if (tab === "pharmacies") {
     const f = state.pharmaSuiviFilters;
@@ -3565,7 +5783,8 @@ function buildRapportReportHtml(tab) {
       count: list.length,
       montant: list.reduce((a, p) => a + p.montantTotal, 0),
       paye: list.reduce((a, p) => a + p.paye, 0),
-      reste: list.reduce((a, p) => a + p.reste, 0)
+      reste: list.reduce((a, p) => a + p.reste, 0),
+      avance: list.reduce((a, p) => a + p.avance, 0)
     };
     theadHtml = "<tr><th>Pharmacie</th><th>Prestations</th><th>Montant total</th><th>Montant payé</th><th>Reste à payer</th><th>Statut</th></tr>";
     rowsHtml = list.length
@@ -3588,7 +5807,8 @@ function buildRapportReportHtml(tab) {
       count: list.length,
       montant: list.reduce((a, p) => a + p.montantTotal, 0),
       paye: list.reduce((a, p) => a + p.paye, 0),
-      reste: list.reduce((a, p) => a + p.reste, 0)
+      reste: list.reduce((a, p) => a + p.reste, 0),
+      avance: list.reduce((a, p) => a + p.avance, 0)
     };
     theadHtml = "<tr><th>Hôpital</th><th>Consultations</th><th>Examens</th><th>Total</th><th>Montant total</th><th>Montant payé</th><th>Reste à payer</th><th>Statut</th></tr>";
     rowsHtml = list.length
@@ -3612,6 +5832,7 @@ function buildRapportReportHtml(tab) {
       "<div><b>" + fmtFCFA(totals.montant) + "</b><span>" + kpiLabels.montant + "</span></div>" +
       "<div><b>" + fmtFCFA(totals.paye) + "</b><span>" + kpiLabels.paye + "</span></div>" +
       "<div><b>" + fmtFCFA(totals.reste) + "</b><span>" + kpiLabels.reste + "</span></div>" +
+      "<div><b>" + fmtFCFA(totals.avance) + "</b><span>" + kpiLabels.avance + "</span></div>" +
     "</div>" +
     '<table class="report-table"><thead>' + theadHtml + "</thead><tbody>" + rowsHtml + "</tbody></table>" +
     '<div class="report-footer">CNAMGS — Plateforme de gestion du circuit de l’assuré · Rapport généré automatiquement (prototype front-end)</div>' +
@@ -3622,6 +5843,7 @@ document.getElementById("rapportsExportBtn").addEventListener("click", () => {
   const activeChip = document.querySelector("#rapportsTabToggle .chip.active");
   const tab = activeChip ? activeChip.dataset.tab : "hopitaux";
   document.getElementById("reportPrintArea").innerHTML = buildRapportReportHtml(tab);
+  audit("rapport.exporter", { ressourceType: "Rapport", ressourceLibelle: tab === "pharmacies" ? "Pharmacies" : "Hôpitaux", message: "Export PDF / impression" });
   document.body.classList.add("printing-report");
   window.print();
   document.body.classList.remove("printing-report");
@@ -3649,7 +5871,7 @@ function buildHistoriqueReportHtml() {
   const rowsHtml = list.length
     ? list.map(h =>
         "<tr><td>" + h.numero + "</td><td>" + h.date + "</td><td>" + (h.patientNom || h.patient || "") + "</td><td>" +
-        (h.matricule || "") + "</td><td>" + h.type + "</td><td>" + (h.statut || "Validée") + "</td><td>" + fmt(num(h.totalMontant)) + "</td></tr>"
+        formatNag(h.matricule) + "</td><td>" + h.type + "</td><td>" + (h.statut || "Validée") + "</td><td>" + fmt(num(h.totalMontant)) + "</td></tr>"
       ).join("")
     : '<tr><td colspan="7" style="text-align:center">Aucune prise en charge pour ces filtres.</td></tr>';
 
@@ -3673,101 +5895,19 @@ function buildHistoriqueReportHtml() {
 }
 document.getElementById("historiqueExportBtn").addEventListener("click", () => {
   document.getElementById("reportPrintArea").innerHTML = buildHistoriqueReportHtml();
+  audit("rapport.exporter", { ressourceType: "Rapport", ressourceLibelle: "Historique des prises en charge", message: "Export PDF / impression" });
   document.body.classList.add("printing-report");
   window.print();
   document.body.classList.remove("printing-report");
 });
 
 /* ---------------------------------------------------------------------- */
-/* Gestion des permissions (Super Admin) : matrice rôle → vues autorisées  */
+/* Gestion des permissions (administrateur) : uniquement celles du serveur  */
 /* ---------------------------------------------------------------------- */
-
-function landingOptionsHtml(views) {
-  return views.map(v => {
-    const label = (PERMISSION_VIEWS.find(pv => pv.key === v) || {}).label || v;
-    return '<option value="' + v + '">' + label + "</option>";
-  }).join("");
-}
-
-function renderPermissions() {
-  const body = document.getElementById("permissionsBody");
-  body.innerHTML = "";
-
-  Object.keys(state.roleAccess).forEach(role => {
-    const tr = document.createElement("tr");
-
-    if (role === "Super Admin") {
-      tr.innerHTML =
-        "<td><b>" + role + "</b></td>" +
-        PERMISSION_VIEWS.map(() => '<td style="text-align:center"><input type="checkbox" checked disabled /></td>').join("") +
-        '<td><span class="rx-served-note">Tous les accès (non modifiable)</span></td>';
-      body.appendChild(tr);
-      return;
-    }
-
-    const access = state.roleAccess[role];
-    let tds = "<td><b>" + role + "</b></td>";
-    PERMISSION_VIEWS.forEach(v => {
-      const checked = access.views.includes(v.key);
-      tds += '<td style="text-align:center"><input type="checkbox" data-role="' + role + '" data-view="' + v.key + '"' + (checked ? " checked" : "") + " /></td>";
-    });
-    tds += '<td><select class="permissions-landing" data-role="' + role + '">' + landingOptionsHtml(access.views) + "</select></td>";
-    tr.innerHTML = tds;
-    body.appendChild(tr);
-
-    const select = tr.querySelector(".permissions-landing");
-    select.value = access.views.includes(access.landing) ? access.landing : (access.views[0] || "");
-    select.disabled = access.views.length === 0;
-  });
-
-  body.querySelectorAll('input[type="checkbox"][data-role]').forEach(cb => {
-    cb.addEventListener("change", () => {
-      const access = state.roleAccess[cb.dataset.role];
-      const view = cb.dataset.view;
-      if (cb.checked) {
-        if (!access.views.includes(view)) access.views.push(view);
-      } else {
-        access.views = access.views.filter(v => v !== view);
-        if (access.landing === view) access.landing = access.views[0] || "";
-      }
-      const select = cb.closest("tr").querySelector(".permissions-landing");
-      select.innerHTML = landingOptionsHtml(access.views);
-      select.value = access.views.includes(access.landing) ? access.landing : (access.views[0] || "");
-      select.disabled = access.views.length === 0;
-    });
-  });
-
-  body.querySelectorAll("select.permissions-landing").forEach(sel => {
-    sel.addEventListener("change", () => {
-      state.roleAccess[sel.dataset.role].landing = sel.value;
-    });
-  });
-}
-
-document.getElementById("savePermissionsBtn").addEventListener("click", function () {
-  const emptyRole = Object.keys(state.roleAccess).find(role => role !== "Super Admin" && state.roleAccess[role].views.length === 0);
-  if (emptyRole) {
-    alert("Le rôle « " + emptyRole + " » n'a plus aucune vue autorisée. Cochez au moins une vue avant d'enregistrer.");
-    return;
-  }
-  saveJSON("pec_role_access", state.roleAccess);
-  applyRoleAccess(state.currentUser);
-  const label = this.textContent;
-  this.textContent = "Enregistré";
-  setTimeout(() => { this.textContent = label; }, 1500);
-});
-
-document.getElementById("resetPermissionsBtn").addEventListener("click", () => {
-  if (!confirm("Réinitialiser toutes les permissions aux valeurs par défaut ?")) return;
-  state.roleAccess = JSON.parse(JSON.stringify(ROLE_ACCESS_DEFAULT));
-  saveJSON("pec_role_access", state.roleAccess);
-  applyRoleAccess(state.currentUser);
-  renderPermissions();
-});
 
 /* ---------------------------------------------------------------------- */
 /* Permissions API (actions vérifiées côté backend, table Permission /     */
-/* RolePermission) — distinctes du tableau d'affichage ci-dessus.          */
+/* RolePermission).                                                        */
 /* ---------------------------------------------------------------------- */
 
 let apiPermissionsCatalog = []; // [{ id_permission, code, description }] — GET /api/permissions
@@ -3826,7 +5966,7 @@ function renderApiPermissionsTable() {
       action
         // GET /api/permissions/role/{role} : on relit juste ce rôle plutôt
         // que de recharger toute la matrice après chaque bascule.
-        .then(() => apiGetRolePermissions(role))
+        .then(() => { audit("permissions.modifier", { ressourceType: "Permission", ressourceLibelle: role + " · " + code, apres: { role: role, code: code, accorde: wasChecked } }); return apiGetRolePermissions(role); })
         .then(res => {
           apiPermissionsMatrix[role] = Array.from(res.permissions || []);
           cb.disabled = false;
@@ -3850,4 +5990,5 @@ updateClock();
 populatePharmaFilterOptions();
 populateHospFilterOptions();
 buildLoginParticles();
-buildLoginDna();
+// Actualisation de la page : on retrouve la session (et la page) sans repasser par la connexion.
+restoreSession().then(ok => { if (!ok) buildLoginDna(); }).catch(() => { clearSession(); buildLoginDna(); });
