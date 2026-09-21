@@ -1,0 +1,22 @@
+# ===== OPTION 1 : tout en une commande (PowerShell) =====
+cd C:\Users\othni\Documents\gestionPatients-develop
+.\lancer-local.bat
+
+
+# ===== OPTION 2 : à la main, dans 2 terminaux PowerShell =====
+
+# --- Terminal 1 : l'API ---
+cd C:\Users\othni\Documents\gestionPatients-develop\backend
+.\compile.bat
+java -cp "out;lib/*" index
+
+# --- Terminal 2 : le site ---
+cd C:\Users\othni\Documents\gestionPatients-develop\frontend
+python -m http.server 5500 --bind 127.0.0.1
+
+# --- Ouvrir le site ---
+start http://localhost:5500
+
+
+# ===== Arrêter =====
+# Ctrl + C dans chaque terminal

@@ -7,6 +7,14 @@
 
 ---
 
+> **Mise à jour — 20/09/2026 :** [05-integration-front.md](./05-integration-front.md) §13 à §15 : **livraison partielle** en pharmacie (plusieurs pharmacies pour une même ordonnance),
+> **interrupteur des contrôles anti-fraude** du Super Admin, **profils multiples** par utilisateur (ajout / retrait) et **mot de passe temporaire** à changer à la première connexion
+> (migrations `migration_v6_…` et `migration_v7_…` à exécuter).
+>
+> **Nouveau — 19/09/2026 :** [05-integration-front.md](./05-integration-front.md) décrit **toutes les modifications** faites pour brancher le
+> front (NAG en texte, `nature` / `statut`, assuré suspendu, feuilles de soins, règlements, messages, journal d'audit, sécurité, CORS, corrections de bugs)
+> et comment démarrer, configurer et tester. À lire en premier : il complète et, sur certains points (`register`, NAG, `PUT` utilisateur…), remplace ce qui suit.
+
 ## 🎯 Par où commencer ?
 
 ### Vous êtes...

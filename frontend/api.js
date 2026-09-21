@@ -11,9 +11,10 @@
    sinon, en local (localhost) le proxy de développement http://localhost:8090,
    sinon la même origine que le site (reverse proxy qui relaie /api).
 
-   Les routes marquées « (à créer) » n'existent pas encore côté back-end : voir
-   INTEGRATION-BACKEND.md. Tant qu'elles répondent 404 / 405, l'écran concerné
-   affiche « fonction non disponible côté serveur » au lieu de faire semblant.
+   Contrat des routes : INTEGRATION-BACKEND.md et backend/docs/05-integration-front.md.
+   Si une route répond 404 / 405 SANS message du serveur (route absente d'un back-end
+   plus ancien), l'écran concerné affiche « fonction non disponible côté serveur »
+   au lieu de faire semblant.
    ========================================================================== */
 
 const API_BASE_URL = (function () {
@@ -64,7 +65,28 @@ function apiTokenExpired() {
    - Sur 401 (hors connexion) : session effacée et window.onApiUnauthorized()
      appelée (app.js renvoie l'utilisateur vers l'écran de connexion).
    -------------------------------------------------------------------- */
+// Renouvelle le jeton quand il lui reste moins de 10 minutes (POST /api/auth/refresh) : la session
+// dure tant que l'utilisateur travaille ; l'ancien jeton est révoqué côté serveur.
+let apiRefreshing = null;
+async function apiEnsureFreshToken(path) {
+  if (!apiIsConnected() || path === "/api/auth/login" || path === "/api/auth/refresh") return;
+  const exp = apiTokenExpiry();
+  if (exp === null || exp - Date.now() > 10 * 60 * 1000) return;
+  if (!apiRefreshing) {
+    apiRefreshing = (async () => {
+      try {
+        const d = await apiFetch("POST", "/api/auth/refresh");
+        apiSession = { token: d.token, user: d.user || apiSession.user };
+        apiSaveSession(apiSession);
+      } catch (e) { /* un 401 est traité par apiFetch ; une panne réseau sera revue à la requête suivante */ }
+      finally { apiRefreshing = null; }
+    })();
+  }
+  await apiRefreshing;
+}
+
 async function apiFetch(method, path, body) {
+  await apiEnsureFreshToken(path);
   const headers = { "Accept": "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (apiSession && apiSession.token) headers["Authorization"] = "Bearer " + apiSession.token;
@@ -104,8 +126,11 @@ async function apiFetch(method, path, body) {
       : "Erreur du serveur (" + res.status + ")"));
     err.status = res.status;
     err.body = data;
-    err.unavailable = missing;
-    if (res.status === 401 && path !== "/api/auth/login") {
+    // « indisponible » = la route n'existe pas (le serveur ne renvoie pas de message JSON) ;
+    // un 404 avec message (« Feuille introuvable ») est une réponse normale du serveur.
+    err.unavailable = missing && !(data && data.error);
+    // (un 401 sur la connexion ou sur le changement de mot de passe = « mot de passe incorrect », pas une session expirée)
+    if (res.status === 401 && path !== "/api/auth/login" && path !== "/api/auth/change-password") {
       apiSession = null;
       apiSaveSession(null);
       if (typeof window.onApiUnauthorized === "function") window.onApiUnauthorized(err);
@@ -126,25 +151,20 @@ function apiQuery(params) {
 /* ---- Types de données du MPD (backend/MPD/gestionpatient.sql, v4.0) ------------
    Un « patient » est un assuré, présent en base : le front ne le crée pas, il
    ne fait que le rechercher.
-   - matricule_nag : INT, 10 chiffres exactement, de 1 000 000 000 à 2 147 483 647
-     (CK_Patient_nag_10). Affiché en groupes 3-3-3-1.
-   - nature_assure (À AJOUTER côté base) : 1 assuré principal, 2 ayant droit, 3 conjoint.
-   - statut (À AJOUTER côté base) : « actif » ou « suspendu ». En attendant, le BIT
-     statut_assure est lu ainsi : true = actif, false = suspendu.
+   - matricule_nag : NVARCHAR(20), 10 chiffres exactement (CK_Patient_nag_10), sans plage
+     numérique (2345678901 est valide). Affiché en groupes 3-3-3-1.
+   - nature : NVARCHAR(50) « Assuré principal » | « Ayant droit » | « Conjoint » ; l'API
+     renvoie aussi nature_assure (1, 2 ou 3).
+   - statut : « actif » ou « suspendu », porté par le BIT statut_assure (true = actif,
+     false = suspendu) ; l'API renvoie aussi statut.
    - fonds : TINYINT 1 à 4.  sex : 'M' ou 'F'.  date_naissance : DATE (AAAA-MM-JJ).
    -------------------------------------------------------------------------- */
-const NAG_MIN = 1000000000;
-const NAG_MAX = 2147483647;
-
 // Ne garde que les chiffres, 10 au maximum : le matricule ne peut pas dépasser 10 chiffres.
 function nagDigits(v) {
   return String(v == null ? "" : v).replace(/\D/g, "").slice(0, 10);
 }
 function isValidNag(v) {
-  const d = String(v == null ? "" : v);
-  if (!/^\d{10}$/.test(d)) return false;
-  const n = parseInt(d, 10);
-  return n >= NAG_MIN && n <= NAG_MAX;
+  return /^\d{10}$/.test(String(v == null ? "" : v));
 }
 // Affichage 3-3-3-1 : 1234567890 → « 123 456 789 0 ».
 function formatNag(v) {
@@ -166,6 +186,12 @@ function attachNagMask(input) {
 
 const NATURE_ASSURE_LABELS = { 1: "Assuré principal", 2: "Ayant droit", 3: "Conjoint" };
 function natureAssureCode(v) {
+  if (typeof v === "string" && isNaN(parseInt(v, 10))) {
+    if (/princip/i.test(v)) return 1;
+    if (/ayant/i.test(v)) return 2;
+    if (/conjoint/i.test(v)) return 3;
+    return 0;
+  }
   const n = parseInt(v, 10);
   return n >= 1 && n <= 3 ? n : 0;
 }
@@ -191,8 +217,10 @@ function statutAssureLabel(v) {
    POST /api/auth/register { username, mot_de_passe, nom, email, telephone, role, id_structure } -> Utilisateur (201)
    GET  /api/auth/me       (à créer) -> { user, permissions: ["patient.lire", …] }
    -------------------------------------------------------------------- */
-async function apiLogin(username, password) {
-  const data = await apiFetch("POST", "/api/auth/login", { username: username, mot_de_passe: password });
+async function apiLogin(username, password, profil) {
+  const body = { username: username, mot_de_passe: password };
+  if (profil) body.profil = profil;   // ouvrir la session avec un profil précis du compte
+  const data = await apiFetch("POST", "/api/auth/login", body);
   apiSession = { token: data.token, user: data.user };
   apiSaveSession(apiSession);
   return apiSession;
@@ -205,9 +233,31 @@ function apiLogout() {
   apiSaveSession(null);
 }
 function apiRegister(payload) { return apiFetch("POST", "/api/auth/register", payload); }
-function apiChangePassword(ancien, nouveau) { return apiFetch("PUT", "/api/auth/change-password", { ancien: ancien, nouveau: nouveau }); }
+// PUT /api/auth/change-password : le serveur invalide les anciens jetons du compte et en renvoie un neuf, adopté ici
+// (la personne reste connectée). Mot de passe temporaire (compte créé ou réinitialisé par un administrateur) :
+// c'est ce changement qui ouvre le reste de l'application.
+async function apiChangePassword(ancien, nouveau) {
+  const d = await apiFetch("PUT", "/api/auth/change-password", { ancien: ancien, nouveau: nouveau });
+  if (d && d.token) { apiSession = { token: d.token, user: d.user || (apiSession && apiSession.user) }; apiSaveSession(apiSession); }
+  return d;
+}
 function apiResetPassword(idUtilisateur, nouveau) { return apiFetch("POST", "/api/auth/reset-password", { id_utilisateur: idUtilisateur, nouveau: nouveau }); }
 function apiMe() { return apiFetch("GET", "/api/auth/me"); }
+// POST /api/auth/profil { profil } : change le PROFIL ACTIF de la session (le compte doit le porter) → nouveau jeton.
+async function apiSwitchProfil(profil) {
+  const d = await apiFetch("POST", "/api/auth/profil", { profil: profil });
+  apiSession = { token: d.token, user: d.user };
+  apiSaveSession(apiSession);
+  return apiSession;
+}
+
+/* ---- Contrôles anti-fraude (Super Admin) — permission controle.gerer ----
+   GET /api/parametres/controles → { actif, modifie_par, modifie_le }
+   PUT /api/parametres/controles { actif: true|false } : désactivé = mode supervision (l'administrateur peut
+       réaliser toutes les étapes du circuit) ; les autres rôles restent soumis aux contrôles habituels.
+   -------------------------------------------------------------------- */
+function apiGetControles() { return apiFetch("GET", "/api/parametres/controles"); }
+function apiSetControles(actif) { return apiFetch("PUT", "/api/parametres/controles", { actif: !!actif }); }
 
 /* ---- Utilisateurs (module 03) et structures ------------------------------ */
 function apiListUtilisateurs() { return apiFetch("GET", "/api/utilisateurs"); }
@@ -215,7 +265,14 @@ function apiGetUtilisateur(id) { return apiFetch("GET", "/api/utilisateurs/" + i
 function apiUpdateUtilisateur(id, payload) { return apiFetch("PUT", "/api/utilisateurs/" + id, payload); }
 function apiDeleteUtilisateur(id) { return apiFetch("DELETE", "/api/utilisateurs/" + id); }
 function apiSetUtilisateurActif(id, actif) { return apiFetch("PATCH", "/api/utilisateurs/" + id + "/actif", { actif: actif }); }
+// Profils d'un compte (un profil = un rôle = un ensemble d'interfaces) — permission utilisateur.modifier
+function apiAddProfil(id, profil) { return apiFetch("POST", "/api/utilisateurs/" + id + "/profils", { profil: profil }); }
+function apiRemoveProfil(id, profil) { return apiFetch("DELETE", "/api/utilisateurs/" + id + "/profils/" + encodeURIComponent(profil)); }
+function apiSetProfilPrincipal(id, profil) { return apiFetch("PUT", "/api/utilisateurs/" + id + "/profils/principal", { profil: profil }); }
 function apiListStructures(type) { return apiFetch("GET", "/api/structures" + apiQuery({ type: type })); }
+function apiCreateStructure(payload) { return apiFetch("POST", "/api/structures", payload); }
+function apiUpdateStructure(id, payload) { return apiFetch("PUT", "/api/structures/" + id, payload); }
+function apiDeleteStructure(id) { return apiFetch("DELETE", "/api/structures/" + id); }
 
 /* ---- Permissions (module 04) ---------------------------------------------- */
 function apiListPermissions() { return apiFetch("GET", "/api/permissions"); }
@@ -242,20 +299,21 @@ function apiListConsultations(idPatient) { return apiFetch("GET", "/api/consulta
 function apiListExamensPatient(idPatient) { return apiFetch("GET", "/api/examens" + apiQuery({ id_patient: idPatient })); }
 
 // Patient.photo_url : chemin stocké en base (ex. « \backend\media\patients\patient_101.jpg »).
-// Le back-end Java ne sert pas de fichiers : le proxy / reverse proxy les expose sous /media/<chemin>.
+// Le back-end sert les photos sous /media/<chemin> ; l'accès est protégé : le jeton est joint à l'adresse
+// (une balise <img> ne peut pas envoyer d'en-tête Authorization).
 function toPhotoUrl(rawPath) {
   if (!rawPath) return "";
   const normalized = rawPath.replace(/\\/g, "/");
   const marker = "backend/media/";
   const idx = normalized.toLowerCase().indexOf(marker);
   const relative = idx >= 0 ? normalized.slice(idx + marker.length) : normalized.replace(/^\/+/, "");
-  return API_BASE_URL + "/media/" + relative;
+  return API_BASE_URL + "/media/" + relative + (apiSession && apiSession.token ? "?token=" + encodeURIComponent(apiSession.token) : "");
 }
 
 // Patient backend → forme utilisée par les écrans (voir showAssureCard() dans app.js).
 function mapBackendPatient(p) {
   if (!p) return null;
-  const natureCode = natureAssureCode(p.nature_assure);
+  const natureCode = natureAssureCode(p.nature_assure != null ? p.nature_assure : p.nature);
   return {
     idPatient: p.id_patient,
     matricule: p.matricule_nag != null ? String(p.matricule_nag) : "",
@@ -292,6 +350,16 @@ function apiCatalogueMedicaments() { return apiFetch("GET", "/api/catalogue/medi
 function apiListFeuilles(params) { return apiFetch("GET", "/api/feuilles" + apiQuery(params)); }
 function apiCreateFeuille(feuille) { return apiFetch("POST", "/api/feuilles", feuille); }
 function apiUpdateFeuille(serverId, feuille) { return apiFetch("PUT", "/api/feuilles/" + serverId, feuille); }
+// Délivrance (pharmacie) : sert TOUT ou PARTIE de chaque ligne indiquée. servis = [{ idx, quantite, prixUnitaire }] ;
+// nbLignes = nombre de lignes de l'ordonnance (le serveur lit les lignes par rang). Le serveur vérifie 1 ≤ quantité ≤
+// reste à servir (toutes pharmacies confondues), recalcule les montants et renvoie la feuille telle que la base la
+// connaît : quantité servie, statut de chaque ligne et livraisons (prix, montants, pharmacie, pharmacien, date).
+function apiServirLignes(serverId, nbLignes, servis) {
+  const ordonnance = [];
+  for (let i = 0; i < nbLignes; i++) ordonnance.push({});
+  servis.forEach(s => { ordonnance[s.idx] = { aServir: { quantite: s.quantite, prixUnitaire: String(s.prixUnitaire) } }; });
+  return apiFetch("PUT", "/api/feuilles/" + serverId, { ordonnance: ordonnance });
+}
 function apiDeleteFeuille(serverId) { return apiFetch("DELETE", "/api/feuilles/" + serverId); }
 function apiFeuillesCompteurs() { return apiFetch("GET", "/api/feuilles/compteurs"); }
 
@@ -339,7 +407,7 @@ const API_ROLE_TO_FRONT_ROLE = {
   directeur_structure: "DG",
   medecin: "Médecin",
   agent_accueil: "Agent hospitalier",
-  pharmacien: "Pharmacie",
+  pharmacien: "Pharmacien",
   caissier_structure: "Caisse"
 };
 const FRONT_ROLE_TO_API_ROLE = {
@@ -347,17 +415,20 @@ const FRONT_ROLE_TO_API_ROLE = {
   "DG": "directeur_structure",
   "Médecin": "medecin",
   "Agent hospitalier": "agent_accueil",
-  "Pharmacie": "pharmacien",
+  "Pharmacien": "pharmacien",
   "Caisse": "caissier_structure"
 };
 
-// Utilisateur backend → forme des écrans. Le backend a un seul champ « nom » (nom complet) :
-// on sépare sur le premier espace (approximation ; un champ prénom séparé est demandé au back-end).
+// Utilisateur backend → forme des écrans. Le serveur a un champ « prenom » ; pour un ancien compte
+// qui n'en a pas, « nom » contient le nom complet et on le sépare sur le premier espace.
 function mapBackendUser(u) {
   if (!u) return null;
-  const parts = (u.nom || "").trim().split(" ");
-  const prenom = parts.shift() || "";
-  const nom = parts.join(" ");
+  let prenom = (u.prenom || "").trim(), nom = (u.nom || "").trim();
+  if (!prenom && nom.indexOf(" ") > 0) {
+    const parts = nom.split(" ");
+    prenom = parts.shift();
+    nom = parts.join(" ");
+  }
   return {
     id: u.id_utilisateur,
     apiId: u.id_utilisateur,
@@ -365,8 +436,14 @@ function mapBackendUser(u) {
     nom: nom,
     prenom: prenom,
     email: u.email || "",
-    role: API_ROLE_TO_FRONT_ROLE[u.role] || u.role,
+    role: API_ROLE_TO_FRONT_ROLE[u.role] || u.role,   // profil ACTIF de la session (profil principal dans une liste de comptes)
     apiRole: u.role,
+    // Tous les profils du compte (principal en premier) : { api, label }
+    profils: (Array.isArray(u.profils) && u.profils.length ? u.profils : [u.role]).map(p => ({ api: p, label: API_ROLE_TO_FRONT_ROLE[p] || p })),
+    profilPrincipal: u.profil_principal || u.role,
+    doitChangerMdp: !!u.doit_changer_mdp,
+    codePraticien: u.code_praticien || "",
+    typePraticien: u.type_praticien || "",
     structure: u.structure_nom || (u.id_structure ? ("Structure #" + u.id_structure) : ""),
     etablissement: u.structure_nom || "",
     idStructure: u.id_structure,

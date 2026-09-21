@@ -1,4 +1,10 @@
 -- =====================================================================
+-- OBSOLETE : ce script convertit matricule_nag en INT. Le NAG est désormais un
+-- NVARCHAR(20) de 10 chiffres : NE PLUS L'EXÉCUTER (il viderait tous les NAG et
+-- rétablirait une plage INT). La mise à niveau de la colonne est faite par la
+-- section 13 bis de gestionpatient.sql (v4.1).
+-- =====================================================================
+-- =====================================================================
 -- Migration : matricule_nag NVARCHAR → INT (chiffres uniquement)
 -- Base : gestionpatient
 -- =====================================================================

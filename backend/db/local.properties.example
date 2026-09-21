@@ -1,0 +1,21 @@
+# ============================================================================
+# Réglages LOCAUX de l'API — modèle.
+# Copiez ce fichier en « local.properties » (même dossier) et adaptez-le à votre poste.
+# local.properties n'est JAMAIS versionné (.gitignore) : c'est ici, et non dans le code, que va le mot de passe SQL.
+#
+# Priorité : variable d'environnement > option -D > ce fichier > valeur par défaut du code.
+# Pas d'antislash dans les valeurs : pour une instance nommée, utilisez « instanceName= ».
+# ============================================================================
+
+# Base de données SQL Server (ici : instance SQLEXPRESS, authentification SQL)
+PEC_DB_URL=jdbc:sqlserver://localhost;instanceName=SQLEXPRESS;databaseName=gestionpatient;encrypt=true;trustServerCertificate=true
+PEC_DB_USER=sa
+PEC_DB_PASSWORD=mot_de_passe_sql_a_remplacer
+
+# Port de l'API (8080 par défaut ; libre à choisir si un autre programme l'occupe, ex. Apache/WAMP)
+PEC_PORT=8081
+
+# Facultatifs (à définir en production)
+# PEC_JWT_SECRET=une-longue-phrase-secrete-d-au-moins-32-caracteres
+# PEC_JWT_MINUTES=60
+# PEC_CORS_ORIGINS=https://pec.exemple.ga

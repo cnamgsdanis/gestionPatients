@@ -97,7 +97,6 @@
  
   <div class="sidebar-backdrop" id="sidebarBackdrop" hidden></div>
   <aside class="sidebar" id="sidebar" aria-label="Navigation principale">
-    <div class="sidebar-aurora" aria-hidden="true"></div>
     <div class="sidebar-top">
       <button type="button" class="sidebar-brand" id="sidebarBrandBtn">
         <div class="mark logo-mark"><img src="logo.jpg" alt="GPC" /></div>
@@ -154,6 +153,10 @@
         <span class="nav-ico"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><circle cx="18" cy="8.5" r="2.4"/><path d="M16 14.3c2.8.4 4.7 2.4 4.7 5.7"/></svg></span>
         <span class="nav-txt">Gestion des utilisateurs</span>
       </button>
+      <button type="button" class="nav-item" data-view="structures" data-tip="Structures">
+        <span class="nav-ico"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21V8l8-4 8 4v13"/><path d="M9 21v-5h6v5"/><path d="M12 8.5v3M10.5 10h3"/></svg></span>
+        <span class="nav-txt">Structures</span>
+      </button>
       <button type="button" class="nav-item" data-view="permissions" data-tip="Gestion des permissions">
         <span class="nav-ico"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>
         <span class="nav-txt">Gestion des permissions</span>
@@ -164,18 +167,6 @@
       </button>
       </div>
     </nav>
-
-    <div class="pulse-card" id="pulseCard" aria-label="Pouls du circuit">
-      <div class="pulse-head"><span class="pulse-dot" aria-hidden="true"></span><span class="pulse-title">Pouls du circuit</span></div>
-      <svg class="pulse-ekg" viewBox="0 0 200 34" preserveAspectRatio="none" aria-hidden="true">
-        <path class="base" pathLength="200" d="M0,17 L48,17 L56,17 L62,5 L70,29 L77,2 L84,17 L124,17 L132,17 L138,8 L145,26 L151,17 L200,17" />
-        <path class="beat" pathLength="200" d="M0,17 L48,17 L56,17 L62,5 L70,29 L77,2 L84,17 L124,17 L132,17 L138,8 L145,26 L151,17 L200,17" />
-      </svg>
-      <div class="pulse-stats">
-        <button type="button" class="pulse-stat" data-goto="medecin" data-tip="Patients chez le médecin"><b id="pulseWaiting">0</b><span>chez le médecin</span></button>
-        <button type="button" class="pulse-stat" data-goto="pharmacie" data-tip="Ordonnances à servir"><b id="pulseRx">0</b><span>à servir</span></button>
-      </div>
-    </div>
 
     <div class="sidebar-user" id="sidebarUser">
       <div class="avatar" aria-hidden="true">AN</div>
@@ -210,24 +201,22 @@
       <div class="topbar-spacer"></div>
 
       <div class="topbar-actions" id="topbarActions">
+        <!-- Super Admin : interrupteur des contrôles anti-fraude du serveur (voir backend/docs/05-integration-front.md, §13) -->
+        <button type="button" class="controls-pill" id="controlsBtn" role="switch" aria-checked="true" aria-label="Contrôles anti-fraude" title="Contrôles anti-fraude du serveur" hidden>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z"/><path class="cp-check" d="M8.5 12l2.5 2.5 4.5-5"/></svg>
+          <span class="cp-label" id="controlsBtnLabel">Contrôles actifs</span>
+          <span class="cp-switch" aria-hidden="true"><i></i></span>
+        </button>
         <button type="button" class="btn-secondary btn-sm" id="topbarHistoryBtn" title="Historique des visites" hidden>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
           <span class="tb-label">Historique des visites</span>
         </button>
       </div>
 
-      <button type="button" class="topbar-search" id="topbarSearchBtn" aria-label="Aller à… (Ctrl + K)" title="Aller à… (Ctrl + K)">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-        <span class="ts-label">Aller à…</span>
-        <kbd>Ctrl K</kbd>
-      </button>
-
       <div class="topbar-greet" id="topbarGreet" aria-live="polite">
         <span class="greet-ico" id="greetIco" aria-hidden="true"></span>
         <span class="greet-text" id="greetText">Bonjour</span>
       </div>
-
-      <div class="topbar-clock" id="topbarClock" aria-hidden="true"><span class="clock-time" id="clockTime"></span><span class="clock-date" id="clockDate"></span></div>
 
       <div class="notif-menu" id="notifMenu">
         <button type="button" class="notif-bell" id="notifBellBtn" aria-haspopup="true" aria-expanded="false" aria-label="Notifications" title="Notifications">
@@ -274,10 +263,18 @@
               <div class="role">Super Admin</div>
             </div>
           </div>
+          <div class="user-dropdown-clock" role="timer" aria-label="Date et heure">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            <div><span class="clock-time" id="clockTime"></span><span class="clock-date" id="clockDate"></span></div>
+          </div>
+          <div class="user-dropdown-profiles" id="userMenuProfiles" hidden>
+            <div class="udp-title">Profil actif</div>
+            <div id="userMenuProfilesList"></div>
+          </div>
           <div class="user-dropdown-sep"></div>
           <button type="button" class="user-dropdown-item" id="userMenuProfil">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
-            <span>Mon profil</span>
+            <span>Mon compte</span>
           </button>
           <button type="button" class="user-dropdown-item" id="userMenuParams">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V19a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H5a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H11a1.7 1.7 0 0 0 1-1.5V5a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V11a1.7 1.7 0 0 0 1.5 1H19a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
@@ -301,6 +298,18 @@
       </div>
       <div class="topbar-progress" id="topbarProgress" aria-hidden="true"></div>
     </header>
+
+    <div class="controls-banner" id="controlsBanner" role="status" hidden>
+      <span class="cb-ico" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z"/><path d="M9.5 9.5l5 5M14.5 9.5l-5 5"/></svg></span>
+      <div class="cb-text">
+        <b>Mode supervision — contrôles anti-fraude désactivés</b>
+        <span>Vous pouvez réaliser toutes les étapes du circuit (accueil, médecin, pharmacie). Chaque action est tracée au journal.</span>
+      </div>
+      <button type="button" class="btn-secondary btn-sm" id="controlsBannerBtn">Réactiver les contrôles</button>
+      <button type="button" class="cb-close" id="controlsBannerClose" aria-label="Masquer ce bandeau" title="Masquer (le bouton de l'en-tête reste orange tant que les contrôles sont désactivés)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
 
     <div class="content">
  
@@ -331,10 +340,6 @@
           <div class="kpi-card accent-c">
             <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div>
             <div class="kpi-body"><div class="kpi-num" id="pharmaStatMontant">0 FCFA</div><div class="kpi-lbl">Montant total des prestations</div></div>
-          </div>
-          <div class="kpi-card accent-f">
-            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></div>
-            <div class="kpi-body"><div class="kpi-num" id="pharmaStatPaye">0 FCFA</div><div class="kpi-lbl">Montant déjà payé</div></div>
           </div>
           <div class="kpi-card accent-e">
             <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
@@ -369,10 +374,6 @@
           <div class="kpi-card accent-c">
             <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div>
             <div class="kpi-body"><div class="kpi-num" id="hospStatMontant">0 FCFA</div><div class="kpi-lbl">Montant total des prestations</div></div>
-          </div>
-          <div class="kpi-card accent-f">
-            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></div>
-            <div class="kpi-body"><div class="kpi-num" id="hospStatPaye">0 FCFA</div><div class="kpi-lbl">Montant déjà payé</div></div>
           </div>
           <div class="kpi-card accent-e">
             <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
@@ -744,7 +745,7 @@
             </div>
             <div class="ph-hero-text">
               <h1>Espace Pharmacien</h1>
-              <p>Cherchez le patient, choisissez la prestation, saisissez le prix unitaire : la part de la CNAMGS et celle du patient se calculent toutes seules.</p>
+              <p>Cherchez le patient, choisissez la prestation, saisissez le prix unitaire puis la quantité que vous pouvez servir : la part de la CNAMGS et celle du patient se calculent toutes seules. En rupture de stock, servez une partie : le patient ira chercher le reste dans une autre pharmacie.</p>
             </div>
           </div>
           <div class="ph-kpis" aria-label="Activité du jour">
@@ -1279,7 +1280,7 @@
           <div class="page-hero-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><circle cx="18" cy="8.5" r="2.4"/><path d="M16 14.3c2.8.4 4.7 2.4 4.7 5.7"/></svg></div>
           <div class="page-hero-text">
             <h1>Gestion des utilisateurs</h1>
-            <p>Comptes de la plateforme — rôles, structures de rattachement et statuts d'accès.</p>
+            <p>Comptes de la plateforme — profils (ensembles d'interfaces), structure de rattachement et statut d'accès. Les structures se gèrent dans la page « Structures ».</p>
           </div>
         </div>
         <div class="card">
@@ -1294,7 +1295,7 @@
                 <tr>
                   <th>Nom</th>
                   <th>Email</th>
-                  <th>Rôle</th>
+                  <th>Profils</th>
                   <th>Structure</th>
                   <th>Date de création</th>
                   <th>Statut</th>
@@ -1309,13 +1310,80 @@
         </div>
       </section>
 
+      <!-- ---------------- STRUCTURES (hôpitaux, pharmacies, administration) ---------------- -->
+      <section class="view" id="view-structures" hidden>
+        <div class="page-hero">
+          <div class="page-hero-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21V8l8-4 8 4v13"/><path d="M9 21v-5h6v5"/><path d="M12 8.5v3M10.5 10h3"/></svg></div>
+          <div class="page-hero-text">
+            <h1>Structures</h1>
+            <p>Hôpitaux et pharmacies partenaires (et administration) — ajoutez-les ici : les comptes, les prestations et les règlements y sont rattachés.</p>
+          </div>
+        </div>
+
+        <div class="kpi-grid struct-kpis">
+          <div class="kpi-card accent-b">
+            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21V7l8-4 8 4v14"/><path d="M9 21v-6h6v6"/><path d="M9 10h.01M15 10h.01M9 14h.01M15 14h.01"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num" id="structStatHopital">0</div><div class="kpi-lbl">Hôpitaux</div></div>
+          </div>
+          <div class="kpi-card accent-a">
+            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8v8"/><path d="M8 12h8"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num" id="structStatPharmacie">0</div><div class="kpi-lbl">Pharmacies</div></div>
+          </div>
+          <div class="kpi-card accent-d">
+            <div class="kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10l9-6 9 6"/><path d="M5 10v9M9.5 10v9M14.5 10v9M19 10v9"/><path d="M3 20h18"/></svg></div>
+            <div class="kpi-body"><div class="kpi-num" id="structStatAdmin">0</div><div class="kpi-lbl">Administration</div></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>Liste des structures <span class="pill actif" id="structuresCount" style="margin-left:8px;vertical-align:middle">—</span></h3>
+            <button type="button" class="btn-primary" id="addStructureBtn">+ Ajouter une structure</button>
+          </div>
+          <div class="card-body" style="padding-bottom:4px">
+            <div class="filters-row">
+              <div class="field">
+                <label for="structSearch">Recherche</label>
+                <input type="text" id="structSearch" placeholder="Nom ou adresse" autocomplete="off" />
+              </div>
+              <div class="field">
+                <label id="structTypeLabel">Type</label>
+                <div class="chip-row" id="structTypeToggle" role="group" aria-labelledby="structTypeLabel">
+                  <button type="button" class="chip active" data-type="">Toutes</button>
+                  <button type="button" class="chip" data-type="hopital">Hôpitaux</button>
+                  <button type="button" class="chip" data-type="pharmacie">Pharmacies</button>
+                  <button type="button" class="chip" data-type="administration">Administration</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="card-body" style="padding:0">
+            <div class="table-scroll">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Raison sociale</th>
+                  <th>Type</th>
+                  <th>Adresse</th>
+                  <th class="num">Comptes</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="structuresBody"></tbody>
+            </table>
+            </div>
+          </div>
+          <div class="pager-host" id="structuresPager"></div>
+        </div>
+      </section>
+
       <!-- ---------------- GESTION DES PERMISSIONS ---------------- -->
       <section class="view" id="view-permissions" hidden>
         <div class="page-hero">
           <div class="page-hero-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>
           <div class="page-hero-text">
             <h1>Gestion des permissions</h1>
-            <p>Ce que chaque rôle a le droit de faire — vérifié par le serveur à chaque action, et non par le navigateur.</p>
+            <p>Ce que chaque profil a le droit de faire — vérifié par le serveur à chaque action, et non par le navigateur.</p>
           </div>
         </div>
 
@@ -1335,7 +1403,7 @@
           </div>
           <div class="card-body" style="padding:0; overflow-x:auto">
             <table class="data-table no-stack" id="apiPermissionsTable">
-              <thead><tr id="apiPermissionsHead"><th>Rôle</th></tr></thead>
+              <thead><tr id="apiPermissionsHead"><th>Profil</th></tr></thead>
               <tbody id="apiPermissionsBody"></tbody>
             </table>
           </div>
@@ -1392,8 +1460,8 @@
                 <input type="text" id="logFilterSearch" placeholder="Nom ou e-mail" />
               </div>
               <div class="field">
-                <label for="logFilterRole">Rôle</label>
-                <select id="logFilterRole"><option value="">Tous les rôles</option></select>
+                <label for="logFilterRole">Profil</label>
+                <select id="logFilterRole"><option value="">Tous les profils</option></select>
               </div>
               <div class="field">
                 <label for="logFilterStatut">Résultat</label>
@@ -1420,7 +1488,7 @@
               <thead>
                 <tr>
                   <th>Utilisateur</th>
-                  <th>Rôle</th>
+                  <th>Profil</th>
                   <th>Date</th>
                   <th>Heure</th>
                   <th>Résultat</th>
@@ -1547,7 +1615,7 @@
                 <li><b>Assurés</b> — nombreux dossiers consultés en peu de temps, recherches d'ordonnance sans résultat.</li>
                 <li><b>Pharmacie</b> — prix unitaire très éloigné du tarif de référence, même personne qui valide la feuille et sert l'ordonnance.</li>
                 <li><b>Argent</b> — paiement ou avance d'un montant élevé.</li>
-                <li><b>Administration</b> — création, suppression ou désactivation de comptes, changement de rôle ou de permissions, réinitialisation de mot de passe.</li>
+                <li><b>Administration</b> — création, suppression ou désactivation de comptes, changement de profil ou de permissions, réinitialisation de mot de passe.</li>
                 <li><b>Volume</b> — exports en rafale, rythme d'actions impossible à la main.</li>
               </ul>
               <p class="hint">Chaque règle ajoute des points au <b>score de risque</b> de l'événement (0–100). À partir de 25 il apparaît ici ; à partir de 50 l'administrateur reçoit une notification de sécurité ; à 80 elle est urgente. Les seuils se règlent dans <code>AUDIT_RULES</code> (app.js).</p>
@@ -1606,7 +1674,7 @@
 <div class="modal-overlay" id="profilModal" hidden>
   <div class="modal">
     <div class="modal-head">
-      <h3>Mon profil</h3>
+      <h3>Mon compte</h3>
       <button class="close-x" id="closeProfilModal">&times;</button>
     </div>
     <form class="modal-body" id="profilForm">
@@ -1619,14 +1687,14 @@
         <input type="email" id="profil-email" disabled />
       </div>
       <div class="field">
-        <label>Rôle</label>
+        <label>Profil actif</label>
         <input type="text" id="profil-role" disabled />
       </div>
       <div class="field" id="profil-etab-wrap" hidden>
         <label>Établissement</label>
         <input type="text" id="profil-etab" disabled />
       </div>
-      <p class="hint">L'e-mail et le rôle sont gérés par un administrateur (voir Gestion des utilisateurs).</p>
+      <p class="hint">L'e-mail et les profils sont gérés par un administrateur (voir Gestion des utilisateurs).</p>
 
       <div id="profil-password-wrap" hidden>
         <hr style="border:none;border-top:1px solid var(--border);margin:14px 0" />
@@ -1657,6 +1725,7 @@
     </div>
     <form class="modal-body" id="resetPasswordForm">
       <p class="hint" style="margin-top:0" id="resetPasswordTarget">Utilisateur : —</p>
+      <p class="hint" style="margin-top:0">Ce mot de passe est temporaire : l'utilisateur devra en choisir un nouveau à sa prochaine connexion.</p>
       <div class="field">
         <label for="rp-nouveau">Nouveau mot de passe</label>
         <input type="password" id="rp-nouveau" required minlength="4" autocomplete="new-password" />
@@ -1692,23 +1761,50 @@
         <p class="hint" id="u-username-hint" style="margin-bottom:0" hidden>Le nom d'utilisateur d'un compte existant ne peut pas être modifié ici.</p>
       </div>
       <div class="field">
-        <label>Rôle</label>
+        <label for="u-role">Profil principal</label>
         <select id="u-role">
           <option>Super Admin</option>
           <option>DG</option>
           <option>Médecin</option>
           <option>Agent hospitalier</option>
-          <option>Pharmacie</option>
+          <option>Pharmacien</option>
           <option>Caisse</option>
         </select>
+        <p class="hint" style="margin-bottom:0">Un profil est un ensemble d'interfaces : c'est celui que le compte ouvre par défaut à la connexion.</p>
+      </div>
+      <div class="field" id="u-extra-wrap">
+        <label>Profils supplémentaires <span class="opt">(facultatif)</span></label>
+        <div class="profil-checks" id="u-extra-profils"></div>
+      </div>
+      <div class="field" id="u-profils-edit" hidden>
+        <label>Profils du compte</label>
+        <div class="u-profils-edit-row">
+          <div class="profil-chips" id="u-profils-edit-chips"></div>
+          <button type="button" class="btn-secondary btn-sm" id="u-profils-manage">Gérer les profils</button>
+        </div>
+        <p class="hint" style="margin-bottom:0">Ajout, retrait et profil principal se règlent dans la fenêtre « Profils » : les changements y sont enregistrés tout de suite.</p>
       </div>
       <div class="field">
-        <label>Structure</label>
+        <label for="u-structure">Structure</label>
         <select id="u-structure"><option value="">— Choisir une structure —</option></select>
+        <p class="hint" style="margin-bottom:0">Structure absente de la liste ? <button type="button" class="link-inline" id="u-goto-structures">Ajoutez-la dans « Structures »</button>.</p>
+      </div>
+      <div class="field" id="u-code-field" hidden>
+        <label>Code praticien</label>
+        <input type="text" id="u-code" maxlength="30" placeholder="ex. MED-00456" />
+      </div>
+      <div class="field" id="u-type-field" hidden>
+        <label>Type de praticien</label>
+        <select id="u-type">
+          <option value="Généraliste">Généraliste</option>
+          <option value="Spécialiste">Spécialiste</option>
+          <option value="Autre">Autre</option>
+        </select>
       </div>
       <div class="field" id="u-pass-wrap">
         <label>Mot de passe temporaire</label>
-        <input type="password" id="u-pass" placeholder="••••••••" />
+        <input type="password" id="u-pass" placeholder="••••••••" autocomplete="new-password" />
+        <p class="hint" id="u-pass-temp-hint" style="margin-bottom:0">À la première connexion, le titulaire devra remplacer ce mot de passe par le sien.</p>
         <p class="hint" id="u-pass-hint" style="margin-bottom:0" hidden>Utilisez « Réinitialiser le mot de passe » depuis la liste pour changer le mot de passe d'un compte existant.</p>
       </div>
       <div class="field">
@@ -1719,6 +1815,47 @@
     <div class="modal-foot">
       <button type="button" class="btn-secondary" id="cancelUserModal">Annuler</button>
       <button type="submit" form="userForm" class="btn-primary">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= MODAL AJOUT / MODIFICATION STRUCTURE ======================= -->
+<div class="modal-overlay" id="structureModal" hidden>
+  <div class="modal modal-accent-blue">
+    <div class="modal-head">
+      <h3><span class="modal-head-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 21V8l9-5 9 5v13"/><path d="M9 21v-6h6v6"/></svg></span><span id="structureModalTitle">Ajouter une structure</span></h3>
+      <button class="close-x" id="closeStructureModal">&times;</button>
+    </div>
+    <form class="modal-body" id="structureForm">
+      <div class="field">
+        <label for="s-nom">Raison sociale</label>
+        <input type="text" id="s-nom" required maxlength="100" placeholder="ex. Pharmacie de la Baie" autocomplete="off" />
+      </div>
+      <div class="type-group" role="radiogroup" aria-labelledby="s-type-label">
+        <span class="type-label" id="s-type-label">Type de structure</span>
+        <div class="type-cards">
+          <label class="type-card">
+            <input type="radio" name="s-type" value="hopital" checked />
+            <span class="tc-body"><span class="tc-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21V7l8-4 8 4v14"/><path d="M9 21v-6h6v6"/><path d="M9 10h.01M15 10h.01M9 13h.01M15 13h.01"/></svg></span><b>Hôpital</b><small>Consultations et examens</small></span>
+          </label>
+          <label class="type-card">
+            <input type="radio" name="s-type" value="pharmacie" />
+            <span class="tc-body"><span class="tc-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8v8"/><path d="M8 12h8"/></svg></span><b>Pharmacie</b><small>Délivrance des ordonnances</small></span>
+          </label>
+          <label class="type-card">
+            <input type="radio" name="s-type" value="administration" />
+            <span class="tc-body"><span class="tc-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10l9-6 9 6"/><path d="M5 10v9M9.5 10v9M14.5 10v9M19 10v9"/><path d="M3 20h18"/></svg></span><b>Administration</b><small>Comptes de gestion</small></span>
+          </label>
+        </div>
+      </div>
+      <div class="field">
+        <label for="s-adresse">Adresse</label>
+        <input type="text" id="s-adresse" required maxlength="200" placeholder="ex. Libreville, quartier Louis" autocomplete="off" />
+      </div>
+    </form>
+    <div class="modal-foot">
+      <button type="button" class="btn-secondary" id="cancelStructureModal">Annuler</button>
+      <button type="submit" form="structureForm" class="btn-primary">Enregistrer</button>
     </div>
   </div>
 </div>
@@ -1847,13 +1984,13 @@
             <label for="composeTarget">Destinataires</label>
             <select id="composeTarget">
               <option value="all">Tous les utilisateurs</option>
-              <option value="role">Un rôle</option>
+              <option value="role">Un profil</option>
               <option value="etablissement">Un établissement</option>
               <option value="user">Un utilisateur</option>
             </select>
           </div>
           <div class="field" id="composeValueWrap" hidden>
-            <label for="composeValue" id="composeValueLabel">Rôle</label>
+            <label for="composeValue" id="composeValueLabel">Profil</label>
             <select id="composeValue"></select>
           </div>
         </div>
@@ -1886,19 +2023,65 @@
   </div>
 </div>
 
-<!-- ======================= PALETTE « ALLER À… » (Ctrl + K) ======================= -->
-<div class="modal-overlay palette-overlay" id="paletteModal" hidden>
-  <div class="palette" role="dialog" aria-label="Aller à…">
-    <div class="palette-input">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-      <input type="text" id="paletteInput" placeholder="Aller à une page ou lancer une action…" autocomplete="off" aria-label="Rechercher une page ou une action" />
-      <kbd>Échap</kbd>
+<!-- ======================= PREMIÈRE CONNEXION : CHOISIR SON MOT DE PASSE ======================= -->
+<div class="modal-overlay force-pw-overlay" id="forcePasswordModal" hidden>
+  <div class="modal modal-accent-blue" role="dialog" aria-modal="true" aria-labelledby="forcePwTitle">
+    <div class="modal-head">
+      <h3><span class="modal-head-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.9 12.1L19 4"/><path d="M15 9l3 3"/><path d="M18 6l3 3"/></svg></span><span id="forcePwTitle">Choisissez votre mot de passe</span></h3>
     </div>
-    <div class="palette-list" id="paletteList" role="listbox"></div>
-    <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> naviguer</span><span><kbd>↵</kbd> ouvrir</span></div>
+    <form class="modal-body" id="forcePasswordForm" autocomplete="off">
+      <p class="hint" style="margin-top:0" id="forcePwIntro">Votre compte vient d'être créé : le mot de passe que vous avez reçu est temporaire. Choisissez un mot de passe personnel pour continuer.</p>
+      <div class="field">
+        <label for="fp-ancien">Mot de passe temporaire</label>
+        <input type="password" id="fp-ancien" autocomplete="current-password" required />
+      </div>
+      <div class="field">
+        <label for="fp-nouveau">Nouveau mot de passe</label>
+        <input type="password" id="fp-nouveau" autocomplete="new-password" minlength="4" required />
+        <p class="hint" style="margin-bottom:0">4 caractères au minimum, différent du mot de passe temporaire.</p>
+      </div>
+      <div class="field">
+        <label for="fp-confirm">Confirmer le nouveau mot de passe</label>
+        <input type="password" id="fp-confirm" autocomplete="new-password" minlength="4" required />
+      </div>
+      <p class="field-error" id="fp-error" role="alert" hidden></p>
+    </form>
+    <div class="modal-foot">
+      <button type="button" class="btn-secondary" id="fp-cancel">Annuler la connexion</button>
+      <button type="submit" form="forcePasswordForm" class="btn-primary" id="fp-submit">Enregistrer et continuer</button>
+    </div>
   </div>
 </div>
 
+<!-- ======================= PROFILS D'UN UTILISATEUR (ajouter / retirer) ======================= -->
+<div class="modal-overlay" id="profilsModal" hidden>
+  <div class="modal modal-accent-blue" role="dialog" aria-modal="true" aria-labelledby="profilsTitle">
+    <div class="modal-head">
+      <h3><span class="modal-head-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="9" cy="11" r="2"/><path d="M6 16c.5-1.5 1.7-2.2 3-2.2s2.5.7 3 2.2"/><path d="M15 10h3M15 13h3"/></svg></span><span id="profilsTitle">Profils</span></h3>
+      <button type="button" class="close-x" id="closeProfilsModal" aria-label="Fermer">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="profils-who" id="profilsTarget"></div>
+      <p class="hint profils-help">Un profil ouvre un ensemble d'interfaces ; le compte passe de l'un à l'autre depuis son menu. Les changements sont enregistrés immédiatement.</p>
+      <div class="profils-list" id="profilsList"></div>
+      <div class="profils-add">
+        <label for="profilsAddSelect">Ajouter un profil</label>
+        <div class="profils-add-row">
+          <select id="profilsAddSelect"></select>
+          <button type="button" class="btn-primary" id="profilsAddBtn">Ajouter</button>
+        </div>
+        <div class="profils-preview" id="profilsAddPreview"></div>
+      </div>
+      <p class="profils-error" id="profilsError" role="alert" hidden></p>
+    </div>
+    <div class="modal-foot">
+      <p class="profils-status" id="profilsStatus" role="status" aria-live="polite"></p>
+      <button type="button" class="btn-primary" id="doneProfilsModal">Terminé</button>
+    </div>
+  </div>
+</div>
+
+<script src="config.js"></script>
 <script src="api.js"></script>
 <script src="app.js"></script>
 </body>

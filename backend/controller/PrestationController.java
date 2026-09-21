@@ -149,6 +149,17 @@ private void handlePost(HttpExchange ex) throws Exception {
         }
     }
 
+    // Un assuré suspendu ne peut recevoir aucune prestation
+    model.Patient cible = new dao.PatientDAO().findById(p.id_patient);
+    if (cible == null) {
+        sendJson(ex, 404, "{\"error\":\"Patient introuvable\"}");
+        return;
+    }
+    if (!cible.statut_assure) {
+        sendJson(ex, 409, "{\"error\":\"Assure suspendu : aucune prestation possible\"}");
+        return;
+    }
+
     // 1. Créer la prestation
     int idPrestation = dao.insert(p);
 
@@ -157,8 +168,8 @@ private void handlePost(HttpExchange ex) throws Exception {
     try {
         model.Patient patient = new dao.PatientDAO().findById(p.id_patient);
         if (patient != null && patient.statut_assure && patient.fonds != null) {
-            java.math.BigDecimal montantPec = service.CouvertureService.calculerMontantPec(p.montant, patient.fonds);
-            java.math.BigDecimal partPatient = service.CouvertureService.calculerPartPatient(p.montant, patient.fonds);
+            java.math.BigDecimal montantPec = service.CouvertureService.calculerMontantPec(p.montant, patient.fonds, p.type_prestation);
+            java.math.BigDecimal partPatient = service.CouvertureService.calculerPartPatient(p.montant, patient.fonds, p.type_prestation);
 
             pec = new model.PriseEnCharge();
             pec.montant_pec    = montantPec;

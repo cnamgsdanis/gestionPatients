@@ -345,7 +345,7 @@ public class OrdonnanceController {
         Map<String, String> body = gson.fromJson(readBody(ex), Map.class);
         String statut = body.get("statut");
 
-        List<String> valides = List.of("en_attente", "validee", "envoyee", "delivree", "annulee");
+        List<String> valides = List.of("en_attente", "validee", "envoyee", "partiellement_delivree", "delivree", "annulee");
         if (statut == null || !valides.contains(statut)) {
             sendJson(ex, 400,
                     "{\"error\":\"statut doit etre : en_attente, validee, envoyee, delivree ou annulee\"}");
@@ -504,12 +504,12 @@ public class OrdonnanceController {
             model.Patient patient = new dao.PatientDAO().findById(idPatient);
             if (patient != null && patient.statut_assure && patient.fonds != null) {
                 model.PriseEnCharge pec = new model.PriseEnCharge();
-                pec.montant_pec = service.CouvertureService.calculerMontantPec(total, patient.fonds);
+                pec.montant_pec = service.CouvertureService.calculerMontantPec(total, patient.fonds, "pharmacie");
                 pec.date_pec = java.time.LocalDate.now().toString();
                 pec.id_acteur = idPharmacien;
                 pec.statut = "en_attente";
                 pec.id_prestation = idPrestaPharma;
-                pec.part_patient = service.CouvertureService.calculerPartPatient(total, patient.fonds);
+                pec.part_patient = service.CouvertureService.calculerPartPatient(total, patient.fonds, "pharmacie");
                 new dao.PriseEnChargeDAO().insert(pec);
             }
         } catch (Exception e) {

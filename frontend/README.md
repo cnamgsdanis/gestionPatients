@@ -99,7 +99,7 @@ déjà en place dans `index.html` :
 .app-shell
 ├── .sidebar          → navigation, logo, bouton réduire/étendre, déconnexion
 └── .main
-    ├── .topbar        → titre de la page + fil d'Ariane + horloge + user-pill
+    ├── .topbar        → titre de la page + fil d'Ariane + bouton des contrôles (Super Admin) + salutation + cloche + user-pill (l'horloge est dans son menu)
     ├── .content       → LE CONTENU DE LA VUE ACTIVE VIT ICI
     └── .app-footer    → pied de page fixe (copyright + version)
 ```
@@ -261,8 +261,7 @@ verrouillage.
 ## 9. Animations — réservées à l'écran de connexion (sauf exceptions demandées)
 
 > **Exceptions assumées (demandées par le porteur du projet, septembre 2026)** :
-> la **barre latérale** (aurore, pastille qui glisse, halo au survol, « pouls du
-> circuit »), l'**en-tête** (fil lumineux, jauge de défilement, salutation, cloche) et
+> la **barre latérale** (pastille qui glisse, halo au survol ; fond vert uni, sans lueurs colorées depuis le 21/09/2026), l'**en-tête** (fil lumineux, jauge de défilement, salutation, cloche) et
 > l'**Espace Pharmacien** (bandeau animé, étapes, compteurs, confettis de fin
 > d'ordonnance) sont volontairement spectaculaires. Elles respectent toutes
 > `prefers-reduced-motion` (voir la fin de chaque bloc CSS). Le reste de la règle
@@ -353,13 +352,14 @@ Si vous répondez non à l'une de ces questions, corrigez avant de livrer.
 mode hors ligne. Les comptes, assurés, médecins, structures, feuilles, règlements,
 messages et journaux sont ceux du serveur. **Ne touchez pas au dossier `backend/` ni à
 `tools/` depuis le front** : ce qui manque côté serveur est listé dans
-[`INTEGRATION-BACKEND.md`](INTEGRATION-BACKEND.md) (routes à créer, corrections, contrat JSON).
+[`INTEGRATION-BACKEND.md`](INTEGRATION-BACKEND.md) (contrat JSON) et [`../backend/docs/05-integration-front.md`](../backend/docs/05-integration-front.md) (ce qui a été fait côté serveur). Lancer l'ensemble en local : [`../LANCER-EN-LOCAL.md`](../LANCER-EN-LOCAL.md).
 
-**Servir le front.** Fichiers statiques (`index.html`, `style.css`, `api.js`, `app.js`, images)
+**Servir le front.** Fichiers statiques (`index.html`, `style.css`, `config.js`, `api.js`, `app.js`, images)
 **sous la même origine que l'API** (reverse proxy : `/api` → serveur Java). Sinon, avant
 `api.js` : `<script>window.PEC_API_BASE_URL = "https://api.exemple.ga";</script>` (le serveur
-doit alors gérer CORS). Sans réglage : `http://localhost:8090` sur un poste de développement
-(le proxy `tools/dev-proxy.js`), la même origine ailleurs.
+doit alors gérer CORS). `config.js` (chargé avant `api.js`) le fait pour le poste local : sur `localhost`, l'API est
+cherchée sur `http://localhost:8081` (`PEC_PORT` de `backend/db/local.properties`) ; ailleurs, la même origine. Le proxy
+`tools/dev-proxy.js` n'est plus nécessaire (le back-end gère CORS et sert les photos).
 
 **Tester sans risque.** Un test crée de **vraies données** (prises en charge, ordonnances,
 paiements, journal). Pointez le front sur une **base de recette** — pas sur la production.
@@ -370,13 +370,11 @@ cours pour survivre à un rechargement (`pec_session`, 12 h) et quelques préfé
 (`pec_ui_*`). Jeton expiré ou refusé (401) : retour à la connexion, avec « votre session a
 expiré ». Serveur arrêté : « Serveur injoignable » et rien n'est enregistré ni affiché comme fait.
 
-**Types de données** — ils suivent `backend/MPD/gestionpatient.sql` : le NAG est
-un INT de 10 chiffres compris entre 1 000 000 000 et 2 147 483 647 (`2345678901`
-est donc invalide), affiché en 3-3-3-1 (`134 567 890 1`) ; l'assuré (« patient » = assuré) a une
-**nature** (1 assuré principal, 2 ayant droit, 3 conjoint) et un **statut** (actif ou
-suspendu) — deux champs **à ajouter côté base** ; le statut d'un examen versé au dossier
-est `en_attente`, `en_cours`, `termine` ou `annule`, celui d'une consultation
-`en_attente`, `validee` ou `rejetee`.
+**Types de données** — ils suivent `backend/MPD/gestionpatient.sql` : le NAG est un **texte de 10 chiffres**
+(colonne `NVARCHAR(20)` + `CK_Patient_nag_10`, sans plage numérique : `2345678901` est valide), affiché en 3-3-3-1
+(`134 567 890 1`) ; l'assuré (« patient » = assuré) a une **nature** (colonne `nature` : « Assuré principal », « Ayant droit »,
+« Conjoint » ; l'API renvoie aussi le code 1, 2 ou 3) et un **statut** (actif ou suspendu, porté par `statut_assure`) ; le statut d'un
+examen versé au dossier est `en_attente`, `en_cours`, `termine` ou `annule`, celui d'une consultation `en_attente`, `validee` ou `rejetee`.
 
 **Assuré suspendu = aucune prestation.** Son statut est relu dans la base à chaque étape
 (`checkNagSuspended()`). À l'accueil : cachet « SUSPENDU » sur la fiche, formulaire de prise
@@ -406,13 +404,31 @@ rouge. **Le serveur doit aussi refuser (409)** — le front seul ne suffit pas.
    « Patients en attente » (pas de liste de dossiers).
 4. **Pharmacie** : NAG (la recherche part au 10e chiffre) → les dates de prestation du patient
    (5 par page) → **une seule** ordonnance précise, une carte par médicament. **Le prix
-   unitaire se saisit à la main** : tant qu'il est vide, les montants sont grisés (« — ») et
-   « Servir » / « Tout servir » sont désactivés ; dès qu'il est saisi, le **prix total**
-   (prix × quantité), la **part assurance** (taux du ticket modérateur : 80 % en plein tarif,
-   100 % pour « Plein (ALD) » et « Exonéré » — table `TM_RATE`, à confirmer par le métier) et
-   la **part patient** s'affichent ; le serveur les recalcule. « Tarif de référence »
-   (catalogue) peut pré-remplir le prix. Une délivrance n'est confirmée qu'une fois enregistrée.
-   L'onglet **Historique des délivrances** retrouve tout ce que la pharmacie a servi.
+   unitaire se saisit à la main** : tant qu'il est vide, les montants sont grisés (« — »), la
+   quantité et « Servir » / « Tout servir » sont désactivés. Dès qu'il est saisi, le champ
+   **Quantité à servir** se débloque, affiché « **quantité / reste à servir** » (par défaut tout
+   le reste ; jamais plus que ce qui reste) : en **rupture de stock**, on sert une partie et le
+   patient va chercher le reste dans **une autre pharmacie** (« Livraison partielle : il restera N »).
+   Le **prix total** (prix × quantité servie), la **part assurance** (taux du ticket modérateur : 80 %
+   en plein tarif, 100 % pour « Plein (ALD) » et « Exonéré » — table `TM_RATE`, à confirmer par le
+   métier) et la **part patient** s'affichent ; le serveur les recalcule. Une **barre
+   d'avancement** par médicament montre ce qui est déjà servi (plein), ce qui va l'être (rayé) et
+   ce qui reste ; les livraisons déjà faites (quantité, prix, pharmacie, pharmacien, date) sont
+   listées, y compris celles d'autres pharmacies. Quand un médicament est entièrement servi, son
+   formulaire disparaît ; quand toute l'ordonnance l'est, l'écran dit **« Aucune ordonnance à
+   servir »**. « Tarif de référence » (catalogue) peut pré-remplir le prix. Une délivrance n'est
+   confirmée qu'une fois enregistrée (`PUT /api/feuilles/{id}` avec `aServir`).
+   **Mise en page** : prix unitaire, quantité, les trois montants et « Servir » sont sur **une seule
+   rangée alignée** (libellés sur la même ligne de base), les aides (tarif de référence, reste à
+   servir, « Tout le reste », livraison partielle) juste dessous ; sur une carte moins large la saisie
+   passe sur deux rangées, puis sur mobile en colonne (les règles suivent la largeur de la **carte**,
+   pas de l'écran : `container-type: inline-size`). Les livraisons déjà faites forment un **tableau**
+   (livraison, pharmacie · pharmacien, quantité × prix, total, CNAMGS, patient, ligne « Total servi » s'il
+   y en a plusieurs) qui devient une liste de fiches sur carte étroite.
+   L'onglet **Historique des délivrances** liste **chaque livraison** avec tout ce que la base
+   enregistre : date et heure, patient, médicament, quantité servie sur prescrite, prix unitaire,
+   montant total, part assurance, part patient, **pharmacie** (et son n°), **pharmacien** (et son n°),
+   feuille, prescripteur.
 5. **Rapports** (administrateur, DG, caisse) : le **détail par hôpital** (ou par pharmacie)
    d'abord, puis un résumé écrit — pas de graphiques. **Enregistrer un paiement** : type
    *Règlement* (plafonné au reste à payer) ou *Avance* (peut dépasser ; l'excédent est déduit
@@ -427,11 +443,54 @@ rouge. **Le serveur doit aussi refuser (409)** — le front seul ne suffit pas.
   pour les compteurs, nouvelles feuilles et messages. Une feuille en cours de saisie n'est
   jamais écrasée. Un écran de démarrage s'affiche pendant le chargement après un rechargement.
 - **Barre latérale** : pastille qui glisse sur la page active, halo qui suit le curseur,
-  compteurs (patients en attente, ordonnances à servir — fournis par le serveur), « pouls du
-  circuit » cliquable, infobulles quand le menu est réduit. Sur tablette et téléphone
-  (≤ 980 px) c'est un **tiroir** : bouton ☰ dans l'en-tête, voile, balayage depuis le bord
-  gauche, Échap. **Ctrl + K** (ou la loupe de l'en-tête) ouvre la palette « Aller à… ».
-  Sur téléphone les tableaux deviennent des cartes empilées.
+  compteurs (patients en attente, ordonnances à servir — fournis par le serveur), infobulles
+  quand le menu est réduit. Sur tablette et téléphone (≤ 980 px) c'est un **tiroir** : bouton ☰
+  dans l'en-tête, voile, balayage depuis le bord gauche, Échap. Sur téléphone les tableaux
+  deviennent des cartes empilées. *(Le « pouls du circuit » et la palette « Aller à… Ctrl + K »
+  ont été retirés le 20/09/2026.)*
+- **Première connexion** : un compte créé (ou réinitialisé) par un administrateur a un mot de passe
+  **temporaire**. Après la connexion, la fenêtre « **Choisissez votre mot de passe** » s'ouvre avant
+  l'application (mot de passe temporaire, nouveau, confirmation) ; le serveur garde de toute façon
+  ses routes fermées tant que ce n'est pas fait. `apiChangePassword` adopte le jeton neuf renvoyé.
+- **Profils** : un compte peut porter **plusieurs profils** (un profil = un ensemble d'interfaces). Le
+  menu du compte affiche « **Profil actif** » avec les profils du compte : en choisir un ouvre son
+  interface (`POST /api/auth/profil`, données rechargées avec les droits de ce profil). Dans
+  *Utilisateurs*, la colonne **Profils** montre le profil principal (pastille verte, ★) puis « +N » pour
+  les autres ; le bouton « **Profils du compte** » (carte d'identité) d'une ligne, comme « Gérer les
+  profils » dans la fiche de modification, ouvre la fenêtre pour **ajouter**, **retirer** ou **définir
+  comme principal** un profil (une carte par profil, avec les interfaces qu'il ouvre). Ces changements
+  sont **enregistrés tout de suite** : la fenêtre le confirme (« Profil « Caisse » ajouté. ») et la fiche
+  de modification, en dessous, suit. À la création, des cases proposent des profils supplémentaires ; à la
+  modification, le profil principal ne se change plus dans la fiche (uniquement dans la fenêtre « Profils »).
+  **Vocabulaire** : un *profil* est un ensemble d'interfaces (Super Admin, DG, Médecin, Agent hospitalier,
+  **Pharmacien**, Caisse) ; « Pharmacie » ne désigne plus que le *type de structure* ; le menu du compte
+  propose « **Mon compte** » (et non « Mon profil »).
+  **Mise en page** : une seule pastille de profil (22 px) partout ; lignes de la liste toutes à la même
+  hauteur (62 px), textes longs coupés (2 lignes, e-mail sur une ligne avec infobulle), en-têtes sur une
+  ligne, « Mot de passe à changer » = petite icône de clé (texte pour lecteurs d'écran), la liste tient
+  à 1280 px sans défilement horizontal ; sur téléphone chaque compte devient une fiche.
+- **Structures** (menu *Administration › Structures*, page propre depuis le 21/09/2026 : elle n'est plus
+  dans « Gestion des utilisateurs ») : trois tuiles (hôpitaux, pharmacies, administration), recherche par
+  nom ou adresse, filtre par type, liste groupée par type puis alphabétique et paginée (10 par page).
+  « **+ Ajouter une structure** » ouvre une fenêtre à trois cartes de type (Hôpital / Pharmacie /
+  Administration ; le filtre actif présélectionne le type) ; après un ajout ou une modification, la liste
+  s'ouvre sur la page qui contient la structure et la met en évidence un instant. La colonne « Comptes »
+  compte les comptes rattachés ; la suppression est désactivée tant qu'il y en a (le serveur refuse aussi
+  avec 409 si des données y sont liées). Écriture réservée à `structure.gerer`, lecture à `structure.lire`.
+  Toute nouvelle structure apparaît aussitôt dans la création de compte, les filtres des rapports et
+  ceux de la pharmacie.
+- **Super Admin — contrôles anti-fraude** : le bouton de l'en-tête (icône de bouclier + interrupteur,
+  **sans libellé** pour ne pas saturer l'en-tête ; vert = actifs, orange = désactivés, l'infobulle et
+  les lecteurs d'écran donnent l'état) pilote les garde-fous du serveur (`PUT /api/parametres/controles`).
+  Désactivés (« mode supervision »), l'administrateur peut réaliser lui-même toutes les étapes du circuit —
+  un bandeau le rappelle, propose de les réactiver et **peut être refermé** (×) : le bouton orange reste ;
+  les messages de l'interface se rangent sous le bandeau ; les autres profils restent contrôlés ; tout est
+  tracé au journal et la désactivation déclenche une alerte de sécurité. Aucun message « réactivés » :
+  l'interrupteur et le bandeau suffisent.
+- **Date et heure** : l'horloge n'est plus dans l'en-tête ; elle s'affiche en haut du menu du compte
+  (clic sur le nom, en haut à droite).
+- **Tableau de bord** : quatre tuiles par ligne (pharmacies / hôpitaux, prestations réalisées, montant
+  total, montant restant dû) ; « Montant déjà payé » n'y figure plus (il reste dans *Rapports*).
 - **Notifications** : la cloche de l'en-tête affiche les messages de l'administrateur et les
   alertes de sécurité (badge rouge, toast à l'arrivée, message « urgent » collant, accusé de
   lecture « J'ai pris connaissance »). L'**administrateur** écrit depuis la cloche ou
@@ -443,6 +502,12 @@ rouge. **Le serveur doit aussi refuser (409)** — le front seul ne suffit pas.
   (activités inhabituelles à examiner : Vu / Faux positif / Confirmé) et **Messages**. Voir §14.
 - **Permissions** : la page affiche la matrice du serveur (`/api/permissions`) ; le menu de
   chaque utilisateur suit ses droits (`/api/auth/me`).
+- **Utilisateurs et structures** (administrateur) : la page *Structures* (hôpitaux, pharmacies, administration :
+  ajouter, modifier, supprimer) est indispensable pour rattacher un compte, que l'on crée ensuite dans *Utilisateurs*.
+  Les comptes qui n'ont pas encore choisi leur mot de passe portent la mention « Mot de passe à changer ».
+  Un médecin porte un **code** et un **type de praticien** (Généraliste / Spécialiste / Autre), repris sur la feuille de soins.
+- **Session** : le jeton est renouvelé automatiquement quand il approche de l'expiration ; s'il est révoqué (déconnexion,
+  compte désactivé, mot de passe réinitialisé), l'écran revient à la connexion avec « votre session a expiré ».
 
 ---
 

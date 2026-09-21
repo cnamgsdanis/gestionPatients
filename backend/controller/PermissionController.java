@@ -111,11 +111,18 @@ public class PermissionController {
             return;
         }
 
+        if (!model.Utilisateur.roleValide(role)) {
+            sendJson(ex, 400, "{\"error\":\"Role invalide : " + escape(role) + "\"}");
+            return;
+        }
+
         // 2. Ajouter en base
         dao.addToRole(role, p.id_permission);
 
         // 3. Recharger le cache
         PermissionService.reload();
+        service.Audit.ok(ex, security.AuthGuard.claimsOuNull(ex), "ADMIN", "permissions.modifier", "Permission accordée à un rôle",
+            "Role", role, code, null, null, java.util.Map.of("role", role, "permission", code, "accordee", true));
 
         sendJson(ex, 200, "{\"message\":\"Permission ajoutee\"}");
     }
@@ -134,6 +141,8 @@ public class PermissionController {
 
         boolean ok = dao.removeFromRole(role, p.id_permission);
         PermissionService.reload();
+        if (ok) service.Audit.ok(ex, security.AuthGuard.claimsOuNull(ex), "ADMIN", "permissions.modifier", "Permission retirée à un rôle",
+            "Role", role, code, null, null, java.util.Map.of("role", role, "permission", code, "accordee", false));
 
         sendJson(ex, ok ? 200 : 404,
                  ok ? "{\"message\":\"Permission retiree\"}" : "{\"error\":\"Non trouvee\"}");

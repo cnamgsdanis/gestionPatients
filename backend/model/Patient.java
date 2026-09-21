@@ -14,9 +14,12 @@ public class Patient {
     public String   contact;                 // téléphone (peut être null)
     public String   adresse;                 // adresse (peut être null)
     public String   date_naissance;          // AAAA-MM-JJ (peut être null)
-    public boolean  statut_assure;           // true = assuré
+    public boolean  statut_assure;           // true = actif, false = SUSPENDU (aucune prestation possible)
+    public String   statut;                  // "actif" | "suspendu" (déduit de statut_assure ; accepté en entrée)
+    public String   nature;                  // "Assuré principal" | "Ayant droit" | "Conjoint" (colonne nvarchar(50))
+    public Integer  nature_assure;           // 1 assuré principal, 2 ayant droit, 3 conjoint (déduit de « nature »)
     public Integer  fonds;                   // niveau 1, 2, 3 ou 4 (peut être null)
-    public Integer  matricule_nag;           // NAG INT, exactement 10 chiffres, chiffres uniquement (ex: 2026000001)
+    public String   matricule_nag;           // NAG : NVARCHAR(20), exactement 10 chiffres (CK_Patient_nag_10), ex: 2345678901
     public Integer  id_assure_principal;     // NULL si patient principal, sinon ID du parent
 
     // ######################################################################
@@ -33,4 +36,21 @@ public class Patient {
 
     // Constructeur vide obligatoire pour Gson
     public Patient() {}
+
+    /** Libellé canonique de la nature à partir d'un code 1/2/3 ou d'un texte libre ; null si inconnu. */
+    public static String natureCanonique(String brut) {
+        if (brut == null || brut.isBlank()) return null;
+        String t = brut.trim().toLowerCase();
+        if (t.equals("1") || t.contains("principal")) return "Assuré principal";
+        if (t.equals("2") || t.contains("ayant")) return "Ayant droit";
+        if (t.equals("3") || t.contains("conjoint")) return "Conjoint";
+        return null;
+    }
+
+    /** Code 1/2/3 de la nature, ou null. */
+    public static Integer natureCode(String nature) {
+        String c = natureCanonique(nature);
+        if (c == null) return null;
+        return c.equals("Assuré principal") ? 1 : c.equals("Ayant droit") ? 2 : 3;
+    }
 }

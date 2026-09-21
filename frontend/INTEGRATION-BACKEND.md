@@ -1,20 +1,17 @@
-# Intégration front ↔ back-end — analyse et travail restant
+# Intégration front ↔ back-end — contrat et état
 
-Document établi le 19/09/2026 après lecture complète de `backend/` (contrôleurs, DAO, modèles, services,
-`MPD/gestionpatient.sql`, docs). **Le back-end n'a pas été modifié** : ce document dit ce qu'il faut y faire.
+**État au 19/09/2026 : le back-end implémente tout ce que le front utilise** (base `gestionpatient`, API Java). Ce document est la
+référence du **contrat** entre l'interface et l'API ; le détail côté serveur (base, sécurité, règles, journal, tests, limites) est dans
+[`backend/docs/05-integration-front.md`](../backend/docs/05-integration-front.md).
 
 ## 1. Résumé
 
 | | |
 |---|---|
-| **Front** | Il n'y a plus aucun stockage local de données : ni `localStorage`, ni jeu de démonstration, ni compte local, ni repli. Tout est lu et écrit dans la base par l'API. Reste seulement, dans `sessionStorage` (propre à l'onglet, effacé à sa fermeture) : le jeton JWT, la session (utilisateur, page) et de petites préférences d'affichage (barre latérale). |
-| **Déjà branché sur des routes qui existent** | connexion / déconnexion / mot de passe, utilisateurs, structures, permissions (matrice), recherche d'un assuré par NAG, dossier patient (consultations et examens enregistrés). |
-| **Branché sur des routes à créer** | feuilles de soins (accueil → médecin → pharmacie), annuaire des médecins, catalogue des médicaments, règlements des hôpitaux et pharmacies, notifications de l'administrateur, journalisation / audit, `GET /api/auth/me`. Tant qu'une route répond 404 / 405, l'écran concerné le dit (« fonction non disponible côté serveur ») au lieu de faire semblant. |
-| **Pourquoi des routes à créer** | Le modèle du back-end (Prestation + Prise_en_charge + Ordonnance + Prescription liées au stock d'une pharmacie) ne peut pas porter ce que l'interface fait aujourd'hui : ticket modérateur, médecin désigné à l'accueil, feuille de soins complète, ordonnance en texte libre, **prix unitaire saisi par le pharmacien**, règlements, messages. Voir §3 et §5. |
-
-Le front a été validé de bout en bout contre un faux serveur qui applique **exactement** le contrat du §5
-(54 vérifications : connexion, accueil, assuré suspendu, médecin, pharmacie, actualisation de la page,
-messages, journal, utilisateurs, permissions, règlements, session expirée, serveur arrêté).
+| **Front** | Aucun stockage local de données : ni `localStorage`, ni jeu de démonstration, ni compte local, ni repli. Tout est lu et écrit dans la base par l'API. Reste seulement, dans `sessionStorage` (propre à l'onglet, effacé à sa fermeture) : le jeton JWT, la session (utilisateur, page) et de petites préférences d'affichage. |
+| **Branché sur l'API réelle** | connexion / session / renouvellement du jeton, utilisateurs (avec code et type de praticien), structures (écran de gestion), permissions, recherche d'un assuré par NAG (10 chiffres, nature, statut), dossier patient, feuilles de soins (accueil → médecin → pharmacie), annuaire des médecins, catalogue des médicaments, règlements, messages, journalisation et alertes. |
+| **Validé** | 158 vérifications de l'API sur la vraie base + 59 vérifications du front dans Chrome contre ce back-end (voir `backend/docs/05-integration-front.md` §11). |
+| **Reste à la charge de l'exploitation** | secrets (mot de passe SQL, clé JWT, compte `admin`/`admin` de test), HTTPS, sauvegarde, taux de couverture et ticket modérateur à confirmer par le métier (voir §7). |
 
 ## 2. Ce qui change côté navigateur
 
@@ -30,64 +27,34 @@ messages, journal, utilisateurs, permissions, règlements, session expirée, ser
 - Le menu suit les droits du rôle, affinés par les permissions renvoyées par `GET /api/auth/me` quand cette route existe.
 - « Gestion des permissions » n'a plus de matrice locale : uniquement celle du serveur.
 
-## 3. Carte fonctionnalité → route
+## 3. Carte fonctionnalité → route (toutes implémentées ✅)
 
-✅ existe · ⚠️ existe mais à corriger · ❌ à créer
+| Fonctionnalité | Route(s) |
+|---|---|
+| Connexion, déconnexion, renouvellement, compte courant | `POST /api/auth/login` (`profil?`), `/logout`, `/refresh` ; `GET /api/auth/me` (avec `controles_antifraude` pour l'administrateur) |
+| Profil actif (compte à plusieurs profils) | `POST /api/auth/profil` `{ profil }` → nouveau jeton |
+| Mot de passe (temporaire à la première connexion) | `PUT /api/auth/change-password` (renvoie un jeton neuf), `POST /api/auth/reset-password` |
+| Utilisateurs (CRUD, activer, code et type de praticien) | `GET/POST/PUT/DELETE /api/utilisateurs[/{id}]`, `PATCH /api/utilisateurs/{id}/actif`, `POST /api/auth/register` |
+| Profils d'un utilisateur | `POST /api/utilisateurs/{id}/profils`, `DELETE …/profils/{profil}`, `PUT …/profils/principal` |
+| Contrôles anti-fraude (Super Admin) | `GET/PUT /api/parametres/controles` |
+| Structures (hôpitaux, pharmacies, administration) | `GET/POST/PUT/DELETE /api/structures[/{id}]` |
+| Permissions | `GET /api/permissions[/matrix]`, `POST/DELETE /api/permissions/role/{role}/{code}` |
+| Recherche d'un assuré (NAG en texte, nature, statut) | `GET /api/patients/nag/{nag}` |
+| Dossier patient | `GET /api/consultations?id_patient=`, `GET /api/examens?id_patient=` (alimentés par la validation des feuilles) |
+| Annuaire des médecins, catalogue des médicaments | `GET /api/medecins`, `GET /api/catalogue/medicaments` |
+| Feuilles de soins, compteurs, délivrance | `GET/POST /api/feuilles`, `GET/PUT/DELETE /api/feuilles/{id}`, `GET /api/feuilles/compteurs` |
+| Règlements des hôpitaux et pharmacies | `GET/POST /api/reglements` |
+| Messages de l'administrateur | `GET/POST /api/notifications`, `PUT …/{id}/lu`, `PUT …/{id}/accuse`, `GET …/envoyees` |
+| Journalisation, alertes, intégrité | `POST/GET /api/journal/evenements`, `GET …/connexions`, `…/alertes`, `…/resume`, `…/integrite`, `PUT …/alertes/{id}/revue` |
+| Photos des assurés | `GET /media/…?token=` |
 
-| Fonctionnalité | Route | État |
-|---|---|---|
-| Connexion, déconnexion, changement de mot de passe | `POST /api/auth/login`, `POST /api/auth/logout`, `PUT /api/auth/change-password` | ✅ |
-| Réinitialiser un mot de passe (admin), créer un compte | `POST /api/auth/reset-password`, `POST /api/auth/register` | ✅ |
-| Utilisateurs | `GET/PUT/DELETE /api/utilisateurs[/{id}]`, `PATCH /api/utilisateurs/{id}/actif` | ✅ |
-| Structures (choix du rattachement, hôpitaux / pharmacies partenaires) | `GET /api/structures` | ✅ |
-| Permissions (matrice, attribuer, retirer) | `GET /api/permissions[/matrix]`, `POST/DELETE /api/permissions/role/{role}/{code}` | ✅ |
-| Permissions du compte connecté (menu) | `GET /api/auth/me` | ❌ (un non-admin n'a pas `permission.lire`, il ne peut pas lire son propre rôle) |
-| Recherche d'un assuré | `GET /api/patients/nag/{nag}` | ✅ — mais `nature_assure` et `statut` (actif / suspendu) manquent (§4.1) |
-| Dossier patient : consultations, examens enregistrés | `GET /api/consultations?id_patient=`, `GET /api/examens?id_patient=` | ✅ |
-| Annuaire des médecins (choix à l'accueil, file « Mes patients ») | `GET /api/medecins` | ❌ (un agent n'a pas `utilisateur.lire`) |
-| Catalogue des médicaments (liste du médecin, tarif de référence) | `GET /api/catalogue/medicaments` | ❌ (`/api/medicaments` est le stock d'**une pharmacie**, avec `structure.lire`) |
-| Feuilles de soins : créer, lire, enregistrer, valider, supprimer, compteurs | `GET/POST /api/feuilles`, `GET/PUT/DELETE /api/feuilles/{id}`, `GET /api/feuilles/compteurs` | ❌ |
-| Délivrance à la pharmacie (prix saisi, parts) | inclus dans `PUT /api/feuilles/{id}` (voir §5.2) | ❌ |
-| Règlements des hôpitaux et pharmacies (paiement, avance) | `GET/POST /api/reglements` | ❌ |
-| Notifications de l'administrateur | `GET/POST /api/notifications`, `PUT …/{id}/lu`, `PUT …/{id}/accuse`, `GET /api/notifications/envoyees` | ❌ |
-| Journalisation : connexions, activité, alertes, intégrité | `GET/POST /api/journal/…` | ❌ (plan dans `backend/docs/02-journalisation.md`) |
+## 4. Anomalies signalées précédemment : traitées
 
-## 4. Anomalies trouvées dans le back-end (à corriger)
+Le NAG en texte, `nature` / `statut`, les bugs de `PharmacieController`, `CouvertureService`, `TarifService`, `changerStatut`, l'absence de CORS,
+le jeton sans renouvellement ni révocation, les photos non servies et `register` ouvert à tous sont **corrigés** (liste et détails :
+`backend/docs/05-integration-front.md` §7). Le statut *actif / suspendu* est porté par la colonne existante `statut_assure` (pas de colonne `statut`).
 
-1. **Patient : `nature_assure` et `statut` absents.** Le front lit `nature_assure` (1 principal, 2 ayant droit, 3 conjoint)
-   et `statut` (`actif` / `suspendu`). À défaut, il lit le BIT `statut_assure` (vrai = actif). Or dans le back-end
-   `statut_assure` veut dire « est assuré » (il déclenche la création automatique de la PEC). Décider : réutiliser le BIT
-   ou ajouter une vraie colonne `statut`. **Un assuré suspendu ne peut recevoir aucune prestation** : le serveur doit le
-   refuser (409) à la création et à la validation d'une feuille et à la délivrance ; le front le refuse aussi.
-   `fonds` est `DECIMAL` dans la base déployée (montants) et `TINYINT 1..4` dans le script : à trancher.
-2. **`PharmacieController.rechercher`** : `nag.equals(p.matricule_nag)` compare un `String` à un `Integer` → jamais vrai →
-   toujours 404. Il ne renvoie que la première ordonnance en attente (un assuré peut en avoir plusieurs le même jour) et
-   recharge toutes les ordonnances du patient dans une boucle. À remplacer par `GET /api/patients/nag/{nag}` puis la liste.
-3. **`CouvertureService.reload()`** lit `TauxCouverture.taux_pourcent` ; le script définit `pourcentage_pec` (et un taux
-   par fonds **et** par type de prestation). La requête échoue, la grille reste vide : tous les `montant_pec` valent 0.
-4. **`TarifService.reload()`** lit `Tarif.montant` ; le script définit `montant_tarif`, `libelle`, `code_acte`, `id_structure`.
-   Aucun contrôleur n'expose les tarifs.
-5. **`OrdonnanceController.delivrer`** calcule le prix avec `Medicaments.prix` (stock de la pharmacie) et décrémente le
-   stock. L'interface demande au **pharmacien de saisir le prix unitaire** : la délivrance doit accepter un
-   `prix_unitaire` par ligne (§5.2). `changerStatut` refuse `partiellement_delivree` que le script autorise.
-6. **`ConsultationController.POST`** prend le médecin dans le jeton : un agent d'accueil ne peut pas désigner le médecin
-   qui examinera (or l'accueil le fait). `POST /api/prestations` accepte `id_utilisateur` mais crée une PEC sans
-   `numero_de_feuille` / `type_feuille`, et rien ne garde le ticket modérateur, le service, le quartier, le téléphone.
-7. **`Prescription`** référence `Medicaments` (stock d'une pharmacie précise) : un médecin d'hôpital ne peut donc pas
-   prescrire librement. Il faut une désignation libre (ou un catalogue national) sur la ligne de prescription.
-8. **CORS absent** (aucun `Access-Control-*`, pas de `OPTIONS`) : le front doit être servi **sous la même origine** que
-   l'API (reverse proxy `/api` → `:8080`) ou le back-end doit gérer CORS. Les photos (`Patient.photo_url`,
-   `\backend\media\…`) ne sont pas servies par le serveur Java : à exposer sous `/media/…`.
-9. **Jeton de 1 h sans renouvellement** ; `POST /api/auth/logout` n'invalide rien. Le front renvoie à la connexion sur 401.
-   Prévoir un refresh ou une durée adaptée (journée de travail).
-10. **Utilisateur.nom = nom complet.** Le front sépare le prénom au premier espace (« Dr House » → prénom « Dr »). Prévoir
-    un champ `prenom` séparé. **`code_praticien`** et **`type_praticien`** (généraliste / spécialiste) manquent : ils
-    apparaissent sur la feuille de soins.
-11. **Rôle sans droit de lecture des feuilles** : `seed-database.sql` ne contient que 17 permissions ; le code en utilise
-    davantage (`pec.lire`, `pec.valider`, `prestation.modifier`, `examen.*`, `ordonnance.modifier|annuler|signer`, …).
-    Vérifier la matrice réelle et ajouter les nouvelles (`feuille.*`, `reglement.*`, `notification.envoyer`, `journal.lire`).
-
-## 5. Contrat des routes à créer
+## 5. Contrat des routes (implémenté)
 
 Format : JSON, en-têtes `Authorization: Bearer <jeton>`, erreurs `{ "error": "message lisible" }` (le front l'affiche
 tel quel). Codes : 401 jeton refusé, 403 droit manquant, 404 inconnu, 409 refus métier (assuré suspendu, feuille déjà
@@ -138,11 +105,17 @@ Le pharmacien voit : les consultations **validées** avec ordonnance (recherche 
   feuille est déjà validée ; créer la `Prestation` (+ `Prise_en_charge` avec `montant_pec` calculé par la grille de
   couverture) et l'`Ordonnance` + lignes de prescription **en une transaction**. Une consultation sans médicament ne crée
   pas d'ordonnance et n'est jamais visible par la pharmacie.
-- **Délivrance** (le pharmacien met à jour `ordonnance[i]` : `statut: "Servi"`, `prixUnitaire`, `dateService`) : le serveur
-  **recalcule** `total = prixUnitaire × quantité`, `partAssurance` (taux du ticket modérateur : Plein 80 %, Plein (ALD) et
-  Exonéré 100 % — table `TM_RATE` du front, à confirmer par le métier), `partPatient = total − partAssurance`, renseigne
-  `servicePar` (nom de la structure du jeton), refuse un prix ≤ 0, une ligne déjà servie, un assuré suspendu, et crée la
-  prestation « pharmacie ». Il ne doit **pas** utiliser le prix du stock.
+- **Délivrance, totale ou partielle** (le pharmacien envoie `ordonnance[i].aServir = { quantite, prixUnitaire }` ; les lignes
+  sont lues par rang, `apiServirLignes()` construit le corps) : le serveur vérifie `1 ≤ quantité ≤ reste à servir` (toutes
+  pharmacies confondues), **recalcule** `total = prixUnitaire × quantité servie`, `partAssurance` (taux du ticket modérateur :
+  Plein 80 %, Plein (ALD) et Exonéré 100 % — table `TM_RATE` du front, à confirmer par le métier), `partPatient = total −
+  partAssurance`, enregistre **une livraison** (table `Ordonnance_delivrance` : quantité, prix unitaire, montant total, parts,
+  pharmacie, pharmacien, date), refuse un prix ≤ 0, une ligne déjà entièrement servie, un assuré suspendu. Il ne doit **pas**
+  utiliser le prix du stock. **La réponse est la feuille relue dans la base** : pour chaque ligne `quantite` (prescrite),
+  `quantiteServie`, `statut` (`Non servi` / `Partiel` / `Servi`) et `livraisons[]` (`quantite`, `prixUnitaire`, `montantTotal`,
+  `partAssurance`, `partPatient`, `servicePar`, `idPharmacie`, `pharmacien`, `idPharmacien`, `dateService`, `heureService`) ;
+  l'écran (dont l'historique des délivrances) n'affiche que ces valeurs. L'ancien protocole (`statut: "Servi"` + `prixUnitaire`)
+  sert tout le reste de la ligne. Détail : `backend/docs/05-integration-front.md` §13.
 
 ### 5.3 Annuaires
 
@@ -179,27 +152,24 @@ n'envoie que ses propres actions (page ouverte, recherche, export…).
 - Table en **ajout seul** (aucun UPDATE / DELETE), empreinte SHA-256 ou HMAC de l'événement précédent, conservation à fixer.
 - Règles à rejouer côté serveur (seuils indicatifs) : échecs de connexion répétés (≥ 3 en 10 min : 50 pts ; ≥ 5 : 80), sur plusieurs comptes, réussite après échecs ; connexion hors horaires (avant 6 h, après 21 h), week-end, compte dormant (> 60 j) ou désactivé, nouvel appareil ; ≥ 10 assurés consultés en 10 min, recherches d'ordonnance sans résultat ; prix unitaire > 3 × le tarif de référence (ou < 1/5) ; même utilisateur qui valide la feuille et sert l'ordonnance ; paiement ≥ 5 000 000 FCFA ; création / suppression / désactivation de compte, changement de rôle ou de permissions, réinitialisation de mot de passe ; exports en rafale ; plus de 60 actions par minute. Score ≥ 25 : alerte à examiner ; ≥ 50 : notification de sécurité ; ≥ 80 : urgente, verrouillage temporaire du compte possible.
 
-## 6. Règles à faire respecter par le serveur (le front ne suffit pas)
+## 6. Règles appliquées par le serveur (le front ne suffit pas)
 
-- **Droits par champ** : l'agent crée mais ne remplit pas la partie médicale ; le médecin remplit sa partie et valide ; le
-  pharmacien ne modifie que la délivrance (`servicePar`, `dateService`, `prixUnitaire`, `partAssurance`, `partPatient`,
-  `statut` des lignes) d'une feuille **validée** ; une feuille validée n'est plus modifiable par le médecin.
-- **Assuré suspendu** : aucune création, validation ni délivrance (409, message clair).
-- **Numérotation** des feuilles par le serveur (jamais par le navigateur) ; identifiant client unique (409 sinon, le front en régénère un).
-- **Séparation des tâches** : la même personne ne doit pas valider la feuille et servir l'ordonnance (alerte du §5.6).
-- **Cohérence** : le montant d'une PEC et les parts sont toujours recalculés côté serveur.
+Toutes sont **en place** (voir `backend/docs/05-integration-front.md` §8) : refus 409 d'un assuré suspendu (création, validation, délivrance),
+numérotation des feuilles, droits par champ et par rôle, montants recalculés, séparation des tâches, journal tracé par le serveur.
 
-## 7. Ordre de mise en œuvre conseillé
+## 7. Ce qui reste à décider ou à faire
 
-1. Corriger les anomalies bloquantes : `CouvertureService` / `TarifService` (§4.3–4.4), CORS ou reverse proxy (§4.8), `nature_assure` / `statut` (§4.1), `GET /api/auth/me`.
-2. `GET /api/medecins`, `GET /api/catalogue/medicaments`, colonnes `code_praticien` / `type_praticien` / `prenom`.
-3. Module **feuilles** (§5.1–5.2) : c'est lui qui débloque accueil, médecin, pharmacie, historique, rapports, tableau de bord.
-4. **Règlements** (§5.4) : débloque les paiements des Rapports.
-5. **Journalisation** (§5.6), puis **notifications** (§5.5).
-6. Rapports agrégés côté serveur et pagination des feuilles quand les volumes l'exigent (le front calcule aujourd'hui les totaux à partir des feuilles reçues).
+1. **Secrets et exploitation** : changer le mot de passe SQL et la clé JWT (variables d'environnement), remplacer `admin` / `admin`, HTTPS, sauvegardes.
+2. **Métier** : confirmer le taux de prise en charge par fonds et type (80 % par défaut dans `TauxCouverture`), le ticket modérateur (80 % / 100 %), les tarifs fixes (`Tarif` vide).
+3. **Volumes** : agrégats de rapports côté serveur et pagination des feuilles quand les volumes l'exigeront (le front calcule aujourd'hui les totaux à partir des feuilles reçues, plafonnées à 1 000).
+4. **Assurés** : l'interface ne crée pas d'assuré (règle du projet : ils viennent de la base). `POST /api/patients` existe pour l'import ; `backend/MPD/donnees_demo.sql` fournit 3 assurés de démonstration.
 
 ## 8. Déploiement du front
 
-Servir `index.html`, `style.css`, `api.js`, `app.js` et les images comme fichiers statiques **sous la même origine que
-l'API**, ou définir avant `api.js` : `<script>window.PEC_API_BASE_URL = "https://api.exemple.ga";</script>` (dans ce cas le
-back-end doit répondre aux requêtes `OPTIONS` avec les en-têtes CORS). Prévoir HTTPS : le jeton circule dans chaque requête.
+Deux possibilités :
+
+* **Même origine** (recommandé) : un reverse proxy sert `index.html`, `style.css`, `api.js`, `app.js` et les images, et relaie `/api` et `/media` vers le serveur Java.
+* **Origines différentes** : définir avant `api.js` `<script>window.PEC_API_BASE_URL = "https://api.exemple.ga";</script>` ; le back-end répond désormais aux
+  requêtes `OPTIONS` avec les en-têtes CORS (variable `PEC_CORS_ORIGINS` pour restreindre les origines).
+
+Prévoir HTTPS : le jeton circule dans chaque requête. Le serveur Java écoute sur `PEC_PORT` (8080 par défaut).

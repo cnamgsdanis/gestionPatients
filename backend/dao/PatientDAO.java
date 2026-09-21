@@ -10,7 +10,7 @@ import java.util.List;
 /**
  * DAO pour l'entité Patient.
  * Gère notamment le niveau de fonds (1-4), l'assuré principal,
- * et le NAG (entier, généré automatiquement).
+ * et le NAG (texte de 10 chiffres, fourni ou généré automatiquement).
  */
 public class PatientDAO {
 
@@ -76,14 +76,14 @@ public class PatientDAO {
     }
 
     // ------------------------------------------------------------
-    // ENDPOINT FAIT : GET /api/patients/nag/{matricule}
-    // NAG = INT, exactement 10 chiffres. Aucun prefixe impose.
+    // GET /api/patients/nag/{matricule}
+    // NAG = NVARCHAR(20), exactement 10 chiffres (CK_Patient_nag_10).
     // ------------------------------------------------------------
-    public Patient findByNag(int matriculeNag) throws SQLException {
+    public Patient findByNag(String matriculeNag) throws SQLException {
         String sql = "SELECT * FROM Patient WHERE matricule_nag = ?";
         try (Connection c = Database.getConnection();
              PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setInt(1, matriculeNag);
+            ps.setString(1, matriculeNag);
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next() ? map(rs) : null;
             }
@@ -91,29 +91,16 @@ public class PatientDAO {
     }
 
     // ------------------------------------------------------------
-    // NAG INT : 10 chiffres uniquement, pas de prefixe obligatoire.
-    // Plage INT 10 chiffres : 1000000000 .. 2147483647
+    // NAG généré : plus grand NAG numérique existant + 1 (10 chiffres, à partir de 1000000000).
     // ------------------------------------------------------------
-    private int genererNag(Connection c) throws SQLException {
-        int minNag = 1_000_000_000;
-        int maxNag = Integer.MAX_VALUE;
-
-        String sql = "SELECT MAX(matricule_nag) FROM Patient WHERE matricule_nag >= ?";
-
-        try (PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setInt(1, minNag);
-            try (ResultSet rs = ps.executeQuery()) {
-                Integer max = null;
-                if (rs.next()) {
-                    int v = rs.getInt(1);
-                    if (!rs.wasNull()) max = v;
-                }
-                int prochain = (max == null) ? minNag : max + 1;
-                if (prochain > maxNag) {
-                    throw new SQLException("Plus de NAG disponible (INT 10 chiffres)");
-                }
-                return prochain;
-            }
+    private String genererNag(Connection c) throws SQLException {
+        long min = 1_000_000_000L, max = 9_999_999_999L;
+        try (Statement st = c.createStatement();
+             ResultSet rs = st.executeQuery("SELECT MAX(CAST(matricule_nag AS BIGINT)) FROM Patient WHERE matricule_nag IS NOT NULL")) {
+            long courant = rs.next() ? rs.getLong(1) : 0;
+            long prochain = courant < min ? min : courant + 1;
+            if (prochain > max) throw new SQLException("Plus de NAG disponible (10 chiffres)");
+            return String.valueOf(prochain);
         }
     }
 
@@ -123,26 +110,27 @@ public class PatientDAO {
     public int insert(Patient p) throws SQLException {
         String sql = "INSERT INTO Patient "
                    + "(photo_url, prenom, nom, sex, contact, adresse, date_naissance, "
-                   + " statut_assure, fonds, matricule_nag, id_assure_principal) "
-                   + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                   + " statut_assure, fonds, matricule_nag, id_assure_principal, nature) "
+                   + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
         try (Connection c = Database.getConnection();
              PreparedStatement ps = c.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
 
-            int nag = genererNag(c);
-            p.matricule_nag = nag;
+            // NAG fourni (déjà attribué à l'assuré) ou généré
+            if (p.matricule_nag == null || p.matricule_nag.isBlank()) p.matricule_nag = genererNag(c);
 
             ps.setString (1, p.photo_url);
             ps.setString (2, p.prenom);
             ps.setString (3, p.nom);
             ps.setString (4, p.sex);
-            ps.setString (5, p.contact);
+            ps.setString (5, blankToNull(p.contact));
             ps.setString (6, p.adresse);
             ps.setObject (7, (p.date_naissance != null && !p.date_naissance.isBlank()) ? Date.valueOf(p.date_naissance) : null);
             ps.setBoolean(8, p.statut_assure);
             ps.setObject (9, p.fonds);
-            ps.setInt    (10, nag);
+            ps.setString (10, p.matricule_nag);
             ps.setObject (11, p.id_assure_principal);
+            ps.setString (12, p.nature);
 
             ps.executeUpdate();
 
@@ -159,7 +147,7 @@ public class PatientDAO {
     public boolean update(Patient p) throws SQLException {
         String sql = "UPDATE Patient SET "
                    + "photo_url=?, prenom=?, nom=?, sex=?, contact=?, adresse=?, date_naissance=?, "
-                   + "statut_assure=?, fonds=?, matricule_nag=?, id_assure_principal=? "
+                   + "statut_assure=?, fonds=?, matricule_nag=?, id_assure_principal=?, nature=? "
                    + "WHERE id_patient=?";
 
         try (Connection c = Database.getConnection();
@@ -169,14 +157,15 @@ public class PatientDAO {
             ps.setString (2, p.prenom);
             ps.setString (3, p.nom);
             ps.setString (4, p.sex);
-            ps.setString (5, p.contact);
+            ps.setString (5, blankToNull(p.contact));
             ps.setString (6, p.adresse);
             ps.setObject (7, (p.date_naissance != null && !p.date_naissance.isBlank()) ? Date.valueOf(p.date_naissance) : null);
             ps.setBoolean(8, p.statut_assure);
             ps.setObject (9, p.fonds);
-            ps.setObject (10, p.matricule_nag);
+            ps.setString (10, p.matricule_nag);
             ps.setObject (11, p.id_assure_principal);
-            ps.setInt    (12, p.id_patient);
+            ps.setString (12, p.nature);
+            ps.setInt    (13, p.id_patient);
 
             return ps.executeUpdate() > 0;
         }
@@ -191,6 +180,10 @@ public class PatientDAO {
             ps.setInt(1, id);
             return ps.executeUpdate() > 0;
         }
+    }
+
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s.trim();
     }
 
     // ------------------------------------------------------------
@@ -212,8 +205,10 @@ public class PatientDAO {
         int fonds = rs.getInt("fonds");
         p.fonds = rs.wasNull() ? null : fonds;
 
-        int nag = rs.getInt("matricule_nag");
-        p.matricule_nag = rs.wasNull() ? null : nag;
+        p.matricule_nag = rs.getString("matricule_nag");
+        p.nature = rs.getString("nature");
+        p.nature_assure = Patient.natureCode(p.nature);
+        p.statut = p.statut_assure ? "actif" : "suspendu";
 
         int assure = rs.getInt("id_assure_principal");
         p.id_assure_principal = rs.wasNull() ? null : assure;

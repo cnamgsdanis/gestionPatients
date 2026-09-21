@@ -69,15 +69,19 @@ public class PharmacieController {
             return;
         }
 
-        // 1. Trouver le patient par matricule NAG
-        //    (on suppose que le NAG est unique — sinon adapter)
-        List<Patient> patients = patientDAO.findAll();
-        Patient patient = null;
-        for (Patient p : patients) {
-            if (nag.equals(p.matricule_nag)) { patient = p; break; }
+        // 1. Trouver le patient par matricule NAG (texte de 10 chiffres, unique en base)
+        if (!nag.matches("[0-9]{10}")) {
+            sendJson(ex, 400, "{\"error\":\"NAG invalide : uniquement 10 chiffres\"}");
+            return;
         }
+        Patient patient = patientDAO.findByNag(nag);
         if (patient == null) {
             sendJson(ex, 404, "{\"error\":\"Aucun patient avec ce matricule NAG\"}");
+            return;
+        }
+        // Un assuré suspendu ne peut recevoir aucune prestation
+        if (!patient.statut_assure) {
+            sendJson(ex, 409, "{\"error\":\"Assure suspendu : aucune prestation possible\"}");
             return;
         }
 

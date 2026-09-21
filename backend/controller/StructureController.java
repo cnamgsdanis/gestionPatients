@@ -111,12 +111,14 @@ public class StructureController {
             return;
         }
         if (s.type_structure == null ||
-            (!s.type_structure.equals("hopital") && !s.type_structure.equals("pharmacie"))) {
-            sendJson(ex, 400, "{\"error\":\"type_structure doit etre 'hopital' ou 'pharmacie'\"}");
+            (!s.type_structure.equals("hopital") && !s.type_structure.equals("pharmacie") && !s.type_structure.equals("administration"))) {
+            sendJson(ex, 400, "{\"error\":\"type_structure doit etre 'hopital', 'pharmacie' ou 'administration'\"}");
             return;
         }
 
         int id = dao.insert(s);
+        service.Audit.ok(ex, security.AuthGuard.claimsOuNull(ex), "ADMIN", "structure.creer", "Structure créée", "Structure", id,
+            s.raison_sociale, null, null, java.util.Map.of("type", s.type_structure));
         sendJson(ex, 201, "{\"id_structure\":" + id + "}");
     }
 
@@ -144,8 +146,14 @@ public class StructureController {
         if (modif.raison_sociale == null) modif.raison_sociale = existant.raison_sociale;
         if (modif.addresse       == null) modif.addresse       = existant.addresse;
         if (modif.type_structure == null) modif.type_structure = existant.type_structure;
+        if (!java.util.List.of("hopital", "pharmacie", "administration").contains(modif.type_structure)) {
+            sendJson(ex, 400, "{\"error\":\"type_structure doit etre 'hopital', 'pharmacie' ou 'administration'\"}");
+            return;
+        }
 
         boolean ok = dao.update(modif);
+        if (ok) service.Audit.ok(ex, security.AuthGuard.claimsOuNull(ex), "ADMIN", "structure.modifier", "Structure modifiée", "Structure", id,
+            modif.raison_sociale, null, null, java.util.Map.of("type", modif.type_structure));
         if (ok) sendJson(ex, 200, gson.toJson(dao.findById(id)));
         else    sendJson(ex, 500, "{\"error\":\"Echec de la mise a jour\"}");
     }
@@ -163,6 +171,7 @@ public class StructureController {
 
         try {
             boolean ok = dao.delete(id);
+            if (ok) service.Audit.ok(ex, security.AuthGuard.claimsOuNull(ex), "ADMIN", "structure.supprimer", "Structure supprimée", "Structure", id, null, null, null, null);
             sendJson(ex, ok ? 200 : 404,
                      ok ? "{\"message\":\"Supprime\"}" : "{\"error\":\"Introuvable\"}");
         } catch (java.sql.SQLException e) {

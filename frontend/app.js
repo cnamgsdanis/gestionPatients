@@ -70,15 +70,24 @@ function persistFeuilles() {
     for (const e of state.historique.slice()) {
       seen.add(e.id);
       const snap = feuilleSnapshot.get(e.id);
+      // Ce qui part est une COPIE figée de la feuille : si elle change pendant l'attente de la réponse (le médecin
+      // valide alors qu'un brouillon s'enregistre), le cliché garde ce qui a réellement été envoyé, et la
+      // modification suivante sera bien envoyée au tour d'après.
       if (!snap) {
-        const saved = await apiCreateFeuille(e);
+        const sent = JSON.stringify(e);
+        const saved = await apiCreateFeuille(JSON.parse(sent));
         mergeServerFeuille(e, saved);
-        feuilleSnapshot.set(e.id, { json: JSON.stringify(e), serverId: e.serverId });
+        const copy = JSON.parse(sent);
+        mergeServerFeuille(copy, saved);
+        feuilleSnapshot.set(e.id, { json: JSON.stringify(copy), serverId: e.serverId });
       } else if (snap.json !== JSON.stringify(e)) {
         e.serverId = e.serverId || snap.serverId;
-        const saved = await apiUpdateFeuille(e.serverId, e);
+        const sent = JSON.stringify(e);
+        const saved = await apiUpdateFeuille(e.serverId, JSON.parse(sent));
         mergeServerFeuille(e, saved);
-        feuilleSnapshot.set(e.id, { json: JSON.stringify(e), serverId: e.serverId });
+        const copy = JSON.parse(sent);
+        mergeServerFeuille(copy, saved);
+        feuilleSnapshot.set(e.id, { json: JSON.stringify(copy), serverId: e.serverId });
       }
     }
     for (const id of Array.from(feuilleSnapshot.keys())) {
@@ -140,7 +149,7 @@ function mergeFeuilles(list, authoritative, force) {
 // Paramètres de la liste « par défaut » de chaque rôle (le serveur applique de toute façon ses propres droits).
 function feuilleScopeParams() {
   const u = state.currentUser;
-  return u && u.role === "Pharmacie" ? { servi_par_moi: 1 } : {};
+  return u && u.role === "Pharmacien" ? { servi_par_moi: 1 } : {};
 }
 async function pullFeuilles(force) {
   const list = await apiListFeuilles(feuilleScopeParams());
@@ -178,6 +187,9 @@ async function bootstrapData() {
   state.catalogue = (catalogue || []).map(m => ({ designation: m.designation, prix: Number(m.prix_reference) || 0 }));
   state.structures = structures || [];
   state.permissions = me && Array.isArray(me.permissions) ? new Set(me.permissions) : null;
+  // Interrupteur des contrôles anti-fraude : le serveur ne le communique qu'à l'administrateur (null pour les autres profils).
+  state.controles = me && typeof me.controles_antifraude === "boolean" ? me.controles_antifraude : null;
+  applyControlsUi();
   populateMedecinSelect();
   populatePharmaFilterOptions();
   populateHospFilterOptions();
@@ -219,10 +231,69 @@ async function liveRefresh() {
     refreshNavLive();
     if (currentViewName === "medecin") renderMedecinQueue();
     if (currentViewName === "historique") renderHistorique();
+    // Une autre pharmacie a peut-être servi une partie de l'ordonnance affichée : on la relit (sauf si l'on est en pleine saisie).
+    if (currentViewName === "pharmacie" && state.pharma && state.pharma.nag && !(document.activeElement && document.activeElement.closest && document.activeElement.closest("#pharmaResults"))) {
+      await refreshFeuillesByNag(state.pharma.nag);
+      runPharmaSearch(state.pharma.nag, true);
+    }
+    if (state.controles !== null) await syncControles();
     if (typeof pullNotifications === "function") await pullNotifications();
   } catch (e) { /* le prochain tour réessaiera */ } finally { liveRefreshBusy = false; }
 }
 window.setInterval(liveRefresh, 20000);
+
+/* ---------------------------------------------------------------------- */
+/* Contrôles anti-fraude du serveur : interrupteur du Super Admin           */
+/* ---------------------------------------------------------------------- */
+
+// Actifs (défaut) : chaque profil ne fait que son étape et l'administrateur ne modifie pas les feuilles.
+// Désactivés (« mode supervision ») : l'administrateur peut réaliser lui-même toutes les étapes du circuit ;
+// les autres profils restent soumis aux contrôles. Le serveur applique la règle ; ce bouton ne fait que la piloter.
+// state.controles : true | false pour l'administrateur, null pour tous les autres profils.
+state.controles = null;
+function applyControlsUi() {
+  const btn = document.getElementById("controlsBtn");
+  const banner = document.getElementById("controlsBanner");
+  const admin = state.controles !== null && !!state.currentUser && state.currentUser.role === "Super Admin";
+  const on = state.controles !== false;
+  btn.hidden = !admin;
+  btn.classList.toggle("off", admin && !on);
+  btn.setAttribute("aria-checked", String(on));
+  btn.title = on ? "Contrôles anti-fraude actifs — cliquez pour passer en mode supervision" : "Mode supervision — cliquez pour réactiver les contrôles";
+  document.getElementById("controlsBtnLabel").textContent = on ? "Contrôles actifs" : "Contrôles désactivés";   // lu par les lecteurs d'écran ; le bouton n'affiche que l'icône et l'interrupteur
+  banner.hidden = !(admin && !on) || !!uiPref("controls_banner_closed", false);
+  document.body.classList.toggle("banner-on", !banner.hidden);   // les messages (toasts) se rangent sous le bandeau
+  document.body.classList.toggle("supervision", admin && !on);
+}
+async function syncControles() {
+  try {
+    const c = await apiGetControles();
+    if (c && typeof c.actif === "boolean" && c.actif !== (state.controles !== false)) { state.controles = c.actif; setUiPref("controls_banner_closed", false); applyControlsUi(); }
+  } catch (e) { /* ignoré : le bouton garde son dernier état connu */ }
+}
+async function setControles(actif) {
+  const btn = document.getElementById("controlsBtn");
+  btn.disabled = true;
+  try {
+    const r = await apiSetControles(actif);
+    state.controles = !!r.actif;
+    setUiPref("controls_banner_closed", false);      // un nouveau changement d'état ré-affiche le bandeau
+    applyControlsUi();                               // l'interrupteur et le bandeau suffisent : pas de message en plus
+    if (currentViewName === "journalisation") renderJournalisation();
+  } catch (err) {
+    showInfoModal("Interrupteur non modifié", "<p>" + escapeHtml(err.message) + "</p>");
+  } finally { btn.disabled = false; }
+}
+function toggleControles() {
+  if (state.controles === null) return;
+  if (state.controles === false) { setControles(true); return; }        // réactiver : immédiat
+  askConfirm("Le serveur ne bloquera plus vos actions d'administrateur : vous pourrez corriger l'accueil, remplir et valider une feuille de soins, puis servir une ordonnance. " +
+    "Les autres profils restent soumis aux contrôles. Cette désactivation est tracée au journal et déclenche une alerte de sécurité.",
+    () => setControles(false), { title: "Passer en mode supervision ?", confirmLabel: "Désactiver les contrôles" });
+}
+document.getElementById("controlsBtn").addEventListener("click", toggleControles);
+document.getElementById("controlsBannerBtn").addEventListener("click", () => setControles(true));
+document.getElementById("controlsBannerClose").addEventListener("click", () => { setUiPref("controls_banner_closed", true); applyControlsUi(); });
 
 // Une session expirée (jeton refusé) ramène à l'écran de connexion avec un message clair.
 window.onApiUnauthorized = function () {
@@ -384,11 +455,11 @@ function playLoginTransition(callback, user, waitFor) {
 // permissions" (state.roleAccess, persistée dans pec_role_access) ; ce
 // bloc ne fournit que les valeurs par défaut ("réinitialiser").
 const ROLE_ACCESS_DEFAULT = {
-  "Super Admin": { views: ["dashboard", "rapports", "nouvelle-pec", "medecin", "pharmacie", "historique", "users", "journalisation"], landing: "dashboard" },
+  "Super Admin": { views: ["dashboard", "rapports", "nouvelle-pec", "medecin", "pharmacie", "historique", "users", "structures", "journalisation"], landing: "dashboard" },
   "DG": { views: ["dashboard", "rapports", "journalisation"], landing: "dashboard" },
   "Médecin": { views: ["medecin"], landing: "medecin" },
   "Agent hospitalier": { views: ["nouvelle-pec", "historique"], landing: "nouvelle-pec" },
-  "Pharmacie": { views: ["pharmacie"], landing: "pharmacie" },
+  "Pharmacien": { views: ["pharmacie"], landing: "pharmacie" },
   "Caisse": { views: ["dashboard", "rapports"], landing: "rapports" }
 };
 // Accès par rôle : valeurs par défaut du front, affinées par les permissions réelles du compte quand le
@@ -403,6 +474,7 @@ const VIEW_PERMISSIONS = {
   pharmacie: ["ordonnance.delivrer", "ordonnance.lire"],
   historique: ["prestation.lire", "pec.lire"],
   users: ["utilisateur.lire"],
+  structures: ["structure.lire"],
   journalisation: ["journal.lire", "utilisateur.lire"],
   permissions: ["permission.lire"]
 };
@@ -480,7 +552,89 @@ function updateUserPill(user, email) {
       if (dot) el.appendChild(dot);
     });
   });
+  renderProfileSwitcher();
   updateGreeting();
+}
+
+/* ---------------------------------------------------------------------- */
+/* Profils : un compte peut en porter plusieurs (un profil = un rôle = un    */
+/* ensemble d'interfaces). Le profil ACTIF décide des écrans et des droits ; */
+/* on change de profil depuis le menu utilisateur (POST /api/auth/profil).  */
+/* ---------------------------------------------------------------------- */
+
+const ALL_API_ROLES = Object.keys(API_ROLE_TO_FRONT_ROLE);
+const VIEW_LABELS = { dashboard: "Tableau de bord", rapports: "Rapports", "nouvelle-pec": "Nouvelle prise en charge", medecin: "Espace Médecin", pharmacie: "Espace Pharmacien",
+  historique: "Historique PEC", users: "Gestion des utilisateurs", structures: "Structures", journalisation: "Journalisation", permissions: "Gestion des permissions" };
+
+// Interfaces (écrans) qu'ouvre un profil, selon la matrice d'accès (state.roleAccess).
+function profileInterfaces(apiRole) {
+  const front = API_ROLE_TO_FRONT_ROLE[apiRole] || apiRole;
+  const access = state.roleAccess[front];
+  const views = access ? access.views.slice() : [];
+  if (front === "Super Admin") views.push("permissions");
+  return views.map(v => VIEW_LABELS[v] || v);
+}
+
+function renderProfileSwitcher() {
+  const u = state.currentUser;
+  const wrap = document.getElementById("userMenuProfiles");
+  const list = document.getElementById("userMenuProfilesList");
+  if (!wrap || !list) return;
+  if (!u || !u.profils || u.profils.length < 2) { wrap.hidden = true; list.innerHTML = ""; return; }
+  wrap.hidden = false;
+  const active = FRONT_ROLE_TO_API_ROLE[u.role] || u.role;
+  list.innerHTML = u.profils.map(p =>
+    '<button type="button" class="udp-item' + (p.api === active ? " active" : "") + '" data-profil="' + p.api + '" role="menuitemradio" aria-checked="' + (p.api === active) + '">' +
+      '<span class="udp-dot" aria-hidden="true"></span><span>' + escapeHtml(p.label) + "</span>" + (p.api === u.profilPrincipal ? "<small>principal</small>" : "") + "</button>").join("");
+}
+document.getElementById("userMenuProfilesList").addEventListener("click", e => {
+  const b = e.target.closest("[data-profil]");
+  if (b && !b.classList.contains("active")) switchProfil(b.dataset.profil);
+});
+
+let switchingProfil = false;
+async function switchProfil(profilApi) {
+  if (switchingProfil || !state.currentUser) return;
+  switchingProfil = true;
+  setUserMenuOpen(false);
+  try {
+    // rien de non enregistré ne doit se perdre dans le changement
+    try { await persistFeuilles(); } catch (err) {
+      showInfoModal("Changement de profil impossible", "<p>" + escapeHtml(err.message) + "</p><p class=\"hint\">Des modifications ne sont pas encore enregistrées : elles restent affichées.</p>");
+      return;
+    }
+    let user;
+    try { user = mapBackendUser((await apiSwitchProfil(profilApi)).user); } catch (err) {
+      showInfoModal("Changement de profil impossible", "<p>" + escapeHtml(err.message) + "</p>");
+      return;
+    }
+    // Comme une connexion : les données sont rechargées avec les droits du nouveau profil, puis on ouvre son interface.
+    resetForProfileChange();
+    state.currentUser = user;
+    persistSession();
+    applyRoleAccess(user);
+    updateUserPill(user, user.email);
+    const ready = bootstrapData();
+    playLoginTransition(() => {
+      applyRoleAccess(state.currentUser);
+      const access = state.roleAccess[state.currentUser.role];
+      goToView(access && access.landing && isViewAllowed(access.landing) ? access.landing : firstAllowedView());
+      afterLogin(false);
+      toast({ kind: "success", title: "Profil actif : " + user.role, text: "Vous travaillez maintenant avec ce profil.", ms: 3500 });
+    }, user, ready);
+  } finally { switchingProfil = false; }
+}
+function resetForProfileChange() {
+  setDrawerOpen(false);
+  setNotifPanelOpen(false);
+  hideNavTip();
+  state.queueScope = null;
+  state.editingEntryId = null;
+  state.compteurs = null;
+  state.controles = null;
+  applyControlsUi();
+  clearPharmaResults();
+  viewHistory = [];
 }
 
 
@@ -527,18 +681,69 @@ document.getElementById("loginForm").addEventListener("submit", function (e) {
       return;
     }
 
-    beginSession(result.user);
-    applyRoleAccess(state.currentUser);
-    updateUserPill(state.currentUser, username);
-    // Les données (feuilles, règlements, annuaires…) se chargent pendant l'animation d'accueil.
-    const ready = bootstrapData();
-    playLoginTransition(() => {
-      applyRoleAccess(state.currentUser);          // les permissions du serveur affinent le menu
-      const access = state.roleAccess[state.currentUser.role];
-      goToView(access && access.landing && isViewAllowed(access.landing) ? access.landing : firstAllowedView());
-      afterLogin(true);
-    }, state.currentUser, ready);
+    // Compte créé (ou mot de passe réinitialisé) par un administrateur : le mot de passe reçu est temporaire.
+    // Le serveur ferme toutes les routes métier tant que le titulaire n'a pas choisi le sien.
+    if (result.user.doitChangerMdp) { promptFirstPassword(username, password); return; }
+    enterApp(result.user, username);
   });
+});
+
+// Entrée dans l'application une fois la connexion acceptée (et le mot de passe personnel choisi).
+function enterApp(user, username) {
+  beginSession(user);
+  applyRoleAccess(state.currentUser);
+  updateUserPill(state.currentUser, username);
+  // Les données (feuilles, règlements, annuaires…) se chargent pendant l'animation d'accueil.
+  const ready = bootstrapData();
+  playLoginTransition(() => {
+    applyRoleAccess(state.currentUser);          // les permissions du serveur affinent le menu
+    const access = state.roleAccess[state.currentUser.role];
+    goToView(access && access.landing && isViewAllowed(access.landing) ? access.landing : firstAllowedView());
+    afterLogin(true);
+  }, state.currentUser, ready);
+}
+
+/* ---- Première connexion : choisir son mot de passe (PUT /api/auth/change-password) ---- */
+const forcePasswordModal = document.getElementById("forcePasswordModal");
+let forcePasswordUsername = "";
+function promptFirstPassword(username, temporary) {
+  forcePasswordUsername = username;
+  document.getElementById("forcePasswordForm").reset();
+  document.getElementById("fp-ancien").value = temporary || "";
+  const err = document.getElementById("fp-error");
+  err.hidden = true;
+  err.textContent = "";
+  forcePasswordModal.hidden = false;
+  window.setTimeout(() => document.getElementById("fp-nouveau").focus(), 60);
+}
+function closeForcePassword() {
+  forcePasswordModal.hidden = true;
+  document.getElementById("forcePasswordForm").reset();
+}
+document.getElementById("fp-cancel").addEventListener("click", () => {
+  apiLogout();                                   // le jeton restreint n'a plus d'usage
+  closeForcePassword();
+  document.getElementById("loginForm").reset();
+});
+document.getElementById("forcePasswordForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const ancien = document.getElementById("fp-ancien").value;
+  const nouveau = document.getElementById("fp-nouveau").value;
+  const confirm = document.getElementById("fp-confirm").value;
+  const err = document.getElementById("fp-error");
+  const fail = msg => { err.textContent = msg; err.hidden = false; };
+  err.hidden = true;
+  if (nouveau.length < 4) return fail("Le nouveau mot de passe doit comporter au moins 4 caractères.");
+  if (nouveau === ancien) return fail("Le nouveau mot de passe doit être différent du mot de passe temporaire.");
+  if (nouveau !== confirm) return fail("La confirmation ne correspond pas au nouveau mot de passe.");
+  const btn = document.getElementById("fp-submit");
+  btn.disabled = true;
+  apiChangePassword(ancien, nouveau).then(() => {
+    closeForcePassword();
+    const s = apiCurrentSession();
+    enterApp(mapBackendUser(s.user), forcePasswordUsername);
+  }).catch(e2 => fail(e2.message || "Le mot de passe n'a pas pu être enregistré."))
+    .finally(() => { btn.disabled = false; });
 });
 
 function firstAllowedView() {
@@ -630,7 +835,6 @@ function performLogout(opts) {
   clearSession();
   setDrawerOpen(false);
   setNotifPanelOpen(false);
-  closePalette();
   hideNavTip();
   document.getElementById("toastStack").innerHTML = "";
   document.title = BASE_TITLE;
@@ -649,6 +853,7 @@ function performLogout(opts) {
   feuilleSnapshot.clear();
   state.historique = []; state.reglements = []; state.reglementsHopitaux = []; state.medecins = []; state.catalogue = [];
   state.notifications = []; state.apiUsers = null; state.permissions = null; state.compteurs = null;
+  state.controles = null; applyControlsUi();
   buildLoginParticles();
   buildLoginDna();
   if (opts && opts.expired) setFieldError("loginPass", "loginPassError", "Votre session a expiré : reconnectez-vous.");
@@ -681,7 +886,9 @@ function openProfilModal() {
   const u = state.currentUser;
   document.getElementById("profil-nom").value = u ? (u.prenom + " " + u.nom) : "";
   document.getElementById("profil-email").value = u ? u.email : "";
-  document.getElementById("profil-role").value = u ? u.role : "Utilisateur";
+  // profil actif, puis les autres profils du compte s'il en a
+  const others = u && u.profils ? u.profils.filter(p => p.label !== u.role).map(p => p.label) : [];
+  document.getElementById("profil-role").value = u ? u.role + (others.length ? " (autres profils : " + others.join(", ") + ")" : "") : "Utilisateur";
   const etabWrap = document.getElementById("profil-etab-wrap");
   if (u && u.etablissement) {
     document.getElementById("profil-etab").value = u.etablissement;
@@ -718,7 +925,7 @@ document.getElementById("profilForm").addEventListener("submit", e => {
 document.getElementById("userMenuParams").addEventListener("click", () => {
   setUserMenuOpen(false);
   showInfoModal("Paramètres", "<p>Vos données sont enregistrées dans la base de la CNAMGS : rien n'est conservé dans ce navigateur, hormis la session de cet onglet.</p>" +
-    "<p>Pour changer votre mot de passe, ouvrez « Mon profil ».</p>");
+    "<p>Pour changer votre mot de passe, ouvrez « Mon compte ».</p>");
 });
 document.getElementById("userMenuNotifs").addEventListener("click", () => {
   setUserMenuOpen(false);
@@ -780,7 +987,7 @@ navScrollEl.addEventListener("scroll", hideNavTip, { passive: true });
 
 // Halo qui suit le curseur sur l'item survolé.
 sidebarEl.addEventListener("pointermove", e => {
-  const el = e.target.closest(".nav-item, .btn-logout, .pulse-stat");
+  const el = e.target.closest(".nav-item, .btn-logout");
   if (!el) return;
   const r = el.getBoundingClientRect();
   el.style.setProperty("--mx", (e.clientX - r.left) + "px");
@@ -846,18 +1053,10 @@ document.addEventListener("touchend", e => {
   swipeX0 = swipeY0 = null;
 }, { passive: true });
 
-// « Pouls du circuit » et pastilles : patients qui attendent le médecin, ordonnances à servir.
+// Pastilles de la barre latérale : patients qui attendent le médecin, ordonnances à servir.
 function pharmaPendingCount() {
   if (state.compteurs && state.compteurs.ordonnances_a_servir != null) return Number(state.compteurs.ordonnances_a_servir) || 0;   // compteur du serveur
-  return state.historique.filter(h => isSentToPharmacy(h) && pharmaLines(h).some(m => m.statut !== "Servi")).length;
-}
-function setLiveCount(el, n, hotEl) {
-  if (!el) return;
-  if (el.textContent !== String(n)) {
-    el.textContent = n;
-    el.classList.remove("bump"); void el.offsetWidth; el.classList.add("bump");
-  }
-  if (hotEl) hotEl.classList.toggle("hot", n > 0);
+  return state.historique.filter(h => isSentToPharmacy(h) && entryHasRemaining(h)).length;
 }
 function refreshNavLive() {
   if (!state.currentUser) return;
@@ -866,13 +1065,7 @@ function refreshNavLive() {
   const pb = document.getElementById("pharmaNavBadge");
   pb.textContent = rx;
   pb.hidden = rx === 0;
-  const waiting = state.compteurs && state.compteurs.en_attente_medecin != null
-    ? Number(state.compteurs.en_attente_medecin) || 0
-    : waitingVisits(state.historique.filter(h => h.statut === "En attente")).length;
-  setLiveCount(document.getElementById("pulseWaiting"), waiting, document.getElementById("pulseWaiting").parentElement);
-  setLiveCount(document.getElementById("pulseRx"), rx, document.getElementById("pulseRx").parentElement);
 }
-document.querySelectorAll(".pulse-stat[data-goto]").forEach(b => b.addEventListener("click", () => goToView(b.dataset.goto)));
 window.setInterval(refreshNavLive, 4000);
 
 /* ---------------------------------------------------------------------- */
@@ -1036,6 +1229,7 @@ async function restoreSession() {
   }
   const user = mapBackendUser(apiCurrentSession().user);
   if (!user) { clearSession(); return false; }
+  if (user.doitChangerMdp) { apiLogout(); clearSession(); return false; }   // mot de passe temporaire : on repasse par la connexion
 
   sessionMeta = { sessionId: rec.sessionId || newId("S"), startedAt: rec.startedAt || Date.now() };
   state.currentUser = user;
@@ -1330,7 +1524,7 @@ function refreshComposeValue() {
   const wrap = document.getElementById("composeValueWrap");
   wrap.hidden = type === "all";
   if (type !== "all") {
-    document.getElementById("composeValueLabel").textContent = { role: "Rôle", etablissement: "Établissement", user: "Utilisateur" }[type];
+    document.getElementById("composeValueLabel").textContent = { role: "Profil", etablissement: "Établissement", user: "Utilisateur" }[type];
     document.getElementById("composeValue").innerHTML = composeTargetOptions(type).map(o => '<option value="' + escapeHtml(o.v) + '">' + escapeHtml(o.l) + "</option>").join("");
   }
   renderComposeRecap();
@@ -1402,72 +1596,13 @@ document.getElementById("composeForm").addEventListener("submit", e => {
 });
 
 /* ---------------------------------------------------------------------- */
-/* Palette « Aller à… » (Ctrl + K)                                          */
+/* Touche Échap : ferme la fenêtre de message, le panneau de notifications  */
+/* ou le tiroir de navigation                                              */
 /* ---------------------------------------------------------------------- */
 
-const paletteModal = document.getElementById("paletteModal");
-const paletteInput = document.getElementById("paletteInput");
-const paletteListEl = document.getElementById("paletteList");
-let paletteItems = [];
-let paletteIndex = 0;
-
-function normText(s) { return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase(); }
-function paletteCatalog() {
-  const items = [];
-  document.querySelectorAll(".nav-item[data-view]").forEach(btn => {
-    if (btn.hidden) return;
-    items.push({ group: "Pages", label: btn.dataset.tip || btn.textContent.trim(), icon: btn.querySelector(".nav-ico").innerHTML, hint: "Ouvrir", run: () => goToView(btn.dataset.view) });
-  });
-  items.push({ group: "Actions", label: "Notifications", icon: NOTIF_ENVELOPE_SVG, hint: "Boîte de réception", run: openNotifPanel });
-  if (canSendNotifications()) items.push({ group: "Actions", label: "Envoyer un message aux utilisateurs", icon: NOTIF_ENVELOPE_SVG, hint: "Administrateur", run: openComposeModal });
-  items.push({ group: "Actions", label: "Mon profil", icon: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>', hint: "Compte", run: openProfilModal });
-  items.push({ group: "Actions", label: "Se déconnecter", icon: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>', hint: "Session", run: performLogout });
-  return items;
-}
-function renderPalette() {
-  const q = normText(paletteInput.value.trim());
-  paletteItems = paletteCatalog().filter(i => !q || normText(i.label).includes(q));
-  if (paletteIndex >= paletteItems.length) paletteIndex = Math.max(0, paletteItems.length - 1);
-  if (!paletteItems.length) { paletteListEl.innerHTML = '<div class="palette-empty">Rien ne correspond à « ' + escapeHtml(paletteInput.value) + " ».</div>"; return; }
-  let html = "", group = "";
-  paletteItems.forEach((it, i) => {
-    if (it.group !== group) { group = it.group; html += '<div class="palette-group">' + group + "</div>"; }
-    html += '<button type="button" class="palette-item' + (i === paletteIndex ? " active" : "") + '" role="option" data-i="' + i + '">' +
-      '<span class="p-ico">' + it.icon + "</span><span>" + escapeHtml(it.label) + "</span><small>" + it.hint + "</small></button>";
-  });
-  paletteListEl.innerHTML = html;
-  const active = paletteListEl.querySelector(".palette-item.active");
-  if (active) active.scrollIntoView({ block: "nearest" });
-}
-function openPalette() {
-  if (!state.currentUser) return;
-  paletteIndex = 0;
-  paletteInput.value = "";
-  paletteModal.hidden = false;
-  renderPalette();
-  paletteInput.focus();
-}
-function closePalette() { paletteModal.hidden = true; }
-function runPaletteItem(i) {
-  const it = paletteItems[i];
-  if (!it) return;
-  closePalette();
-  it.run();
-}
-paletteInput.addEventListener("input", () => { paletteIndex = 0; renderPalette(); });
-paletteInput.addEventListener("keydown", e => {
-  if (e.key === "ArrowDown") { e.preventDefault(); paletteIndex = Math.min(paletteItems.length - 1, paletteIndex + 1); renderPalette(); }
-  else if (e.key === "ArrowUp") { e.preventDefault(); paletteIndex = Math.max(0, paletteIndex - 1); renderPalette(); }
-  else if (e.key === "Enter") { e.preventDefault(); runPaletteItem(paletteIndex); }
-});
-paletteListEl.addEventListener("click", e => { const b = e.target.closest(".palette-item"); if (b) runPaletteItem(parseInt(b.dataset.i, 10)); });
-paletteModal.addEventListener("click", e => { if (e.target === paletteModal) closePalette(); });
-document.getElementById("topbarSearchBtn").addEventListener("click", openPalette);
 document.addEventListener("keydown", e => {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); if (paletteModal.hidden) openPalette(); else closePalette(); return; }
   if (e.key !== "Escape") return;
-  if (!paletteModal.hidden) closePalette();
-  else if (!composeModal.hidden) closeComposeModal();
+  if (!composeModal.hidden) closeComposeModal();
   else if (notifPanelEl.classList.contains("open")) setNotifPanelOpen(false);
   else if (sidebarEl.classList.contains("open")) setDrawerOpen(false);
 });
@@ -1484,6 +1619,7 @@ const VIEW_META = {
   "dossier-patient": { title: "Dossier patient", crumb: "Accueil / Nouvelle prise en charge / Dossier patient" },
   historique: { title: "Historique PEC", crumb: "Accueil / Historique" },
   users: { title: "Gestion des utilisateurs", crumb: "Accueil / Utilisateurs" },
+  structures: { title: "Structures", crumb: "Accueil / Structures" },
   pharmacie: { title: "Espace Pharmacien", crumb: "Accueil / Espace Pharmacien" },
   rapports: { title: "Rapports", crumb: "Accueil / Rapports" },
   permissions: { title: "Gestion des permissions", crumb: "Accueil / Permissions" },
@@ -1568,6 +1704,7 @@ function goToView(name, opts) {
 
   if (name === "historique") renderHistorique();
   if (name === "users") renderUsers();
+  if (name === "structures") renderStructuresPage();
   if (name === "dashboard") renderDashboardStats();
   if (name === "medecin") renderMedecinQueue();
   if (name === "pharmacie") resetPharmaSearch();
@@ -2626,7 +2763,6 @@ async function commitVisitValidation() {
   refreshPendingBadge();
   closeVisitModal(true);
   goToView("medecin");
-  pending.forEach(syncValidatedEntryToDossierPatient);
   const consult = pending.find(e => e.type === "Consultation");
   const pharmacyNote = !consult ? "" : (isSentToPharmacy(consult)
     ? "<p>L'ordonnance est envoyée à la pharmacie.</p>"
@@ -2675,7 +2811,7 @@ const SOINS_FONDS_LABEL = { 1: "Fonds Secteur Public", 2: "Fonds Secteur Privé"
 
 // « Enregistrer » (Nouvelle prise en charge) : plus de choix Consultation/
 // Examen à cette étape — c'est le médecin qui décide au moment de la
-// validation (voir syncValidatedEntryToDossierPatient). On crée directement
+// validation (voir commitVisitValidation). On crée directement
 // une entrée "En attente" dans la file du médecin, avec les seules infos
 // déjà connues à ce stade (patient, ticket modérateur, médecin) ; le détail
 // (prestations, ordonnance, bon d'examen) sera rempli par le médecin à la
@@ -3137,43 +3273,9 @@ function frDateToISO(s) {
   return m ? (m[3] + "-" + m[2] + "-" + m[1]) : new Date().toISOString().slice(0, 10);
 }
 
-// C'est le médecin qui décide, au moment de la validation de la visite, ce qui
-// entre au dossier : la consultation et chacun de ses bons d'examen (voir
-// commitVisitValidation). Une fois la feuille validée, le dossier patient
-// (Consultations / Examens, alimentés par l'API — voir ConsultationController /
-// ExamenController) doit refléter automatiquement cette décision, sans action
-// supplémentaire. Best-effort : une erreur ici n'annule jamais la validation
-// déjà enregistrée dans state.historique.
-function syncValidatedEntryToDossierPatient(entry) {
-  findPatientByMatricule(entry.matricule).then(patient => {
-    if (!patient || patient.idPatient == null) {
-      console.warn("[Dossier patient] Patient introuvable pour le matricule " + entry.matricule + " — synchronisation ignorée.");
-      return;
-    }
-    if (entry.type === "Examen") {
-      apiCreateExamenPatient({
-        id_patient: patient.idPatient,
-        date_examen: frDateToISO(entry.date),
-        type_examen: entry.examNature || "Examen",
-        montant: parseFloat(entry.totalMontant) || 0,
-        // Examen.statut : en_attente | en_cours | termine | annule (CK_Examen_statut) —
-        // « validee » n'existe que pour la prise en charge d'une consultation.
-        // La feuille validée prescrit l'examen ; il reste à réaliser.
-        statut: "en_attente"
-      }).catch(err => console.warn("[Dossier patient] Synchronisation examen échouée : " + err.message));
-    } else {
-      apiCreateConsultation({
-        id_patient: patient.idPatient,
-        date: frDateToISO(entry.date),
-        montant: parseFloat(entry.totalMontant) || 0,
-        montant_pec: parseFloat(entry.totalPart) || 0,
-        numero_de_feuille: entry.numero || "",
-        type_feuille: entry.type || "Consultation",
-        statut: "validee"
-      }).catch(err => console.warn("[Dossier patient] Synchronisation consultation échouée : " + err.message));
-    }
-  }).catch(err => console.warn("[Dossier patient] Recherche patient échouée : " + err.message));
-}
+// La validation d'une feuille crée côté serveur, dans la même transaction, la prestation, la prise en
+// charge, l'examen ou l'ordonnance : le dossier patient (Consultations / Examens) se met donc à jour tout
+// seul, sans appel supplémentaire de l'interface.
 
 /* ---------------------------------------------------------------------- */
 /* Tableau de bord : statistiques, courbes d'évolution, répartition,       */
@@ -3475,7 +3577,7 @@ function previewEntry(id) {
       ? '<table class="data-table"><thead><tr><th>Désignation</th><th>Qté</th><th>Posologie / Durée</th><th>Délivrance</th></tr></thead><tbody>' +
         ord.map(r =>
           "<tr><td>" + esc(r.designation) + "</td><td>" + esc(r.quantite) + "</td><td>" + esc(r.posologie || "—") + "</td><td>" +
-          (r.statut === "Servi" ? "Servi le " + esc(r.dateService) + (r.servicePar ? " — " + esc(r.servicePar) : "") : "Non servi") + "</td></tr>"
+          esc(medDeliveryText(r)) + "</td></tr>"
         ).join("") + "</tbody></table>"
       : '<p class="hint" style="margin:0">Aucune ordonnance.</p>');
   }
@@ -3565,6 +3667,32 @@ function iconEdit() {
 function iconKey() {
   return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.9 12.1L19 4"/><path d="M15 9l3 3"/><path d="M18 6l3 3"/></svg>';
 }
+function iconProfils() {   // carte d'identité : « profils du compte »
+  return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="9" cy="11" r="2"/><path d="M6 16c.5-1.5 1.7-2.2 3-2.2s2.5.7 3 2.2"/><path d="M15 10h3M15 13h3"/></svg>';
+}
+function iconStar() {
+  return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.8-5.2 2.8 1-5.8-4.3-4.1 5.9-.9z"/></svg>';
+}
+
+// Une pastille de profil : le MÊME composant dans la liste, la fiche de modification et la fenêtre « Profils ».
+// Le profil principal est vert avec une étoile ; les autres sont gris.
+function profilChipHtml(label, isMain) {
+  return '<span class="profil-chip' + (isMain ? " is-main" : "") + '">' + escapeHtml(label) + (isMain ? '<i aria-hidden="true">★</i>' : "") + "</span>";
+}
+// Colonne « Profils » de la liste : le profil principal, puis « +N » pour les autres (l'infobulle les nomme). Les deux ouvrent la
+// fenêtre « Profils ». Une seule pastille par ligne : la hauteur des lignes ne dépend plus du nombre de profils.
+function profilChips(u) {
+  const list = u.profils && u.profils.length ? u.profils : [{ api: u.apiRole, label: u.role }];
+  const main = list.find(p => p.api === u.apiRole) || list[0];
+  const others = list.filter(p => p !== main);
+  let html = '<button type="button" class="profil-chip is-main" data-action="profils" data-id="' + u.id + '" title="' +
+    attr(main.label + " (profil principal) — interfaces : " + profileInterfaces(main.api).join(", ")) + '">' + escapeHtml(main.label) + '<i aria-hidden="true">★</i></button>';
+  if (others.length) {
+    html += '<button type="button" class="profil-chip more" data-action="profils" data-id="' + u.id + '" title="' + attr("Autres profils : " + others.map(p => p.label).join(", ")) +
+      '" aria-label="' + attr(others.length + (others.length > 1 ? " autres profils : " : " autre profil : ") + others.map(p => p.label).join(", ")) + '">+' + others.length + "</button>";
+  }
+  return '<div class="profil-chips">' + html + "</div>";
+}
 
 /* ---------------------------------------------------------------------- */
 /* Gestion des utilisateurs                                               */
@@ -3572,6 +3700,7 @@ function iconKey() {
 
 // « Gestion des utilisateurs » : les comptes viennent de la base (GET /api/utilisateurs, permission utilisateur.lire).
 function renderUsers() {
+  loadStructures().catch(() => { /* la liste déroulante des structures garde sa dernière valeur */ });
   const body = document.getElementById("usersBody");
   body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted)">Chargement…</td></tr>';
   apiListUtilisateurs().then(list => {
@@ -3600,18 +3729,21 @@ function renderUsersTable(list) {
   info.items.forEach(u => {
     const tr = document.createElement("tr");
     const statutClass = u.statut === "Actif" ? "actif" : "inactif";
+    const full = (u.prenom + " " + u.nom).trim();
     tr.innerHTML =
-      "<td>" + u.prenom + " " + u.nom + "</td>" +
-      "<td>" + u.email + "</td>" +
-      "<td>" + u.role + "</td>" +
-      "<td>" + (u.structure || "—") + "</td>" +
-      "<td>" + (u.dateCreation || "—") + "</td>" +
-      '<td><span class="pill ' + statutClass + '">' + u.statut + "</span></td>" +
+      '<td class="u-name"><div class="u-clamp" title="' + attr(full) + '">' + escapeHtml(full) + "</div></td>" +
+      '<td class="u-mail" title="' + attr(u.email) + '">' + escapeHtml(u.email) + "</td>" +
+      "<td>" + profilChips(u) + "</td>" +
+      '<td class="u-struct"><div class="u-clamp" title="' + attr(u.structure || "") + '">' + escapeHtml(u.structure || "—") + "</div></td>" +
+      '<td class="u-date">' + (u.dateCreation || "—") + "</td>" +
+      '<td class="u-statut"><span class="pill ' + statutClass + '">' + u.statut + "</span>" +
+        (u.doitChangerMdp ? '<span class="tag-mdp" title="Mot de passe temporaire : le titulaire doit en choisir un à sa prochaine connexion">' + iconKey() + '<span class="sr-only">Mot de passe à changer</span></span>' : "") + "</td>" +
       '<td class="row-actions">' +
-        (isApi ? '<button class="icon-btn" data-action="edit" data-id="' + u.id + '" title="Modifier">' + iconEdit() + "</button>" : "") +
-        (isApi ? '<button class="icon-btn" data-action="reset-pass" data-id="' + u.id + '" title="Réinitialiser le mot de passe">' + iconKey() + "</button>" : "") +
-        '<button class="icon-btn" data-action="toggle" data-id="' + u.id + '" title="Activer / désactiver">' + iconToggle() + "</button>" +
-        '<button class="icon-btn danger" data-action="delete" data-id="' + u.id + '" title="Supprimer">' + iconTrash() + "</button>" +
+        (isApi ? '<button class="icon-btn" data-action="edit" data-id="' + u.id + '" title="Modifier" aria-label="Modifier">' + iconEdit() + "</button>" : "") +
+        (isApi ? '<button class="icon-btn" data-action="profils" data-id="' + u.id + '" title="Profils du compte" aria-label="Profils du compte">' + iconProfils() + "</button>" : "") +
+        (isApi ? '<button class="icon-btn" data-action="reset-pass" data-id="' + u.id + '" title="Réinitialiser le mot de passe" aria-label="Réinitialiser le mot de passe">' + iconKey() + "</button>" : "") +
+        '<button class="icon-btn" data-action="toggle" data-id="' + u.id + '" title="Activer / désactiver" aria-label="Activer ou désactiver">' + iconToggle() + "</button>" +
+        '<button class="icon-btn danger" data-action="delete" data-id="' + u.id + '" title="Supprimer" aria-label="Supprimer">' + iconTrash() + "</button>" +
       "</td>";
     body.appendChild(tr);
   });
@@ -3623,6 +3755,9 @@ function renderUsersTable(list) {
       apiGetUtilisateur(id).then(u => openUserModalForEdit(u))
         .catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
     });
+  });
+  body.querySelectorAll('[data-action="profils"]').forEach(btn => {
+    btn.addEventListener("click", () => openProfilsModal(parseInt(btn.dataset.id, 10)));
   });
   body.querySelectorAll('[data-action="reset-pass"]').forEach(btn => {
     btn.addEventListener("click", () => {
@@ -3655,6 +3790,175 @@ function renderUsersTable(list) {
   });
 }
 
+/* ---- Page « Structures » : hôpitaux, pharmacies, administration — GET / POST / PUT / DELETE /api/structures ----
+   Sa propre interface (menu Administration › Structures) ; la page « Gestion des utilisateurs » n'en porte plus.     */
+
+const STRUCTURE_TYPE_LABEL = { hopital: "Hôpital", pharmacie: "Pharmacie", administration: "Administration" };
+const STRUCTURE_TYPE_PILL = { hopital: "examen", pharmacie: "consultation", administration: "attente" };
+const structureModal = document.getElementById("structureModal");
+let editingStructureId = null;
+state.structFilters = { search: "", type: "" };
+
+// Recharge la liste depuis la base : elle alimente aussi la liste déroulante des comptes et les filtres des rapports.
+async function loadStructures() {
+  state.structures = (await apiListStructures()) || [];
+  return state.structures;
+}
+// Après tout changement : les écrans qui listent des structures se remettent à jour.
+function afterStructuresChange() {
+  populateMedecinSelect();
+  populatePharmaFilterOptions();
+  populateHospFilterOptions();
+}
+function canManageStructures() { return !state.permissions || state.permissions.has("structure.gerer"); }
+
+const STRUCT_PAGE_SIZE = 10;
+let structFocusId = null;   // structure à mettre en évidence : celle qu'on vient d'ajouter ou de modifier
+
+// Liste filtrée (type + recherche), groupée par type puis par ordre alphabétique.
+function structuresFiltered() {
+  const f = state.structFilters, q = f.search.trim().toLowerCase();
+  const rank = { hopital: 0, pharmacie: 1, administration: 2 };
+  return (state.structures || [])
+    .filter(s => (!f.type || s.type_structure === f.type) && (!q || (s.raison_sociale + " " + (s.addresse || "")).toLowerCase().indexOf(q) >= 0))
+    .sort((a, b) => ((rank[a.type_structure] ?? 9) - (rank[b.type_structure] ?? 9)) || a.raison_sociale.localeCompare(b.raison_sociale, "fr", { sensitivity: "base" }));
+}
+// Amène la structure à l'écran : les filtres qui la cacheraient sont levés, la page qui la contient s'ouvre.
+function revealStructure(id) {
+  structFocusId = id;
+  let list = structuresFiltered();
+  if (!list.some(s => s.id_structure === id)) {
+    state.structFilters.search = "";
+    state.structFilters.type = "";
+    document.getElementById("structSearch").value = "";
+    document.querySelectorAll("#structTypeToggle .chip").forEach(c => c.classList.toggle("active", c.dataset.type === ""));
+    list = structuresFiltered();
+  }
+  const idx = list.findIndex(s => s.id_structure === id);
+  PAGER_STATE.structures = Math.floor(Math.max(idx, 0) / STRUCT_PAGE_SIZE) + 1;
+}
+
+function renderStructuresPage(focusId) {
+  const body = document.getElementById("structuresBody");
+  body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--muted)">Chargement…</td></tr>';
+  document.getElementById("addStructureBtn").hidden = !canManageStructures();
+  Promise.all([
+    loadStructures(),
+    apiListUtilisateurs().then(list => { state.apiUsers = list.map(mapBackendUser); }).catch(() => { /* comptes illisibles : la colonne « Comptes » affichera « — » */ })
+  ]).then(() => {
+    if (focusId != null) revealStructure(focusId);
+    paintStructures();
+  }).catch(err => {
+    body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--red)">' + escapeHtml(err.message) + "</td></tr>";
+    document.getElementById("structuresPager").innerHTML = "";
+  });
+}
+
+function paintStructures() {
+  const all = state.structures || [];
+  const f = state.structFilters;
+  const count = t => all.filter(s => s.type_structure === t).length;
+  document.getElementById("structStatHopital").textContent = count("hopital");
+  document.getElementById("structStatPharmacie").textContent = count("pharmacie");
+  document.getElementById("structStatAdmin").textContent = count("administration");
+
+  const list = structuresFiltered();
+  document.getElementById("structuresCount").textContent = list.length === all.length ? String(all.length) : list.length + " / " + all.length;
+
+  const counts = {};
+  const known = !!state.apiUsers;
+  (state.apiUsers || []).forEach(u => { counts[u.idStructure] = (counts[u.idStructure] || 0) + 1; });
+  const manage = canManageStructures();
+  const body = document.getElementById("structuresBody");
+  const info = pageSlice("structures", list, STRUCT_PAGE_SIZE);
+  body.innerHTML = "";
+  info.items.forEach(st => {
+    const n = counts[st.id_structure] || 0;
+    const tr = document.createElement("tr");
+    tr.dataset.id = st.id_structure;
+    if (st.id_structure === structFocusId) tr.classList.add("flash");
+    tr.innerHTML =
+      '<td><b class="st-name">' + escapeHtml(st.raison_sociale) + "</b></td>" +
+      '<td><span class="pill ' + (STRUCTURE_TYPE_PILL[st.type_structure] || "attente") + '">' + escapeHtml(STRUCTURE_TYPE_LABEL[st.type_structure] || st.type_structure) + "</span></td>" +
+      '<td class="st-addr"><div class="u-clamp" title="' + attr(st.addresse || "") + '">' + escapeHtml(st.addresse || "—") + "</div></td>" +
+      '<td class="num">' + (known ? n : "—") + "</td>" +
+      '<td class="row-actions">' + (manage
+        ? '<button class="icon-btn" data-action="edit-structure" data-id="' + st.id_structure + '" title="Modifier" aria-label="Modifier ' + attr(st.raison_sociale) + '">' + iconEdit() + "</button>" +
+          '<button class="icon-btn danger" data-action="delete-structure" data-id="' + st.id_structure + '"' +
+            (n > 0 ? ' disabled title="' + attr(n + " compte" + (n > 1 ? "s" : "") + " rattaché" + (n > 1 ? "s" : "") + " : déplacez-les ou désactivez-les d'abord") + '"' : ' title="Supprimer"') +
+            ' aria-label="Supprimer ' + attr(st.raison_sociale) + '">' + iconTrash() + "</button>"
+        : "") + "</td>";
+    body.appendChild(tr);
+  });
+  if (!info.items.length) {
+    body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--muted)">' +
+      (all.length ? "Aucune structure ne correspond à ces critères." : "Aucune structure : ajoutez un hôpital ou une pharmacie.") + "</td></tr>";
+  }
+  renderPager("structuresPager", "structures", info, paintStructures, "structures");
+  const flash = body.querySelector("tr.flash");
+  if (flash) flash.scrollIntoView({ block: "nearest" });
+  structFocusId = null;
+  body.querySelectorAll('[data-action="edit-structure"]').forEach(btn => btn.addEventListener("click", () => {
+    const st = state.structures.find(x => x.id_structure === parseInt(btn.dataset.id, 10));
+    if (st) openStructureModal(st);
+  }));
+  body.querySelectorAll('[data-action="delete-structure"]').forEach(btn => btn.addEventListener("click", () => {
+    if (btn.disabled) return;
+    const id = parseInt(btn.dataset.id, 10);
+    const st = state.structures.find(x => x.id_structure === id);
+    askConfirm("La structure « " + (st ? st.raison_sociale : "#" + id) + " » sera définitivement supprimée (impossible si des données y sont rattachées).", () => {
+      apiDeleteStructure(id).then(() => {
+        renderStructuresPage();
+        afterStructuresChange();
+        toast({ kind: "success", title: "Structure supprimée", text: st ? st.raison_sociale : "", ms: 3200 });
+      }).catch(err => showInfoModal("Suppression impossible", "<p>" + escapeHtml(err.message) + "</p>"));
+    }, { title: "Supprimer cette structure ?" });
+  }));
+}
+
+document.getElementById("structSearch").addEventListener("input", e => { state.structFilters.search = e.target.value; resetPage("structures"); paintStructures(); });
+document.getElementById("structTypeToggle").addEventListener("click", e => {
+  const b = e.target.closest(".chip");
+  if (!b) return;
+  state.structFilters.type = b.dataset.type;
+  document.querySelectorAll("#structTypeToggle .chip").forEach(c => c.classList.toggle("active", c === b));
+  resetPage("structures");
+  paintStructures();
+});
+
+function openStructureModal(st) {
+  editingStructureId = st ? st.id_structure : null;
+  document.getElementById("structureModalTitle").textContent = st ? "Modifier la structure" : "Ajouter une structure";
+  document.getElementById("s-nom").value = st ? st.raison_sociale : "";
+  const type = st ? st.type_structure : (state.structFilters.type || "hopital");   // le filtre actif présélectionne le type
+  (document.querySelector('input[name="s-type"][value="' + type + '"]') || document.querySelector('input[name="s-type"][value="hopital"]')).checked = true;
+  document.getElementById("s-adresse").value = st ? (st.addresse || "") : "";
+  structureModal.hidden = false;
+  window.setTimeout(() => document.getElementById("s-nom").focus(), 60);
+}
+function closeStructureModal() { structureModal.hidden = true; editingStructureId = null; }
+document.getElementById("addStructureBtn").addEventListener("click", () => openStructureModal(null));
+document.getElementById("closeStructureModal").addEventListener("click", closeStructureModal);
+document.getElementById("cancelStructureModal").addEventListener("click", closeStructureModal);
+document.getElementById("structureForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const checked = document.querySelector('input[name="s-type"]:checked');
+  const payload = {
+    raison_sociale: document.getElementById("s-nom").value.trim(),
+    type_structure: checked ? checked.value : "hopital",
+    addresse: document.getElementById("s-adresse").value.trim()
+  };
+  const creating = editingStructureId == null;
+  const call = creating ? apiCreateStructure(payload) : apiUpdateStructure(editingStructureId, payload);
+  call.then(res => {
+    const id = creating ? (res && res.id_structure) : editingStructureId;
+    closeStructureModal();
+    renderStructuresPage(id);
+    afterStructuresChange();
+    toast({ kind: "success", title: creating ? "Structure ajoutée" : "Structure modifiée", text: payload.raison_sociale + " — " + STRUCTURE_TYPE_LABEL[payload.type_structure], ms: 3600 });
+  }).catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
+});
+
 const userModal = document.getElementById("userModal");
 let editingUserId = null; // id_utilisateur en cours de modification (mode édition), null = création
 let editingUserRole = "";  // rôle du compte avant modification (pour tracer un changement de rôle)
@@ -3663,27 +3967,72 @@ function setUserModalMode(editing) {
   document.getElementById("userModalTitle").textContent = editing ? "Modifier l'utilisateur" : "Ajouter un utilisateur";
   document.getElementById("u-pass-wrap").hidden = editing;
   document.getElementById("u-pass-hint").hidden = !editing;
-  // PUT /api/utilisateurs/{id} ne modifie pas la structure (pas de champ
-  // dédié côté backend pour ça) : la rendre non éditable évite de laisser
-  // croire qu'un changement ici serait enregistré. Même chose pour le nom
-  // d'utilisateur, non repris par cette route.
-  document.getElementById("u-structure").disabled = editing;
+  // Le nom d'utilisateur d'un compte existant ne change pas ; la structure, le rôle, le code et
+  // le type de praticien se modifient (PUT /api/utilisateurs/{id}).
+  document.getElementById("u-structure").disabled = false;
   document.getElementById("u-username").disabled = editing;
   document.getElementById("u-username-hint").hidden = !editing;
+  // Profils : à la création, des cases pour les profils supplémentaires ; en modification, la fiche des profils du compte
+  // (le principal ne se change plus ici : tout passe par la fenêtre « Profils », où les changements sont enregistrés tout de suite).
+  document.getElementById("u-extra-wrap").hidden = editing;
+  document.getElementById("u-profils-edit").hidden = !editing;
+  document.getElementById("u-role").disabled = editing;
+  document.getElementById("u-pass-temp-hint").hidden = editing;
 }
+
+function renderEditProfilChips(apiRoles, principalApi) {
+  document.getElementById("u-profils-edit-chips").innerHTML = apiRoles.map(r => profilChipHtml(API_ROLE_TO_FRONT_ROLE[r] || r, r === principalApi)).join("");
+}
+// La fenêtre « Profils » vient de recharger le compte : la fiche de modification (si elle est ouverte sur ce compte) suit.
+function syncEditFromProfils() {
+  if (userModal.hidden || editingUserId == null || !profilsUser || profilsUser.id !== editingUserId) return;
+  editingUserProfils = profilsUser.profils.map(p => p.api);
+  document.getElementById("u-role").value = profilsUser.role;
+  renderEditProfilChips(editingUserProfils, profilsUser.apiRole);
+  syncPraticienFields();
+}
+
+let editingUserProfils = [];   // profils (rôles API) du compte en cours de modification
+
+// Le code et le type de praticien n'existent que pour un médecin (ils figurent sur la feuille de soins) :
+// profil principal « Médecin », ou profil « Médecin » supplémentaire.
+function wantsPraticienFields() {
+  if (document.getElementById("u-role").value === "Médecin") return true;
+  if (editingUserId != null) return editingUserProfils.indexOf("medecin") >= 0;
+  return !!document.querySelector('#u-extra-profils input[value="medecin"]:checked');
+}
+function syncPraticienFields() {
+  const medecin = wantsPraticienFields();
+  document.getElementById("u-code-field").hidden = !medecin;
+  document.getElementById("u-type-field").hidden = !medecin;
+}
+
+// Cases des profils supplémentaires (création) : le profil principal choisi n'y figure pas.
+function renderExtraProfilChecks() {
+  const box = document.getElementById("u-extra-profils");
+  const principal = FRONT_ROLE_TO_API_ROLE[document.getElementById("u-role").value];
+  const checked = new Set(Array.from(box.querySelectorAll("input:checked")).map(i => i.value));
+  box.innerHTML = ALL_API_ROLES.map(r =>
+    "<label" + (r === principal ? " hidden" : "") + '><input type="checkbox" value="' + r + '"' + (checked.has(r) && r !== principal ? " checked" : "") + " /> " + escapeHtml(API_ROLE_TO_FRONT_ROLE[r]) + "</label>").join("");
+}
+document.getElementById("u-role").addEventListener("change", () => { renderExtraProfilChecks(); syncPraticienFields(); });
+document.getElementById("u-extra-profils").addEventListener("change", syncPraticienFields);
 
 function fillUserStructureSelect() {
   const sel = document.getElementById("u-structure");
   sel.innerHTML = '<option value="">— Choisir une structure —</option>' + (state.structures || []).map(st =>
-    '<option value="' + st.id_structure + '">' + escapeHtml(st.raison_sociale) + " (" + escapeHtml(st.type_structure) + ")</option>").join("");
+    '<option value="' + st.id_structure + '">' + escapeHtml(st.raison_sociale) + " (" + escapeHtml(STRUCTURE_TYPE_LABEL[st.type_structure] || st.type_structure) + ")</option>").join("");
 }
 document.getElementById("addUserBtn").addEventListener("click", () => {
   fillUserStructureSelect();
   editingUserId = null;
+  editingUserProfils = [];
   document.getElementById("userForm").reset();
   document.getElementById("u-id").value = "";
   document.getElementById("u-date-creation").value = todayFR();
+  renderExtraProfilChecks();
   setUserModalMode(false);
+  syncPraticienFields();
   userModal.hidden = false;
 });
 
@@ -3691,17 +4040,22 @@ document.getElementById("addUserBtn").addEventListener("click", () => {
 // dans renderUsersTable) ; on ne fait ici que préremplir le formulaire.
 function openUserModalForEdit(u) {
   editingUserId = u.id_utilisateur;
+  editingUserProfils = Array.isArray(u.profils) ? u.profils.slice() : [u.role];
   document.getElementById("u-id").value = u.id_utilisateur;
-  document.getElementById("u-nom").value = u.nom || "";
+  document.getElementById("u-nom").value = ((u.prenom || "") + " " + (u.nom || "")).trim();
   document.getElementById("u-email").value = u.email || "";
   document.getElementById("u-username").value = u.username || "";
   document.getElementById("u-role").value = API_ROLE_TO_FRONT_ROLE[u.role] || u.role;
   editingUserRole = API_ROLE_TO_FRONT_ROLE[u.role] || u.role;
+  renderEditProfilChips(editingUserProfils, u.role);
   fillUserStructureSelect();
   document.getElementById("u-structure").value = u.id_structure != null ? String(u.id_structure) : "";
   document.getElementById("u-pass").value = "";
   document.getElementById("u-date-creation").value = apiFormatDate(u.date_creation);
+  document.getElementById("u-code").value = u.code_praticien || "";
+  document.getElementById("u-type").value = u.type_praticien || "Généraliste";
   setUserModalMode(true);
+  syncPraticienFields();
   userModal.hidden = false;
 }
 
@@ -3711,13 +4065,18 @@ function closeUserModal() {
 }
 document.getElementById("closeUserModal").addEventListener("click", closeUserModal);
 document.getElementById("cancelUserModal").addEventListener("click", closeUserModal);
+document.getElementById("u-profils-manage").addEventListener("click", () => { if (editingUserId != null) openProfilsModal(editingUserId); });
+document.getElementById("u-goto-structures").addEventListener("click", () => { closeUserModal(); goToView("structures"); });
 
 document.getElementById("userForm").addEventListener("submit", e => {
   e.preventDefault();
   const nomComplet = document.getElementById("u-nom").value.trim();
   const parts = nomComplet.split(" ");
-  const prenom = parts.shift() || nomComplet;
-  const nom = parts.join(" ") || "";
+  const prenom = parts.length > 1 ? parts.shift() : "";
+  const nom = parts.join(" ") || nomComplet;
+  const isMedecin = wantsPraticienFields();
+  const codePraticien = isMedecin ? document.getElementById("u-code").value.trim() : "";
+  const typePraticien = isMedecin ? document.getElementById("u-type").value : "";
   const email = document.getElementById("u-email").value.trim();
   const username = document.getElementById("u-username").value.trim().toLowerCase() || (email.split("@")[0] || "").toLowerCase();
   const role = document.getElementById("u-role").value;
@@ -3726,9 +4085,13 @@ document.getElementById("userForm").addEventListener("submit", e => {
     // PUT /api/utilisateurs/{id} — pas de champ mot de passe ici (le backend
     // ne le modifie pas sur cette route) ; voir "Réinitialiser le mot de passe".
     apiUpdateUtilisateur(editingUserId, {
-      nom: nomComplet,
+      prenom: prenom,
+      nom: nom,
       email: email,
-      role: FRONT_ROLE_TO_API_ROLE[role] || role
+      role: FRONT_ROLE_TO_API_ROLE[role] || role,
+      id_structure: parseInt(document.getElementById("u-structure").value, 10) || undefined,
+      code_praticien: codePraticien,
+      type_praticien: typePraticien
     }).then(() => {
       audit("utilisateur.modifier", { ressourceType: "Utilisateur", ressourceId: editingUserId, ressourceLibelle: nomComplet, avant: { role: editingUserRole }, apres: { role: role, roleModifie: role !== editingUserRole } });
       closeUserModal();
@@ -3743,16 +4106,22 @@ document.getElementById("userForm").addEventListener("submit", e => {
   apiRegister({
     username: username,
     mot_de_passe: document.getElementById("u-pass").value,
-    nom: nomComplet,
+    prenom: prenom,
+    nom: nom,
     email: email,
+    code_praticien: codePraticien,
+    type_praticien: typePraticien,
     telephone: "",
     role: FRONT_ROLE_TO_API_ROLE[role] || role,
+    profils: Array.from(document.querySelectorAll("#u-extra-profils input:checked")).map(i => i.value),   // profils supplémentaires
     id_structure: idStructure
   }).then(() => {
     audit("utilisateur.creer", { ressourceType: "Utilisateur", ressourceLibelle: nomComplet, apres: { role: role, username: username } });
     document.getElementById("userForm").reset();
     userModal.hidden = true;
     renderUsers();
+    showInfoModal("Compte créé", "<p>Le compte de <b>" + escapeHtml(nomComplet) + "</b> (identifiant <b>" + escapeHtml(username) + "</b>) est enregistré.</p>" +
+      "<p>Le mot de passe saisi est <b>temporaire</b> : à sa première connexion, le titulaire devra en choisir un nouveau avant d'accéder à l'application.</p>");
   }).catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
 });
 
@@ -3778,9 +4147,130 @@ document.getElementById("resetPasswordForm").addEventListener("submit", e => {
   apiResetPassword(resetPasswordTargetId, nouveau).then(() => {
     audit("utilisateur.mdp.reinitialiser", { ressourceType: "Utilisateur", ressourceId: resetPasswordTargetId });
     closeResetPasswordModal();
-    showInfoModal("Mot de passe réinitialisé", "<p>Le nouveau mot de passe a été enregistré.</p>");
+    renderUsers();
+    showInfoModal("Mot de passe réinitialisé", "<p>Le nouveau mot de passe a été enregistré. Il est <b>temporaire</b> : l'utilisateur devra en choisir un nouveau à sa prochaine connexion. Ses sessions ouvertes sont fermées.</p>");
   }).catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
 });
+
+/* ---- Profils d'un utilisateur : ajouter / retirer / définir le principal (Gestion des utilisateurs) ----
+   POST   /api/utilisateurs/{id}/profils            { profil }
+   DELETE /api/utilisateurs/{id}/profils/{profil}
+   PUT    /api/utilisateurs/{id}/profils/principal  { profil }                                          */
+const profilsModal = document.getElementById("profilsModal");
+let profilsTargetId = null;
+let profilsUser = null;
+let profilsStatusTimer = null;
+
+function profilsError(msg) {
+  const el = document.getElementById("profilsError");
+  el.textContent = msg || "";
+  el.hidden = !msg;
+}
+// Confirmation des changements (ils s'appliquent tout de suite) ; elle s'efface seule.
+function profilsStatus(msg) {
+  const el = document.getElementById("profilsStatus");
+  el.textContent = msg || "";
+  window.clearTimeout(profilsStatusTimer);
+  if (msg) profilsStatusTimer = window.setTimeout(() => { el.textContent = ""; }, 5000);
+}
+function openProfilsModal(id) {
+  profilsTargetId = id;
+  profilsUser = null;
+  profilsError("");
+  profilsStatus("");
+  document.getElementById("profilsTitle").textContent = "Profils";
+  document.getElementById("profilsTarget").textContent = "Chargement…";
+  document.getElementById("profilsList").innerHTML = "";
+  profilsModal.hidden = false;
+  reloadProfilsModal();
+}
+function closeProfilsModal() { profilsModal.hidden = true; profilsTargetId = null; profilsUser = null; profilsStatus(""); }
+function reloadProfilsModal() {
+  return apiGetUtilisateur(profilsTargetId).then(raw => {
+    profilsUser = mapBackendUser(raw);
+    renderProfilsModal();
+    syncEditFromProfils();
+  }).catch(err => profilsError(err.message));
+}
+function renderProfilsModal() {
+  const u = profilsUser;
+  if (!u) return;
+  const full = (u.prenom + " " + u.nom).trim() || u.username;
+  document.getElementById("profilsTitle").textContent = "Profils de " + full;
+  document.getElementById("profilsTarget").innerHTML = "Identifiant : <b>" + escapeHtml(u.username) + "</b>" + (u.structure ? " · " + escapeHtml(u.structure) : "");
+  const held = u.profils.map(p => p.api);
+  document.getElementById("profilsList").innerHTML = u.profils.map(p => {
+    const main = p.api === u.apiRole;
+    return '<div class="profil-card' + (main ? " is-main" : "") + '">' +
+      '<div class="profil-card-head">' + profilChipHtml(p.label, main) +
+        '<span class="profil-card-kind">' + (main ? "Profil principal : ouvert par défaut à la connexion" : "Profil supplémentaire") + "</span>" +
+        '<div class="profil-card-actions">' +
+          (main ? "" : '<button type="button" class="icon-btn" data-pact="principal" data-p="' + p.api + '" title="Définir comme profil principal" aria-label="Définir « ' + attr(p.label) + ' » comme profil principal">' + iconStar() + "</button>") +
+          '<button type="button" class="icon-btn danger" data-pact="retirer" data-p="' + p.api + '"' +
+            (held.length <= 1 ? ' disabled title="Un compte garde au moins un profil"' : ' title="Retirer ce profil"') + ' aria-label="Retirer le profil « ' + attr(p.label) + ' »">' + iconTrash() + "</button>" +
+        "</div></div>" +
+      '<p class="profil-ifaces"><span>Interfaces :</span> ' + profileInterfaces(p.api).map(escapeHtml).join(" · ") + "</p></div>";
+  }).join("");
+  const options = ALL_API_ROLES.filter(r => held.indexOf(r) < 0);
+  const sel = document.getElementById("profilsAddSelect");
+  sel.innerHTML = options.map(r => '<option value="' + r + '">' + escapeHtml(API_ROLE_TO_FRONT_ROLE[r]) + "</option>").join("");
+  sel.disabled = !options.length;
+  document.getElementById("profilsAddBtn").disabled = !options.length;
+  updateProfilsPreview();
+}
+function updateProfilsPreview() {
+  const box = document.getElementById("profilsAddPreview");
+  const v = document.getElementById("profilsAddSelect").value;
+  if (!v || !profilsUser) { box.textContent = "Ce compte porte déjà tous les profils."; return; }
+  const held = profilsUser.profils.map(p => p.api);
+  let html = "Interfaces ouvertes par ce profil : <b>" + profileInterfaces(v).map(escapeHtml).join(", ") + "</b>.";
+  if ((v === "medecin" && held.indexOf("pharmacien") >= 0) || (v === "pharmacien" && held.indexOf("medecin") >= 0)) {
+    html += ' <span class="warn">Attention : ce compte pourrait prescrire ET servir une ordonnance ; ce cumul est signalé au journal (risque de fraude).</span>';
+  }
+  if (v === "administrateur") html += ' <span class="warn">Le profil administrateur donne tous les droits : à réserver aux responsables.</span>';
+  box.innerHTML = html;
+}
+// Après un ajout / retrait : la liste derrière la fenêtre est rechargée ; si c'est MON compte, mes profils aussi.
+function afterProfilChange(message) {
+  if (message) profilsStatus(message);
+  renderUsers();
+  reloadProfilsModal();
+  if (state.currentUser && profilsTargetId === state.currentUser.id) {
+    apiMe().then(m => {
+      const fresh = mapBackendUser(m.user);
+      state.currentUser.profils = fresh.profils;
+      state.currentUser.profilPrincipal = fresh.profilPrincipal;
+      renderProfileSwitcher();
+    }).catch(() => { /* un retrait ferme les sessions du compte : le 401 ramène à la connexion */ });
+  }
+}
+document.getElementById("profilsAddSelect").addEventListener("change", updateProfilsPreview);
+document.getElementById("profilsAddBtn").addEventListener("click", () => {
+  const v = document.getElementById("profilsAddSelect").value;
+  if (!v || profilsTargetId == null) return;
+  profilsError("");
+  apiAddProfil(profilsTargetId, v).then(() => afterProfilChange("Profil « " + (API_ROLE_TO_FRONT_ROLE[v] || v) + " » ajouté.")).catch(err => profilsError(err.message));
+});
+document.getElementById("profilsList").addEventListener("click", e => {
+  const b = e.target.closest("[data-pact]");
+  if (!b || !profilsUser || b.disabled) return;
+  const p = b.dataset.p, label = API_ROLE_TO_FRONT_ROLE[p] || p, id = profilsTargetId;
+  profilsError("");
+  if (b.dataset.pact === "principal") {
+    apiSetProfilPrincipal(id, p).then(() => afterProfilChange("« " + label + " » est maintenant le profil principal.")).catch(err => profilsError(err.message));
+    return;
+  }
+  const isMe = !!state.currentUser && id === state.currentUser.id;
+  askConfirm("Retirer le profil « " + label + " » à " + ((profilsUser.prenom + " " + profilsUser.nom).trim() || profilsUser.username) + " ? Ses sessions ouvertes seront fermées : " +
+    (isMe ? "vous devrez vous reconnecter." : "il devra se reconnecter."), () => {
+    apiRemoveProfil(id, p).then(() => {
+      if (isMe) { closeProfilsModal(); performLogout({ expired: true }); return; }
+      afterProfilChange("Profil « " + label + " » retiré ; ses sessions ouvertes sont fermées.");
+    }).catch(err => profilsError(err.message));
+  }, { title: "Retirer ce profil ?", confirmLabel: "Retirer" });
+});
+document.getElementById("closeProfilsModal").addEventListener("click", closeProfilsModal);
+document.getElementById("doneProfilsModal").addEventListener("click", closeProfilsModal);
 
 /* ---------------------------------------------------------------------- */
 /* Pagination générique : une page mémorisée par liste (clé), pager masqué   */
@@ -4213,7 +4703,7 @@ document.getElementById("msgComposeBtn").addEventListener("click", openComposeMo
 function fillJournalRoleFilter() {
   const sel = document.getElementById("logFilterRole");
   if (sel.options.length > 1) return;
-  sel.innerHTML = '<option value="">Tous les rôles</option>' + Object.keys(FRONT_ROLE_TO_API_ROLE).map(r => '<option value="' + escapeHtml(FRONT_ROLE_TO_API_ROLE[r]) + '">' + escapeHtml(r) + "</option>").join("");
+  sel.innerHTML = '<option value="">Tous les profils</option>' + Object.keys(FRONT_ROLE_TO_API_ROLE).map(r => '<option value="' + escapeHtml(FRONT_ROLE_TO_API_ROLE[r]) + '">' + escapeHtml(r) + "</option>").join("");
 }
 function connexionParams() {
   const f = state.journalFilters;
@@ -4312,6 +4802,33 @@ function isSentToPharmacy(h) {
   return h.type === "Consultation" && h.statut === "Validée" && pharmaLines(h).some(m => m.designation);
 }
 function pharmaQty(med) { return Math.max(1, parseInt(med.quantite, 10) || 1); }
+
+// LIVRAISON PARTIELLE : une ligne d'ordonnance peut être servie en plusieurs fois, par plusieurs pharmacies (rupture de
+// stock : le patient va chercher le reste ailleurs). La base fait foi : pour chaque ligne le serveur renvoie la quantité
+// déjà servie (quantiteServie) et la liste des livraisons (quantité, prix unitaire, montants, pharmacie, pharmacien, date).
+function medServed(med) {
+  if (typeof med.quantiteServie === "number") return Math.min(med.quantiteServie, pharmaQty(med));
+  return med.statut === "Servi" ? pharmaQty(med) : 0;             // ligne servie en une fois avant les livraisons partielles
+}
+function medRemaining(med) { return Math.max(0, pharmaQty(med) - medServed(med)); }
+function medDone(med) { return medRemaining(med) === 0; }
+function medLivraisons(med) {
+  if (Array.isArray(med.livraisons) && med.livraisons.length) return med.livraisons;
+  if (med.statut === "Servi" && med.servicePar) {
+    return [{ quantite: pharmaQty(med), prixUnitaire: med.prixUnitaire, montantTotal: String(num(med.prixUnitaire) * pharmaQty(med)),
+      partAssurance: med.partAssurance, partPatient: med.partPatient, servicePar: med.servicePar, pharmacien: "", dateService: med.dateService, heureService: "" }];
+  }
+  return [];
+}
+function entryHasRemaining(entry) { return pharmaLines(entry).some(m => !medDone(m)); }
+// « Servi », « Servi en 2 fois », « Partiel : 2 / 5 », « Non servi » — pour les tableaux et l'aperçu d'une feuille.
+function medDeliveryText(med) {
+  const list = medLivraisons(med), qty = pharmaQty(med), served = medServed(med);
+  if (!list.length) return "Non servi";
+  const parts = list.map(l => l.quantite + " le " + (l.dateService || "—") + (l.servicePar ? " — " + l.servicePar : ""));
+  if (served >= qty) return list.length === 1 ? "Servi le " + (list[0].dateService || "—") + (list[0].servicePar ? " — " + list[0].servicePar : "") : "Servi en " + list.length + " fois : " + parts.join(" ; ");
+  return "Partiel : " + served + " / " + qty + " — " + parts.join(" ; ");
+}
 function pharmaRate(entry) { return TM_RATE[entry.ticketModerateur] != null ? TM_RATE[entry.ticketModerateur] : 0.8; }
 
 // Efface tout ce qui dépend du NAG (identité, dates, ordonnance), sans toucher
@@ -4319,7 +4836,7 @@ function pharmaRate(entry) { return TM_RATE[entry.ticketModerateur] != null ? TM
 // ligne (clé « id de la feuille : rang de la ligne ») tant que le patient reste le même.
 function pharmaPrices() { return state.pharma.prices || (state.pharma.prices = {}); }
 function clearPharmaResults() {
-  state.pharma = { nag: "", entries: [], selectedId: null, prices: {} };
+  state.pharma = { nag: "", entries: [], selectedId: null, prices: {}, qtys: {} };
   resetPage("pharmaDates");
   document.getElementById("pharmaDateInput").value = "";
   document.getElementById("pharmaNotFound").hidden = true;
@@ -4369,7 +4886,7 @@ function renderPharmaStepper() {
   const done = [
     !!p.nag && p.entries.length > 0,
     !!entry,
-    !!entry && pharmaLines(entry).length > 0 && pharmaLines(entry).every(m => m.statut === "Servi")
+    !!entry && pharmaLines(entry).length > 0 && pharmaLines(entry).every(medDone)
   ];
   const current = done[2] ? 3 : (done[1] ? 3 : (done[0] ? 2 : 1));
   stepper.querySelectorAll(".ph-step").forEach((el, i) => {
@@ -4454,9 +4971,10 @@ async function runPharmaSearch(nag, keepSelection) {
   const entries = pharmaEligibleEntries(nag);
   const previous = state.pharma.selectedId;
   const prices = keepSelection ? pharmaPrices() : {};
+  const qtys = keepSelection ? pharmaQtys() : {};
   const carried = keepSelection ? (state.pharma.justServed || []) : [];
   const wasSuspended = keepSelection && !!state.pharma.suspended;
-  state.pharma = { nag: nag, entries: entries, selectedId: keepSelection && entries.some(e => e.id === previous) ? previous : null, prices: prices, justServed: carried, suspended: wasSuspended };
+  state.pharma = { nag: nag, entries: entries, selectedId: keepSelection && entries.some(e => e.id === previous) ? previous : null, prices: prices, qtys: qtys, justServed: carried, suspended: wasSuspended };
   if (!keepSelection) {
     audit("pharma.rechercher", {
       nag: nag, ressourceType: "Assuré", ressourceLibelle: identity ? identity.patientNom : "",
@@ -4466,11 +4984,17 @@ async function runPharmaSearch(nag, keepSelection) {
   }
 
   const notFound = document.getElementById("pharmaNotFound");
-  notFound.hidden = entries.length > 0;
+  const pending = entries.filter(entryHasRemaining);
+  notFound.hidden = entries.length > 0 && pending.length > 0;
+  notFound.style.color = "var(--red)";
   if (!entries.length) {
     notFound.textContent = identity
-      ? "Ce patient n'a aucune ordonnance validée à servir."
+      ? "Aucune ordonnance à servir : ce patient n'a aucune ordonnance validée."
       : "Aucun patient trouvé pour ce NAG.";
+  } else if (!pending.length) {
+    // toutes les ordonnances ont été entièrement servies : rien à saisir, on l'écrit clairement
+    notFound.style.color = "var(--muted)";
+    notFound.textContent = "Aucune ordonnance à servir : toutes les ordonnances de ce patient ont été entièrement servies.";
   }
   renderPharmaAssureCard(identity);
   renderPharmaSuspension();
@@ -4478,8 +5002,9 @@ async function runPharmaSearch(nag, keepSelection) {
   document.getElementById("pharmaDatesCard").hidden = !entries.length;
   revealPharmaCards();
 
-  // Une seule prestation possible : sa date est proposée d'office.
+  // Une seule prestation possible (ou une seule qui reste à servir) : sa date est proposée d'office.
   if (!keepSelection && entries.length === 1) selectPharmaEntry(entries[0].id);
+  else if (!keepSelection && pending.length === 1) selectPharmaEntry(pending[0].id);
   else { renderPharmaDates(); renderPharmaOrdonnance(); }
 }
 
@@ -4525,13 +5050,14 @@ function renderPharmaDates() {
   const info = pageSlice("pharmaDates", state.pharma.entries, 5);
   list.innerHTML = info.items.map((e, i) => {
     const lines = pharmaLines(e);
-    const left = lines.filter(m => m.statut !== "Servi").length;
+    const left = lines.filter(m => !medDone(m)).length;
+    const started = lines.some(m => medServed(m) > 0);
     const active = e.id === state.pharma.selectedId;
     const match = !active && !!iso && prestationDateISO(e) === iso;
     return '<button type="button" class="pharma-date-item' + (active ? " active" : "") + (match ? " match" : "") + '" data-id="' + e.id + '" style="--i:' + i + '">' +
       '<span class="pd-date">' + escapeHtml(prestationDateFR(e)) + "</span>" +
       '<span class="pd-info"><b>' + escapeHtml(e.medecin || "—") + "</b>" + (e.medecinEtab ? " — " + escapeHtml(e.medecinEtab) : "") + " · feuille " + escapeHtml(e.numero) + "</span>" +
-      '<span class="pill ' + (left ? "attente" : "validee") + '">' + (left ? left + " sur " + lines.length + " à servir" : "Tout servi") + "</span>" +
+      '<span class="pill ' + (!left ? "validee" : (started ? "partiel" : "attente")) + '">' + (!left ? "Tout servi" : (started ? "Partiellement servi · " + left + " à finir" : left + " sur " + lines.length + " à servir")) + "</span>" +
     "</button>";
   }).join("");
   renderPager("pharmaDatesPager", "pharmaDates", info, renderPharmaDates, "prestations");
@@ -4573,18 +5099,32 @@ function applyPharmaDate() {
   renderPharmaOrdonnance();
 }
 
-/* ---- Étape 3 : l'ordonnance, ligne par ligne, avec prix unitaire saisi à la main ---- */
+/* ---- Étape 3 : l'ordonnance, ligne par ligne — prix unitaire ET quantité saisis à la main ---- */
 
-// Montants d'une ligne à partir du prix unitaire saisi : total = prix × quantité,
-// part assurance = taux de prise en charge du ticket modérateur (80 % en plein tarif),
-// part patient = le reste. Tant que le prix n'est pas saisi, rien n'est calculé.
+function pharmaQtys() { return state.pharma.qtys || (state.pharma.qtys = {}); }
+
+// Quantité de CETTE délivrance : entre 1 et le reste à servir (par défaut, tout le reste). Le pharmacien la réduit quand
+// le stock ne suffit pas : c'est une livraison partielle, le patient ira chercher le reste dans une autre pharmacie.
+function pharmaChosenQty(entry, med, idx) {
+  const rest = medRemaining(med);
+  if (rest <= 0) return 0;
+  const raw = pharmaQtys()[entry.id + ":" + idx];
+  if (raw === undefined) return rest;
+  const n = parseInt(raw, 10);
+  return isNaN(n) ? 0 : Math.max(0, Math.min(rest, n));
+}
+
+// Montants d'une délivrance : total = prix unitaire × quantité servie, part assurance = taux de prise en charge du ticket
+// modérateur (80 % en plein tarif), part patient = le reste. Tant que le prix ou la quantité manque, rien n'est calculé.
+// Le serveur refait ce calcul : c'est lui qui enregistre les montants (table Ordonnance_delivrance).
 function pharmaAmounts(entry, med, idx) {
   const prix = Math.min(99999999, Math.max(0, Math.floor(num(pharmaPrices()[entry.id + ":" + idx]))));
-  const qte = pharmaQty(med);
-  if (!prix) return { prix: 0, qte: qte, valid: false, total: 0, ass: 0, pat: 0 };
+  const rest = medRemaining(med);
+  const qte = pharmaChosenQty(entry, med, idx);
+  if (!prix || qte < 1) return { prix: prix, qte: qte, rest: rest, valid: false, total: 0, ass: 0, pat: 0 };
   const total = prix * qte;
   const ass = Math.round(total * pharmaRate(entry));
-  return { prix: prix, qte: qte, valid: true, total: total, ass: ass, pat: total - ass };
+  return { prix: prix, qte: qte, rest: rest, valid: true, total: total, ass: ass, pat: total - ass };
 }
 
 const RX_CHECK_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path class="rx-check-path" d="M20 6L9 17l-5-5"/></svg>';
@@ -4597,36 +5137,103 @@ function rxAmountsHtml(a, pct, locked) {
   "</div>";
 }
 
+// Barre d'avancement d'une ligne : ce qui est déjà servi (plein), puis ce qui va l'être maintenant (rayé), sur la quantité prescrite.
+// « servi / prescrit » est dans l'en-tête de la ligne : sous la barre, seulement ce qui va être servi et ce qui restera.
+function rxBarHtml(qty, served, now) {
+  return '<div class="rx-bar" role="progressbar" aria-valuemin="0" aria-valuemax="' + qty + '" aria-valuenow="' + served + '" aria-label="Quantité servie">' +
+      '<span class="rx-bar-done"></span><span class="rx-bar-now"></span></div>' +
+    '<div class="rx-bar-txt" hidden><span class="rb-now"></span><span class="rb-left"></span></div>';
+}
+function updateRxBar(lineEl, qty, served, now) {
+  const box = lineEl.querySelector("[data-bar]");
+  if (!box) return;
+  if (!box.firstChild) box.innerHTML = rxBarHtml(qty, served, now);
+  const pDone = qty ? Math.round(served / qty * 100) : 0;
+  const pNow = qty ? Math.min(100 - pDone, Math.round(now / qty * 100)) : 0;
+  box.querySelector(".rx-bar").setAttribute("aria-valuenow", String(served));
+  box.querySelector(".rx-bar-done").style.width = pDone + "%";
+  const nowEl = box.querySelector(".rx-bar-now");
+  nowEl.style.left = pDone + "%";
+  nowEl.style.width = pNow + "%";
+  const left = Math.max(0, qty - served - now);
+  const rbNow = box.querySelector(".rb-now");
+  rbNow.hidden = !now;
+  rbNow.innerHTML = now ? "+ <b>" + now + "</b> maintenant" : "";
+  box.querySelector(".rb-left").innerHTML = left ? "reste <b>" + left + "</b>" : "";
+  box.querySelector(".rx-bar-txt").hidden = !now;   // hors saisie, « servi / prescrit » de l'en-tête suffit : pas de ligne en plus
+}
+
+// Livraisons déjà faites sur une ligne (une ou plusieurs pharmacies), en tableau aligné : date, pharmacie et pharmacien,
+// quantité × prix, total, part assurance, part patient ; une ligne de total quand il y en a plusieurs.
+function rxDeliveriesHtml(med, title) {
+  const list = medLivraisons(med);
+  if (!list.length) return "";
+  const rows = list.map(l =>
+    "<tr>" +
+      '<td data-l="Livraison"><b>' + escapeHtml(l.dateService || "—") + "</b>" + (l.heureService ? "<small>" + escapeHtml(l.heureService) + "</small>" : "") + "</td>" +
+      '<td data-l="Pharmacie"><b>' + escapeHtml(l.servicePar || "Pharmacie") + "</b>" + (l.pharmacien ? "<small>" + escapeHtml(l.pharmacien) + "</small>" : "") + "</td>" +
+      '<td class="num" data-l="Quantité × prix">' + escapeHtml(String(l.quantite)) + " × " + fmtFCFA(num(l.prixUnitaire)) + "</td>" +
+      '<td class="num tot" data-l="Total">' + fmtFCFA(num(l.montantTotal)) + "</td>" +
+      '<td class="num ass" data-l="CNAMGS">' + fmtFCFA(num(l.partAssurance)) + "</td>" +
+      '<td class="num pat" data-l="Patient">' + fmtFCFA(num(l.partPatient)) + "</td>" +
+    "</tr>").join("");
+  const sum = list.reduce((t, l) => ({ q: t.q + (parseInt(l.quantite, 10) || 0), total: t.total + num(l.montantTotal), ass: t.ass + num(l.partAssurance), pat: t.pat + num(l.partPatient) }), { q: 0, total: 0, ass: 0, pat: 0 });
+  const foot = list.length > 1
+    ? '<tfoot><tr><td colspan="2" data-l="">Total servi</td><td class="num" data-l="Quantité">' + sum.q + " unités</td>" +
+      '<td class="num tot" data-l="Total">' + fmtFCFA(sum.total) + '</td><td class="num ass" data-l="CNAMGS">' + fmtFCFA(sum.ass) + '</td><td class="num pat" data-l="Patient">' + fmtFCFA(sum.pat) + "</td></tr></tfoot>"
+    : "";
+  return '<div class="rx-deliv-wrap">' + (title ? '<div class="rx-sub">' + title + "</div>" : "") +
+    '<table class="rx-deliv-table"><thead><tr><th>Livraison</th><th>Pharmacie · pharmacien</th><th class="num">Quantité × prix</th><th class="num">Total</th><th class="num">CNAMGS</th><th class="num">Patient</th></tr></thead>' +
+    "<tbody>" + rows + "</tbody>" + foot + "</table></div>";
+}
+
+function rxPartialNote(a) {
+  return "Livraison partielle : il restera " + (a.rest - a.qte) + " à servir dans une autre pharmacie.";
+}
+
+// Une ligne d'ordonnance. À servir : prix, quantité, montants et « Servir » sur UNE rangée alignée (deux rangées si la carte est
+// étroite), les aides (tarif de référence, reste à servir, livraison partielle) juste dessous, chacune sous son champ.
+// Servie : en-tête, barre pleine et tableau des livraisons — plus aucun champ de saisie.
 function rxLineHtml(entry, med, i, pct) {
-  const servi = med.statut === "Servi";
+  const qty = pharmaQty(med), served = medServed(med), done = medRemaining(med) === 0;
   const ref = medicamentPrix(med.designation);
+  const a = pharmaAmounts(entry, med, i);
   const head =
     '<div class="rx-line-head">' +
-      '<span class="rx-line-num">' + (servi ? RX_CHECK_SVG : (i + 1)) + "</span>" +
+      '<span class="rx-line-num">' + (done ? RX_CHECK_SVG : (i + 1)) + "</span>" +
       '<div class="rx-line-title"><b>' + escapeHtml(med.designation) + "</b><small>" + escapeHtml(med.posologie || "Posologie non précisée") + "</small></div>" +
-      '<span class="rx-qty">× ' + pharmaQty(med) + "</span>" +
-      '<span class="pill ' + (servi ? "validee" : "attente") + '">' + (servi ? "Servi" : "À servir") + "</span>" +
+      '<span class="rx-qty" title="Quantité servie sur quantité prescrite">' + served + " / " + qty + "</span>" +
+      '<span class="pill ' + (done ? "validee" : (served > 0 ? "partiel" : "attente")) + '">' + (done ? "Servi" : (served > 0 ? "Partiel" : "À servir")) + "</span>" +
     "</div>";
-  if (servi) {
-    const a = { total: num(med.prixUnitaire) * pharmaQty(med), ass: num(med.partAssurance), pat: num(med.partPatient) };
+  if (done) {
     return '<article class="rx-line served" data-idx="' + i + '">' + head +
-      '<div class="rx-line-body">' +
-        '<div class="rx-served-info">Servi le ' + escapeHtml(med.dateService) + (med.servicePar ? " — " + escapeHtml(med.servicePar) : "") + "<br />Prix unitaire " + fmtFCFA(num(med.prixUnitaire)) + "</div>" +
-        rxAmountsHtml(a, pct, false) +
-      "</div></article>";
+      '<div class="rx-progress" data-bar>' + rxBarHtml(qty, served, 0) + "</div>" +
+      '<div class="rx-line-body">' + rxDeliveriesHtml(med, "") + "</div></article>";
   }
-  const a = pharmaAmounts(entry, med, i);
   const stored = pharmaPrices()[entry.id + ":" + i] || "";
+  const qStored = pharmaQtys()[entry.id + ":" + i];
   const blocked = !!state.pharma.suspended;
-  return '<article class="rx-line' + (a.valid && !blocked ? " ready" : "") + (blocked ? " blocked" : "") + '" data-idx="' + i + '">' + head +
+  const priced = a.prix > 0;
+  return '<article class="rx-line' + (a.valid && !blocked ? " ready" : "") + (blocked ? " blocked" : "") + (served ? " has-served" : "") + '" data-idx="' + i + '">' + head +
+    '<div class="rx-progress" data-bar>' + rxBarHtml(qty, served, a.valid ? a.qte : 0) + "</div>" +
     '<div class="rx-line-body">' +
-      '<div class="rx-price-field">' +
-        '<label for="rxPrice' + i + '">Prix unitaire</label>' +
-        '<span class="rx-price-input"><input type="text" id="rxPrice' + i + '" class="rx-price" data-idx="' + i + '" inputmode="numeric" autocomplete="off" maxlength="12" placeholder="Saisir le prix" value="' + escapeHtml(stored ? fmt(num(stored)) : "") + '"' + (blocked ? " disabled" : "") + ' /><em>FCFA</em></span>' +
-        (ref && !blocked ? '<button type="button" class="rx-ref" data-action="ref" data-idx="' + i + '" data-ref="' + ref + '" title="Utiliser le tarif de référence">Tarif de référence : ' + fmt(ref) + " FCFA — utiliser</button>" : "") +
+      (served ? rxDeliveriesHtml(med, "Déjà servi") : "") +
+      '<div class="rx-form">' +
+        '<div class="rx-price-field">' +
+          '<label for="rxPrice' + i + '">Prix unitaire</label>' +
+          '<span class="rx-price-input"><input type="text" id="rxPrice' + i + '" class="rx-price" data-idx="' + i + '" inputmode="numeric" autocomplete="off" maxlength="12" placeholder="Saisir le prix" value="' + escapeHtml(stored ? fmt(num(stored)) : "") + '"' + (blocked ? " disabled" : "") + ' /><em>FCFA</em></span>' +
+        "</div>" +
+        '<div class="rx-qty-field' + (priced ? "" : " is-locked") + '">' +
+          '<label for="rxQty' + i + '">Quantité à servir</label>' +
+          '<span class="rx-qty-input"><input type="text" id="rxQty' + i + '" class="rx-qty-in" data-idx="' + i + '" inputmode="numeric" autocomplete="off" maxlength="4" value="' + escapeHtml(qStored !== undefined ? qStored : String(a.rest)) + '"' + (priced && !blocked ? "" : " disabled") + ' /><em>/ ' + a.rest + "</em></span>" +
+        "</div>" +
+        rxAmountsHtml(a, pct, !a.valid) +
+        '<div class="rx-line-actions"><button type="button" class="btn-serve" data-action="servir" data-idx="' + i + '"' + (a.valid && !blocked ? "" : " disabled") + ' title="' + (blocked ? "Assuré suspendu : délivrance impossible" : (a.valid ? "" : (priced ? "Indiquez la quantité à servir" : "Saisissez d'abord le prix unitaire"))) + '">Servir</button></div>' +
+        '<div class="rx-hint-price">' + (ref && !blocked ? '<button type="button" class="rx-ref" data-action="ref" data-idx="' + i + '" data-ref="' + ref + '" title="Utiliser le tarif de référence du catalogue">Tarif de référence : ' + fmt(ref) + " FCFA — utiliser</button>" : "") + "</div>" +
+        '<div class="rx-hint-qty">Reste : <b>' + a.rest + "</b> sur " + qty + " prescrit" + (qty > 1 ? "s" : "") +
+          (a.rest > 1 && !blocked ? ' · <button type="button" class="rx-ref" data-action="qty-max" data-idx="' + i + '"' + (priced ? "" : " disabled") + ">Tout le reste</button>" : "") + "</div>" +
+        '<p class="rx-partial-note"' + (a.valid && a.qte < a.rest ? "" : " hidden") + ">" + (a.valid && a.qte < a.rest ? escapeHtml(rxPartialNote(a)) : "") + "</p>" +
       "</div>" +
-      rxAmountsHtml(a, pct, !a.valid) +
-      '<div class="rx-line-actions"><button type="button" class="btn-serve" data-action="servir" data-idx="' + i + '"' + (a.valid && !blocked ? "" : " disabled") + ' title="' + (blocked ? "Assuré suspendu : délivrance impossible" : (a.valid ? "" : "Saisissez d'abord le prix unitaire")) + '">Servir</button></div>' +
     "</div></article>";
 }
 
@@ -4667,16 +5274,21 @@ function renderPharmaOrdonnance() {
     "</div>";
   wrap.appendChild(card);
   refreshRxSummary(card, entry, false);
-  card.querySelectorAll(".rx-line").forEach(el => { if (fresh.indexOf(parseInt(el.dataset.idx, 10)) >= 0) el.classList.add("just-served"); });
+  card.querySelectorAll(".rx-line").forEach(el => {
+    const i = parseInt(el.dataset.idx, 10), med = lines[i];
+    const a = pharmaAmounts(entry, med, i);
+    updateRxBar(el, pharmaQty(med), medServed(med), !medDone(med) && a.valid ? a.qte : 0);
+    if (fresh.indexOf(i) >= 0) el.classList.add("just-served");
+  });
 
-  if (lines.length && lines.every(m => m.statut === "Servi")) {
-    const tot = lines.reduce((a, m) => a + num(m.partAssurance) + num(m.partPatient), 0);
-    const ass = lines.reduce((a, m) => a + num(m.partAssurance), 0);
+  if (lines.length && lines.every(medDone)) {
+    // Plus rien à servir : les champs de saisie ont disparu, on le dit.
+    const p = rxProgress(entry);
     const done = document.createElement("div");
     done.className = "rx-done";
     done.innerHTML =
       '<span class="rx-done-check"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path class="rx-check-path" d="M20 6L9 17l-5-5"/></svg></span>' +
-      "<div><b>Ordonnance entièrement servie</b><span>Total " + fmtFCFA(tot) + " · CNAMGS " + fmtFCFA(ass) + " · patient " + fmtFCFA(tot - ass) + "</span></div>" +
+      "<div><b>Aucune ordonnance à servir</b><span>Cette ordonnance a été entièrement servie — total " + fmtFCFA(p.total) + " · CNAMGS " + fmtFCFA(p.ass) + " · patient " + fmtFCFA(p.pat) + "</span></div>" +
       '<button type="button" class="btn-primary" id="phNextPatientBtn">Servir un autre patient</button>';
     card.appendChild(done);
     done.querySelector("#phNextPatientBtn").addEventListener("click", () => {
@@ -4686,14 +5298,16 @@ function renderPharmaOrdonnance() {
   }
 }
 
-// Recalcule une ligne (montants, état du bouton « Servir ») sans redessiner la carte : le curseur reste dans le champ.
+// Recalcule une ligne (montants, quantité, barre, état du bouton « Servir ») sans redessiner la carte : le curseur reste dans le champ.
 function refreshRxLine(lineEl, entry, idx, animate) {
   const med = pharmaLines(entry)[idx];
   const a = pharmaAmounts(entry, med, idx);
+  const blocked = !!state.pharma.suspended;
+  const priced = a.prix > 0;
   const amounts = lineEl.querySelector(".rx-amounts");
   const wasLocked = amounts.classList.contains("is-locked");
   amounts.classList.toggle("is-locked", !a.valid);
-  lineEl.classList.toggle("ready", a.valid);
+  lineEl.classList.toggle("ready", a.valid && !blocked);
   const set = (key, v) => {
     const el = amounts.querySelector('[data-amt="' + key + '"]');
     if (!a.valid) { el.textContent = "—"; el.dataset.v = "0"; return; }
@@ -4701,20 +5315,46 @@ function refreshRxLine(lineEl, entry, idx, animate) {
   };
   set("total", a.total); set("ass", a.ass); set("pat", a.pat);
   if (a.valid && wasLocked && animate) { amounts.classList.remove("pop"); void amounts.offsetWidth; amounts.classList.add("pop"); }
+  // la quantité se saisit une fois le prix connu
+  const qf = lineEl.querySelector(".rx-qty-field");
+  if (qf) {
+    qf.classList.toggle("is-locked", !priced);
+    qf.querySelector(".rx-qty-in").disabled = !priced || blocked;
+    const mx = lineEl.querySelector('[data-action="qty-max"]');
+    if (mx) mx.disabled = !priced || blocked;
+  }
+  updateRxBar(lineEl, pharmaQty(med), medServed(med), a.valid ? a.qte : 0);
+  const note = lineEl.querySelector(".rx-partial-note");
+  if (note) {
+    const partial = a.valid && a.qte < a.rest;
+    note.hidden = !partial;
+    note.textContent = partial ? rxPartialNote(a) : "";
+  }
   const btn = lineEl.querySelector('[data-action="servir"]');
-  btn.disabled = !a.valid || !!state.pharma.suspended;
-  btn.title = state.pharma.suspended ? "Assuré suspendu : délivrance impossible" : (a.valid ? "" : "Saisissez d'abord le prix unitaire");
+  btn.disabled = !a.valid || blocked;
+  btn.title = blocked ? "Assuré suspendu : délivrance impossible" : (a.valid ? "" : (priced ? "Indiquez la quantité à servir" : "Saisissez d'abord le prix unitaire"));
 }
 
+// Avancement de toute l'ordonnance : lignes à servir, prix saisis, unités servies / prescrites, montants (déjà servis + à servir maintenant).
 function rxProgress(entry) {
   const lines = pharmaLines(entry);
-  let total = 0, ass = 0, pat = 0, served = 0, ready = 0, missing = 0;
+  let total = 0, ass = 0, pat = 0, units = 0, servedUnits = 0, nowUnits = 0, ready = 0, missing = 0, badQty = 0, left = 0;
   lines.forEach((med, i) => {
-    if (med.statut === "Servi") { served++; ass += num(med.partAssurance); pat += num(med.partPatient); total += num(med.partAssurance) + num(med.partPatient); return; }
+    units += pharmaQty(med);
+    servedUnits += medServed(med);
+    medLivraisons(med).forEach(l => {
+      ass += num(l.partAssurance);
+      pat += num(l.partPatient);
+      total += num(l.montantTotal) || (num(l.partAssurance) + num(l.partPatient));
+    });
+    if (medDone(med)) return;
+    left++;
     const a = pharmaAmounts(entry, med, i);
-    if (a.valid) { ready++; total += a.total; ass += a.ass; pat += a.pat; } else missing++;
+    if (a.valid) { ready++; nowUnits += a.qte; total += a.total; ass += a.ass; pat += a.pat; }
+    else if (a.prix > 0) badQty++;
+    else missing++;
   });
-  return { lines: lines.length, served: served, ready: ready, missing: missing, total: total, ass: ass, pat: pat, left: lines.length - served };
+  return { lines: lines.length, left: left, ready: ready, missing: missing, badQty: badQty, total: total, ass: ass, pat: pat, units: units, servedUnits: servedUnits, nowUnits: nowUnits };
 }
 
 function refreshRxSummary(card, entry, animate) {
@@ -4722,20 +5362,21 @@ function refreshRxSummary(card, entry, animate) {
   animateNumber(card.querySelector("#rxSumTotal"), p.total, animate ? 480 : 0);
   animateNumber(card.querySelector("#rxSumAss"), p.ass, animate ? 480 : 0);
   animateNumber(card.querySelector("#rxSumPat"), p.pat, animate ? 480 : 0);
-  card.querySelector(".rx-ring-txt").textContent = p.served + "/" + p.lines;
+  card.querySelector(".rx-ring-txt").textContent = p.servedUnits + "/" + p.units;
   const C = 2 * Math.PI * 26;
   const fg = card.querySelector(".rx-ring .fg");
   fg.style.strokeDasharray = C.toFixed(2);
-  fg.style.strokeDashoffset = (C * (1 - (p.lines ? p.served / p.lines : 0))).toFixed(2);
+  fg.style.strokeDashoffset = (C * (1 - (p.units ? p.servedUnits / p.units : 0))).toFixed(2);
   const all = card.querySelector("#rxServeAll");
   all.hidden = p.left <= 1;
   all.textContent = "Tout servir (" + p.left + " médicaments)";
-  all.disabled = p.missing > 0 || p.left === 0 || !!state.pharma.suspended;
+  all.disabled = p.missing > 0 || p.badQty > 0 || p.left === 0 || !!state.pharma.suspended;
   const hint = card.querySelector("#rxHint");
   hint.textContent = p.left === 0 ? "" : (state.pharma.suspended ? "Assuré suspendu : aucune délivrance possible." : p.missing > 0
     ? "Saisissez le prix unitaire " + (p.missing === 1 ? "du médicament restant" : "des " + p.missing + " médicaments restants") + " pour débloquer la délivrance."
-    : (p.left > 1 ? "Tous les prix sont saisis : vous pouvez servir l'ordonnance." : "Prix saisi : vous pouvez servir."));
-  hint.classList.toggle("ok", p.left > 0 && p.missing === 0 && !state.pharma.suspended);
+    : (p.badQty > 0 ? "Indiquez la quantité à servir pour chaque médicament."
+      : (p.left > 1 ? "Prix et quantités saisis : vous pouvez servir l'ordonnance." : "Prix saisi : vous pouvez servir.")));
+  hint.classList.toggle("ok", p.left > 0 && p.missing === 0 && p.badQty === 0 && !state.pharma.suspended);
   hint.classList.toggle("bad", !!state.pharma.suspended && p.left > 0);
 }
 
@@ -4772,89 +5413,103 @@ function burstConfetti(originEl) {
   window.setTimeout(() => box.remove(), 1800);
 }
 
-// La délivrance fige les montants de la ligne (prix unitaire saisi, part assurance et
-// part patient calculées sur la quantité prescrite) : ce sont eux qui alimentent
-// le suivi financier des pharmacies (tableau de bord / rapports).
-function serveMedicament(entry, med, correlationId) {
-  const idx = pharmaLines(entry).indexOf(med);
-  const a = pharmaAmounts(entry, med, idx);
-  if (!a.valid || med.statut === "Servi" || state.pharma.suspended) return false;
-  med.statut = "Servi";
-  med.dateService = todayFR();
-  med.servicePar = (state.currentUser && state.currentUser.etablissement) ? state.currentUser.etablissement : "Pharmacie";
-  med.prixUnitaire = String(a.prix);
-  med.partAssurance = String(a.ass);
-  med.partPatient = String(a.pat);
-  audit("pharma.servir", {
-    correlationId: correlationId || "", nag: entry.matricule,
-    ressourceType: "Ordonnance", ressourceId: entry.id, ressourceLibelle: entry.numero + " · " + med.designation,
-    apres: { medicament: med.designation, quantite: a.qte, prixUnitaire: a.prix, prixReference: medicamentPrix(med.designation), total: a.total, partAssurance: a.ass, partPatient: a.pat, pharmacie: med.servicePar }
-  });
-  return true;
-}
-
-async function finishServing(entry, servedIdx) {
-  // La délivrance est d'abord enregistrée dans la base ; en cas de refus, on revient à l'état du serveur.
+// La délivrance part au serveur (PUT /api/feuilles/{id}, champ « aServir ») : c'est LUI qui vérifie que la quantité ne dépasse
+// pas ce qui reste à servir (toutes pharmacies confondues), recalcule les montants et enregistre la livraison (table
+// Ordonnance_delivrance : quantité, prix unitaire, montants, pharmacie, pharmacien, date). L'écran se met à jour avec sa réponse.
+// items : [{ idx, a }] où a = pharmaAmounts() de la ligne.
+async function serveLines(entry, items) {
+  if (!items.length || state.pharma.suspended) return;
+  let saved;
   try {
-    await persistFeuilles();
+    saved = await apiServirLignes(entry.serverId, pharmaLines(entry).length, items.map(x => ({ idx: x.idx, quantite: x.a.qte, prixUnitaire: x.a.prix })));
   } catch (err) {
-    showInfoModal("Délivrance non enregistrée", "<p>" + escapeHtml(err.message) + "</p><p class=\"hint\">Rien n'a été servi : vérifiez la connexion puis recommencez.</p>");
+    showInfoModal("Délivrance non enregistrée", "<p>" + escapeHtml(err.message) + "</p><p class=\"hint\">Rien n'a été servi pour ces lignes : l'écran est rechargé depuis la base.</p>");
     try { await refreshFeuillesByNag(entry.matricule); } catch (e) { /* on garde l'affichage */ }
     runPharmaSearch(state.pharma.nag, true);
     return;
   }
-  state.pharma.justServed = servedIdx || [];
-  const wasComplete = pharmaLines(entry).every(m => m.statut === "Servi");
+  mergeFeuilles([saved], false, true);
+  items.forEach(x => { delete pharmaPrices()[entry.id + ":" + x.idx]; delete pharmaQtys()[entry.id + ":" + x.idx]; });   // le reste se ressaisit
+  state.pharma.justServed = items.map(x => x.idx);
+  const updated = state.historique.find(h => h.id === entry.id) || saved;
+  const complete = pharmaLines(updated).every(medDone);
   runPharmaSearch(state.pharma.nag, true);
-  refreshNavLive();
   refreshPharmaHero(true);
+  pullCompteurs().then(() => { refreshNavLive(); refreshPharmaHero(true); });   // le compteur du serveur arrive après : on remet les pastilles à jour
   const card = document.querySelector("#pharmaResults .ph-rx");
-  if (wasComplete && card) {
+  if (complete && card) {
     burstConfetti(card);
-    const tot = pharmaLines(entry).reduce((a, m) => a + num(m.partAssurance) + num(m.partPatient), 0);
-    toast({ kind: "success", title: "Ordonnance servie", text: "Total " + fmtFCFA(tot) + " — les montants alimentent le suivi financier de la pharmacie.", ms: 5200 });
+    const p = rxProgress(updated);
+    toast({ kind: "success", title: "Ordonnance entièrement servie", text: "Total " + fmtFCFA(p.total) + " — les montants alimentent le suivi financier de la pharmacie.", ms: 5200 });
     const next = document.getElementById("phNextPatientBtn");
     if (next && !window.matchMedia("(pointer: coarse)").matches) next.focus({ preventScroll: true });
   } else {
-    toast({ kind: "success", title: servedIdx && servedIdx.length > 1 ? servedIdx.length + " médicaments servis" : "Médicament servi", text: "Montants enregistrés.", ms: 3200 });
+    const partial = items.some(x => x.a.qte < x.a.rest);
+    toast({ kind: "success", title: partial ? "Livraison partielle enregistrée" : (items.length > 1 ? items.length + " médicaments servis" : "Médicament servi"),
+      text: partial ? "Le reste pourra être servi par une autre pharmacie." : "Montants enregistrés.", ms: 3600 });
     focusNextPrice(false);
   }
 }
 
 // Une seule délégation d'événements pour toute l'ordonnance affichée.
-document.getElementById("pharmaResults").addEventListener("input", e => {
-  const input = e.target.closest(".rx-price");
+const pharmaResultsEl = document.getElementById("pharmaResults");
+pharmaResultsEl.addEventListener("input", e => {
+  const priceIn = e.target.closest(".rx-price"), qtyIn = e.target.closest(".rx-qty-in");
+  const input = priceIn || qtyIn;
   if (!input) return;
   const card = input.closest(".ph-rx");
   const entry = state.pharma.entries.find(x => x.id === parseInt(card.dataset.entry, 10));
   if (!entry) return;
-  const digits = input.value.replace(/\D/g, "").slice(0, 8);
   const idx = parseInt(input.dataset.idx, 10);
-  pharmaPrices()[entry.id + ":" + idx] = digits;
-  if (input.value !== digits) input.value = digits;       // seuls les chiffres passent
+  if (priceIn) {
+    const digits = input.value.replace(/\D/g, "").slice(0, 8);
+    pharmaPrices()[entry.id + ":" + idx] = digits;
+    if (input.value !== digits) input.value = digits;       // seuls les chiffres passent
+  } else {
+    const rest = medRemaining(pharmaLines(entry)[idx]);
+    let digits = input.value.replace(/\D/g, "").slice(0, 4);
+    if (digits !== "") digits = String(Math.min(rest, parseInt(digits, 10)));   // jamais plus que le reste à servir
+    pharmaQtys()[entry.id + ":" + idx] = digits;
+    if (input.value !== digits) input.value = digits;
+  }
   refreshRxLine(input.closest(".rx-line"), entry, idx, true);
   refreshRxSummary(card, entry, true);
 });
-document.getElementById("pharmaResults").addEventListener("focusin", e => {
-  const input = e.target.closest(".rx-price");
-  if (input) input.value = input.value.replace(/\D/g, "");   // édition sans espaces
+pharmaResultsEl.addEventListener("focusin", e => {
+  const price = e.target.closest(".rx-price");
+  if (price) { price.value = price.value.replace(/\D/g, ""); return; }   // édition sans espaces
+  const q = e.target.closest(".rx-qty-in");
+  if (q) q.select();
 });
-document.getElementById("pharmaResults").addEventListener("focusout", e => {
-  const input = e.target.closest(".rx-price");
-  if (input && input.value) input.value = fmt(num(input.value));   // affichage 12 500
+pharmaResultsEl.addEventListener("focusout", e => {
+  const price = e.target.closest(".rx-price");
+  if (price && price.value) { price.value = fmt(num(price.value)); return; }   // affichage 12 500
+  const q = e.target.closest(".rx-qty-in");
+  if (!q) return;
+  const n = parseInt(q.value, 10);
+  if (!n) {                                                 // vide ou 0 : retour à « tout le reste »
+    const card = q.closest(".ph-rx");
+    const entry = card && state.pharma.entries.find(x => x.id === parseInt(card.dataset.entry, 10));
+    if (!entry) return;
+    const idx = parseInt(q.dataset.idx, 10);
+    delete pharmaQtys()[entry.id + ":" + idx];
+    q.value = String(medRemaining(pharmaLines(entry)[idx]));
+    refreshRxLine(q.closest(".rx-line"), entry, idx, false);
+    refreshRxSummary(card, entry, false);
+  }
 });
-document.getElementById("pharmaResults").addEventListener("keydown", e => {
-  const input = e.target.closest(".rx-price");
+pharmaResultsEl.addEventListener("keydown", e => {
+  const input = e.target.closest(".rx-price, .rx-qty-in");
   if (!input || e.key !== "Enter") return;
   e.preventDefault();
   const card = input.closest(".ph-rx");
-  const prices = Array.from(card.querySelectorAll(".rx-price"));
-  const next = prices[prices.indexOf(input) + 1];
+  const fields = Array.from(card.querySelectorAll(".rx-price, .rx-qty-in")).filter(el => !el.disabled);
+  const next = fields[fields.indexOf(input) + 1];
   if (next) { next.focus(); return; }
   const target = card.querySelector("#rxServeAll:not([hidden]):not(:disabled)") || input.closest(".rx-line").querySelector('[data-action="servir"]:not(:disabled)');
   if (target) target.focus();
 });
-document.getElementById("pharmaResults").addEventListener("click", e => {
+pharmaResultsEl.addEventListener("click", e => {
   const btn = e.target.closest("[data-action]");
   if (!btn) return;
   const card = btn.closest(".ph-rx");
@@ -4875,31 +5530,42 @@ document.getElementById("pharmaResults").addEventListener("click", e => {
     input.value = fmt(num(btn.dataset.ref));
     refreshRxLine(input.closest(".rx-line"), entry, idx, true);
     refreshRxSummary(card, entry, true);
+    const q = card.querySelector('.rx-qty-in[data-idx="' + idx + '"]');
+    if (q && !window.matchMedia("(pointer: coarse)").matches) q.focus();     // le prix est posé : on passe à la quantité
+    return;
+  }
+  if (btn.dataset.action === "qty-max") {
+    const idx = parseInt(btn.dataset.idx, 10);
+    const q = card.querySelector('.rx-qty-in[data-idx="' + idx + '"]');
+    delete pharmaQtys()[entry.id + ":" + idx];
+    q.value = String(medRemaining(lines[idx]));
+    refreshRxLine(q.closest(".rx-line"), entry, idx, true);
+    refreshRxSummary(card, entry, true);
     return;
   }
   if (btn.dataset.action === "servir") {
     const idx = parseInt(btn.dataset.idx, 10);
     const med = lines[idx], a = med ? pharmaAmounts(entry, med, idx) : null;
-    if (!med || med.statut === "Servi" || !a.valid) return;
+    if (!med || medDone(med) || !a.valid) return;
+    const partial = a.qte < a.rest;
     askConfirm(
-      "Confirmer la délivrance de « " + med.designation + " » — quantité " + a.qte + ", prix unitaire " + fmtFCFA(a.prix) + ", total " + fmtFCFA(a.total) +
-      " (CNAMGS " + fmtFCFA(a.ass) + ", patient " + fmtFCFA(a.pat) + ") ?",
-      () => { if (serveMedicament(entry, med)) finishServing(entry, [idx]); },
-      { title: "Confirmer la délivrance", confirmLabel: "Servir", neutral: true }
+      "Confirmer la délivrance de « " + med.designation + " » — " + a.qte + " sur " + pharmaQty(med) + " prescrit" + (pharmaQty(med) > 1 ? "s" : "") +
+      (partial ? " (livraison partielle : il restera " + (a.rest - a.qte) + " à servir ailleurs)" : "") +
+      ", prix unitaire " + fmtFCFA(a.prix) + ", total " + fmtFCFA(a.total) + " (CNAMGS " + fmtFCFA(a.ass) + ", patient " + fmtFCFA(a.pat) + ") ?",
+      () => serveLines(entry, [{ idx: idx, a: a }]),
+      { title: partial ? "Confirmer la livraison partielle" : "Confirmer la délivrance", confirmLabel: "Servir", neutral: true }
     );
     return;
   }
   if (btn.dataset.action === "servir-tout") {
-    const todo = lines.map((med, i) => ({ med: med, i: i, a: pharmaAmounts(entry, med, i) })).filter(x => x.med.statut !== "Servi");
+    const todo = lines.map((med, i) => ({ med: med, idx: i, a: pharmaAmounts(entry, med, i) })).filter(x => !medDone(x.med));
     if (!todo.length || todo.some(x => !x.a.valid)) return;
     const pat = todo.reduce((s, x) => s + x.a.pat, 0), ass = todo.reduce((s, x) => s + x.a.ass, 0);
+    const partial = todo.filter(x => x.a.qte < x.a.rest).length;
     askConfirm(
-      "Confirmer la délivrance des " + todo.length + " médicaments restants de cette ordonnance ? CNAMGS " + fmtFCFA(ass) + ", patient " + fmtFCFA(pat) + ".",
-      () => {
-        const ref = newId("D");
-        const done = todo.filter(x => serveMedicament(entry, x.med, ref)).map(x => x.i);
-        if (done.length) finishServing(entry, done);
-      },
+      "Confirmer la délivrance des " + todo.length + " médicaments restants de cette ordonnance ? CNAMGS " + fmtFCFA(ass) + ", patient " + fmtFCFA(pat) + "." +
+      (partial ? " " + partial + " ligne" + (partial > 1 ? "s sont" : " est") + " servie" + (partial > 1 ? "s" : "") + " partiellement." : ""),
+      () => serveLines(entry, todo.map(x => ({ idx: x.idx, a: x.a }))),
       { title: "Confirmer la délivrance", confirmLabel: "Tout servir", neutral: true }
     );
   }
@@ -4927,21 +5593,28 @@ document.getElementById("pharmaDatesList").addEventListener("click", e => {
 // (administrateur), on voit toutes les pharmacies.
 function pharmaHistoryScope() {
   const u = state.currentUser;
-  return u && u.role === "Pharmacie" && u.etablissement ? u.etablissement : null;
+  return u && u.role === "Pharmacien" && u.etablissement ? u.etablissement : null;
 }
 
-// Toutes les lignes d'ordonnance servies, de la délivrance la plus récente à la plus ancienne.
+// Toutes les LIVRAISONS de la pharmacie (une ligne d'ordonnance servie en plusieurs fois donne plusieurs lignes ici),
+// de la plus récente à la plus ancienne. Tout vient de la base (table Ordonnance_delivrance) : quantité, prix unitaire,
+// montant total, parts assurance / patient, pharmacie, pharmacien, date. « med » est une copie de la ligne d'ordonnance
+// dont les champs de délivrance sont ceux de CETTE livraison (les écrans et rapports existants la lisent tels quels).
 function pharmaHistoryRows() {
   const scope = pharmaHistoryScope();
   const rows = [];
   state.historique.forEach((h, order) => {
-    (h.ordonnance || []).forEach((med, idx) => {
-      if (med.statut !== "Servi" || !med.servicePar) return;
-      if (scope && med.servicePar !== scope) return;
-      rows.push({ h: h, med: med, order: order, idx: idx, iso: frToISO(med.dateService) });
+    (h.ordonnance || []).forEach((line, idx) => {
+      medLivraisons(line).forEach((liv, k) => {
+        if (!liv.servicePar) return;
+        if (scope && liv.servicePar !== scope) return;
+        const med = Object.assign({}, line, { quantite: String(liv.quantite), statut: "Servi", prixUnitaire: liv.prixUnitaire, partAssurance: liv.partAssurance,
+          partPatient: liv.partPatient, servicePar: liv.servicePar, dateService: liv.dateService });
+        rows.push({ h: h, med: med, liv: liv, line: line, order: order, idx: idx, k: k, iso: frToISO(liv.dateService), time: liv.heureService || "" });
+      });
     });
   });
-  rows.sort((a, b) => b.iso.localeCompare(a.iso) || a.order - b.order || a.idx - b.idx);
+  rows.sort((a, b) => b.iso.localeCompare(a.iso) || b.time.localeCompare(a.time) || a.order - b.order || a.idx - b.idx || a.k - b.k);
   return rows;
 }
 
@@ -4953,12 +5626,14 @@ function filteredPharmaHistory() {
     if (from && (!r.iso || r.iso < from)) return false;
     if (to && (!r.iso || r.iso > to)) return false;
     if (q) {
-      const hay = [r.h.patientNom, r.h.matricule, formatNag(r.h.matricule), r.med.designation, r.h.numero, r.h.medecin].join(" ").toLowerCase();
+      const hay = [r.h.patientNom, r.h.matricule, formatNag(r.h.matricule), r.med.designation, r.h.numero, r.h.medecin, r.liv.servicePar, r.liv.pharmacien].join(" ").toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
   });
 }
+
+function idTag(id) { return id != null && id !== "" ? '<div class="hint" style="margin:2px 0 0">n° ' + escapeHtml(String(id)) + "</div>" : ""; }
 
 function renderPharmaHistory() {
   const scope = pharmaHistoryScope();
@@ -4967,23 +5642,27 @@ function renderPharmaHistory() {
   document.getElementById("pharmaHistCount").textContent = rows.length;
   document.getElementById("pharmaHistEmpty").hidden = rows.length > 0;
   document.getElementById("pharmaHistHead").innerHTML =
-    "<tr><th>Délivré le</th><th>Patient</th><th>Médicament</th><th class=\"num\">Qté</th><th>Feuille · prestation</th><th>Prescripteur</th>" +
-    (scope ? "" : "<th>Pharmacie</th>") + '<th class="num">Part assurance</th><th class="num">Part patient</th></tr>';
+    '<tr><th>Date de délivrance</th><th>Patient</th><th>Médicament</th><th class="num">Qté servie</th><th class="num">Prix unitaire</th><th class="num">Montant total</th>' +
+    '<th class="num">Part assurance</th><th class="num">Part patient</th><th>Pharmacie</th><th>Pharmacien</th><th>Feuille · prestation</th><th>Prescripteur</th></tr>';
   const histInfo = pageSlice("pharmaHist", rows, 10);
   renderPager("pharmaHistPager", "pharmaHist", histInfo, renderPharmaHistory, "délivrances");
-  document.getElementById("pharmaHistBody").innerHTML = histInfo.items.map(r =>
-    "<tr>" +
-      "<td>" + escapeHtml(r.med.dateService) + "</td>" +
+  document.getElementById("pharmaHistBody").innerHTML = histInfo.items.map(r => {
+    const prescrit = pharmaQty(r.line), partielle = !medDone(r.line);
+    return "<tr>" +
+      "<td>" + escapeHtml(r.liv.dateService || "—") + (r.liv.heureService ? '<div class="hint" style="margin:2px 0 0">' + escapeHtml(r.liv.heureService) + "</div>" : "") + "</td>" +
       '<td><span class="rapport-name">' + escapeHtml(r.h.patientNom || "—") + '</span><div class="hint" style="margin:2px 0 0">' + escapeHtml(formatNag(r.h.matricule)) + "</div></td>" +
       "<td>" + escapeHtml(r.med.designation) + "</td>" +
-      '<td class="num">' + pharmaQty(r.med) + "</td>" +
+      '<td class="num"><b>' + escapeHtml(String(r.liv.quantite)) + "</b> / " + prescrit + (partielle ? '<div><span class="pill partiel">Partiel</span></div>' : "") + "</td>" +
+      '<td class="num">' + fmtFCFA(num(r.liv.prixUnitaire)) + "</td>" +
+      '<td class="num">' + fmtFCFA(num(r.liv.montantTotal)) + "</td>" +
+      '<td class="num sum-paid">' + fmtFCFA(num(r.liv.partAssurance)) + "</td>" +
+      '<td class="num">' + fmtFCFA(num(r.liv.partPatient)) + "</td>" +
+      "<td>" + escapeHtml(r.liv.servicePar || "—") + idTag(r.liv.idPharmacie) + "</td>" +
+      "<td>" + escapeHtml(r.liv.pharmacien || "—") + idTag(r.liv.idPharmacien) + "</td>" +
       "<td>" + escapeHtml(r.h.numero) + '<div class="hint" style="margin:2px 0 0">' + escapeHtml(prestationDateFR(r.h)) + "</div></td>" +
       "<td>" + escapeHtml(r.h.medecin || "—") + "</td>" +
-      (scope ? "" : "<td>" + escapeHtml(r.med.servicePar) + "</td>") +
-      '<td class="num sum-paid">' + fmtFCFA(num(r.med.partAssurance)) + "</td>" +
-      '<td class="num">' + fmtFCFA(num(r.med.partPatient)) + "</td>" +
-    "</tr>"
-  ).join("");
+    "</tr>";
+  }).join("");
 
   const lead = document.getElementById("pharmaHistLead");
   const dl = document.getElementById("pharmaHistSummary");
@@ -4993,12 +5672,14 @@ function renderPharmaHistory() {
     return;
   }
   const patients = new Set(rows.map(r => String(r.h.matricule))).size;
-  const ass = rows.reduce((a, r) => a + num(r.med.partAssurance), 0);
-  const pat = rows.reduce((a, r) => a + num(r.med.partPatient), 0);
-  lead.textContent = plural(rows.length, "médicament a été délivré", "médicaments ont été délivrés") + " à " + plural(patients, "patient", "patients") +
+  const ass = rows.reduce((a, r) => a + num(r.liv.partAssurance), 0);
+  const pat = rows.reduce((a, r) => a + num(r.liv.partPatient), 0);
+  const units = rows.reduce((a, r) => a + (parseInt(r.liv.quantite, 10) || 0), 0);
+  lead.textContent = plural(rows.length, "livraison a été enregistrée", "livraisons ont été enregistrées") + " (" + plural(units, "unité", "unités") + ") pour " + plural(patients, "patient", "patients") +
     ". La CNAMGS prend en charge " + fmtFCFA(ass) + " et les patients règlent " + fmtFCFA(pat) + ".";
   dl.innerHTML =
-    "<div><dt>Médicaments délivrés</dt><dd>" + rows.length + "</dd></div>" +
+    "<div><dt>Livraisons</dt><dd>" + rows.length + "</dd></div>" +
+    "<div><dt>Unités délivrées</dt><dd>" + units + "</dd></div>" +
     "<div><dt>Patients servis</dt><dd>" + patients + "</dd></div>" +
     '<div class="sum-paid"><dt>Part assurance (CNAMGS)</dt><dd>' + fmtFCFA(ass) + "</dd></div>" +
     "<div><dt>Part des patients</dt><dd>" + fmtFCFA(pat) + "</dd></div>" +
@@ -5287,10 +5968,15 @@ function fmtFCFA(n) { return fmt(n) + " FCFA"; }
 // Toutes les lignes de médicaments effectivement servies (données réelles,
 // issues de state.historique[].ordonnance — voir l'espace Pharmacien).
 function getServedMedicaments() {
+  // une entrée par LIVRAISON : une ligne servie en deux fois par deux pharmacies compte pour chacune (sa part)
   const meds = [];
   state.historique.forEach(h => {
-    (h.ordonnance || []).forEach(med => {
-      if (med.statut === "Servi" && med.servicePar) meds.push(med);
+    (h.ordonnance || []).forEach(line => {
+      medLivraisons(line).forEach(l => {
+        if (!l.servicePar) return;
+        meds.push(Object.assign({}, line, { quantite: String(l.quantite), statut: "Servi", prixUnitaire: l.prixUnitaire, partAssurance: l.partAssurance,
+          partPatient: l.partPatient, servicePar: l.servicePar, dateService: l.dateService }));
+      });
     });
   });
   return meds;
@@ -5431,13 +6117,11 @@ function renderPharmaDashboard() {
   const aggregates = getPharmacieAggregates(null);
   const totalPrestations = aggregates.reduce((a, p) => a + p.count, 0);
   const totalMontant = aggregates.reduce((a, p) => a + p.montantTotal, 0);
-  const totalPaye = aggregates.reduce((a, p) => a + p.paye, 0);
   const totalReste = aggregates.reduce((a, p) => a + p.reste, 0);
 
   document.getElementById("pharmaStatCount").textContent = getPartnerPharmacyCount(null);
   document.getElementById("pharmaStatPrestations").textContent = totalPrestations;
   document.getElementById("pharmaStatMontant").textContent = fmtFCFA(totalMontant);
-  document.getElementById("pharmaStatPaye").textContent = fmtFCFA(totalPaye);
   document.getElementById("pharmaStatReste").textContent = fmtFCFA(totalReste);
 
   renderPharmaOverview();
@@ -5638,13 +6322,11 @@ function renderHopitalDashboard() {
   const totalConsult = aggregates.reduce((a, p) => a + p.consult, 0);
   const totalExam = aggregates.reduce((a, p) => a + p.exam, 0);
   const totalMontant = aggregates.reduce((a, p) => a + p.montantTotal, 0);
-  const totalPaye = aggregates.reduce((a, p) => a + p.paye, 0);
   const totalReste = aggregates.reduce((a, p) => a + p.reste, 0);
 
   document.getElementById("hospStatCount").textContent = getPartnerHospitalCount(null);
   document.getElementById("hospStatPrestations").textContent = totalConsult + totalExam;
   document.getElementById("hospStatMontant").textContent = fmtFCFA(totalMontant);
-  document.getElementById("hospStatPaye").textContent = fmtFCFA(totalPaye);
   document.getElementById("hospStatReste").textContent = fmtFCFA(totalReste);
 
   renderHopitalOverview();
@@ -5938,7 +6620,7 @@ function loadApiPermissions() {
 
 function renderApiPermissionsTable() {
   const head = document.getElementById("apiPermissionsHead");
-  head.innerHTML = "<th>Rôle</th>" + apiPermissionsCatalog.map(p =>
+  head.innerHTML = "<th>Profil</th>" + apiPermissionsCatalog.map(p =>
     '<th title="' + escapeHtml(p.description || "") + '">' + escapeHtml(p.code) + "</th>"
   ).join("");
 

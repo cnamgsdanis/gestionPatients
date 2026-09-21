@@ -70,8 +70,30 @@ public class AuthGuard {
             return null;
         }
 
-        // 5. Tout est OK → on renvoie les infos contenues dans le token
+        // 5. Mot de passe temporaire : tant qu'il n'est pas remplacé, seules les routes d'authentification passent
+        if (Boolean.TRUE.equals(claims.get("chgmdp", Boolean.class)) && !routeAutoriseeAvantChangementMdp(ex.getRequestURI().getPath())) {
+            sendJson(ex, 403, "{\"error\":\"Vous devez d'abord choisir votre mot de passe personnel.\",\"code\":\"MDP_A_CHANGER\"}");
+            return null;
+        }
+
+        // 6. Tout est OK → on renvoie les infos contenues dans le token
         return claims;
+    }
+
+    /** Routes ouvertes à un compte dont le mot de passe est temporaire : de quoi le changer, se reconnaître, se déconnecter. */
+    private static boolean routeAutoriseeAvantChangementMdp(String path) {
+        return path.equals("/api/auth/change-password") || path.equals("/api/auth/me")
+            || path.equals("/api/auth/logout") || path.equals("/api/auth/refresh");
+    }
+
+    /**
+     * Comme verifier(), mais ne répond RIEN au client : renvoie les claims
+     * du token s'il est valide, null sinon. Sert aux filtres (journal d'audit).
+     */
+    public static Claims claimsOuNull(HttpExchange ex) {
+        String auth = ex.getRequestHeaders().getFirst("Authorization");
+        if (auth == null || !auth.startsWith("Bearer ")) return null;
+        return jwtService.verifier(auth.substring(7).trim());
     }
 
     // ============================================================

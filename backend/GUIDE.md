@@ -185,7 +185,10 @@ gestionPatients/
 
 ### Création de la base
 
-Exécute le script SQL dans `MPD/gestionpatient.sql` via SSMS (le plus simple).
+Exécute le script SQL dans `MPD/gestionpatient.sql` via SSMS (le plus simple), **puis les migrations, dans l'ordre** :
+`MPD/migration_v5_integration_front.sql`, `MPD/migration_v6_livraison_partielle_controles.sql` (livraison partielle, interrupteur des contrôles anti-fraude) et
+`MPD/migration_v7_profils_et_mdp_initial.sql` (profils multiples, mot de passe temporaire). Tous sont idempotents ; le détail est dans `docs/05-integration-front.md`
+(sections 2, 3 et 13 à 15). Sans elles, le serveur échoue à la connexion (« nom de colonne non valide »).
 
 ### Configuration de la connexion
 
@@ -220,25 +223,38 @@ SELECT * FROM Structure;   -- Note l'id_structure (probablement 1)
 
 ## 🚀 Compilation et exécution
 
-### Étapes (Windows / PowerShell)
+### Le plus simple
 
-Depuis le dossier `backend/` :
+Double-cliquer sur `lancer-local.bat` (racine du dépôt) : compile, démarre l'API et le site, ouvre le navigateur.
+Guide complet, dépannage et première installation : **[../LANCER-EN-LOCAL.md](../LANCER-EN-LOCAL.md)**.
+
+### Étapes à la main (Windows / PowerShell)
+
+Réglages de la base et du port : copier `db/local.properties.example` en `db/local.properties` (non versionné) et l'adapter
+(instance SQL, mot de passe `sa`, `PEC_PORT`). Sans ce fichier, les valeurs par défaut du code sont utilisées
+(`localhost:1433`, port 8080).
 
 ```powershell
 # 1. Se placer dans le dossier backend
 cd backend
 
-# 2. Nettoyer et créer le dossier de sortie
-rmdir /S /Q out
-mkdir out
+# 2. Compiler (PowerShell : « .\ » devant le script du dossier courant)
+.\compile.bat
 
-# 3. Compiler tous les .java (index.java + tous les packages)
+# 3. Lancer le serveur (le port et la base viennent de db/local.properties)
+java -cp "out;lib/*" index
+```
+
+Équivalent sans les scripts :
+
+```powershell
+Remove-Item -Recurse -Force out -ErrorAction SilentlyContinue ; mkdir out
 javac -cp "lib/mssql-jdbc-13.4.0.jre11.jar;lib/gson-2.10.1.jar;lib/jbcrypt-0.4.jar;lib/jjwt-api-0.12.6.jar;lib/jjwt-impl-0.12.6.jar;lib/jjwt-gson-0.12.6.jar" -d out index.java controller/*.java dao/*.java db/*.java model/*.java security/*.java service/*.java
-
-# 4. Lancer le serveur
 java -cp "out;lib/mssql-jdbc-13.4.0.jre11.jar;lib/gson-2.10.1.jar;lib/jbcrypt-0.4.jar;lib/jjwt-api-0.12.6.jar;lib/jjwt-impl-0.12.6.jar;lib/jjwt-gson-0.12.6.jar" index
 ```
 
+> `rmdir /S /Q` est une commande `cmd` : en PowerShell, utiliser `Remove-Item -Recurse -Force`.
+> Le port 8080 est parfois pris (Apache/WAMP) : changer `PEC_PORT` dans `db/local.properties`.
 
 ### Résultat attendu
 
