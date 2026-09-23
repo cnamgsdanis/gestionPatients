@@ -119,7 +119,7 @@ Le pharmacien voit : les consultations **validées** avec ordonnance (recherche 
 
 ### 5.3 Annuaires
 
-- `GET /api/medecins` → `[ { "id_utilisateur": 3, "nom": "Rosine AKUE", "code_praticien": "MED-00456", "type_praticien": "Spécialiste", "id_structure": 1, "structure_nom": "Polyclinique El Rapha" } ]` — utilisateurs `medecin` actifs, lisible par tout compte connecté ayant `patient.lire`.
+- `GET /api/medecins` → `[ { "id_utilisateur": 3, "nom": "Rosine AKUE", "code_praticien": "MED-00456", "type_praticien": "Spécialiste", "service": "Cardiologie", "id_structure": 1, "structure_nom": "Polyclinique El Rapha" } ]` — utilisateurs `medecin` actifs, lisible par tout compte connecté ayant `patient.lire`. `service` (§16 de `05-integration-front.md`) peut être `null` si non renseigné sur le compte.
 - `GET /api/catalogue/medicaments` → `[ { "designation": "Paracétamol 500mg (boîte de 16)", "prix_reference": 800 } ]` — lisible avec `ordonnance.lire`.
 - `GET /api/auth/me` → `{ "user": { …comme au login… }, "permissions": ["patient.lire", "prestation.creer", …] }`.
 

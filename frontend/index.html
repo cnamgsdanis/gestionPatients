@@ -697,6 +697,7 @@
           <div class="page-hero-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v6a4 4 0 0 0 8 0V3"/><path d="M10 15v2a4 4 0 0 0 8 0v-2"/><circle cx="19" cy="8" r="1.6"/></svg></div>
           <div class="page-hero-text">
             <h1>Espace Médecin</h1>
+            <p id="medecinServiceLine" hidden></p>
             <p>Examinez les patients en attente. L'historique de leurs visites s'ouvre depuis la feuille de soins.</p>
           </div>
         </div>
@@ -940,6 +941,10 @@
                   <input type="text" id="pr-etab" disabled />
                 </div>
                 <div class="f-field">
+                  <div class="f-label">Service</div>
+                  <input type="text" id="pr-service" disabled />
+                </div>
+                <div class="f-field">
                   <div class="f-label">Type de praticien</div>
                   <div class="checks">
                     <label id="pr-type-generaliste-wrap"><input type="checkbox" id="pr-type-generaliste" disabled /> Généraliste</label>
@@ -1037,17 +1042,17 @@
                 <div>
                   <div class="f-field">
                     <div class="f-label">Nom de l'établissement réalisant l'examen</div>
-                    <input type="text" id="exam-etablissement" />
+                    <input type="text" id="exam-etablissement" disabled />
                   </div>
                 </div>
                 <div>
                   <div class="f-field">
                     <div class="f-label">Code du praticien réalisant l'examen</div>
-                    <input type="text" id="exam-code-praticien" />
+                    <input type="text" id="exam-code-praticien" disabled />
                   </div>
                   <div class="f-field">
                     <div class="f-label">Code de l'établissement</div>
-                    <input type="text" id="exam-code-etablissement" />
+                    <input type="text" id="exam-code-etablissement" disabled />
                   </div>
                 </div>
               </div>
@@ -1262,7 +1267,8 @@
                   <th>Matricule</th>
                   <th>Type</th>
                   <th>Statut</th>
-                  <th>Montant total</th>
+                  <th>Médecin</th>
+                  <th>Service</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -1799,6 +1805,23 @@
           <option value="Généraliste">Généraliste</option>
           <option value="Spécialiste">Spécialiste</option>
           <option value="Autre">Autre</option>
+        </select>
+      </div>
+      <div class="field" id="u-service-field" hidden>
+        <label for="u-service">Service médical</label>
+        <select id="u-service">
+          <option value="">— Choisir un service —</option>
+          <option>Médecine générale</option>
+          <option>Pédiatrie</option>
+          <option>Gynécologie-Obstétrique</option>
+          <option>Cardiologie</option>
+          <option>Chirurgie générale</option>
+          <option>Dermatologie</option>
+          <option>ORL</option>
+          <option>Ophtalmologie</option>
+          <option>Radiologie</option>
+          <option>Laboratoire d'analyses</option>
+          <option>Autre</option>
         </select>
       </div>
       <div class="field" id="u-pass-wrap">

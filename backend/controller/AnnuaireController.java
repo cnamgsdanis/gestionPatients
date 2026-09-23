@@ -54,6 +54,7 @@ public class AnnuaireController {
             m.put("nom", u.nomComplet());                 // « prénom nom »
             m.put("code_praticien", u.code_praticien);
             m.put("type_praticien", u.type_praticien);
+            m.put("service", u.service);
             m.put("id_structure", u.id_structure);
             m.put("structure_nom", u.structure_nom);
             out.add(m);

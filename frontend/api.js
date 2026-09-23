@@ -332,7 +332,7 @@ function mapBackendPatient(p) {
 }
 
 /* ---- Annuaires (à créer) --------------------------------------------------
-   GET /api/medecins               → [{ id_utilisateur, nom, code_praticien, type_praticien, id_structure, structure_nom }]
+   GET /api/medecins               → [{ id_utilisateur, nom, code_praticien, type_praticien, service, id_structure, structure_nom }]
    GET /api/catalogue/medicaments  → [{ designation, prix_reference }]
    -------------------------------------------------------------------- */
 function apiListMedecins() { return apiFetch("GET", "/api/medecins"); }
@@ -444,6 +444,7 @@ function mapBackendUser(u) {
     doitChangerMdp: !!u.doit_changer_mdp,
     codePraticien: u.code_praticien || "",
     typePraticien: u.type_praticien || "",
+    service: u.service || "",
     structure: u.structure_nom || (u.id_structure ? ("Structure #" + u.id_structure) : ""),
     etablissement: u.structure_nom || "",
     idStructure: u.id_structure,

@@ -211,7 +211,7 @@ function mapReglement(r) {
 function mapMedecin(m) {
   const parts = (m.nom || "").trim().split(" ");
   const prenom = parts.shift() || "";
-  return { id: m.id_utilisateur, nom: parts.join(" ") || prenom, prenom: parts.length ? prenom : "", code: m.code_praticien || "", etablissement: m.structure_nom || "", type: m.type_praticien || "" };
+  return { id: m.id_utilisateur, nom: parts.join(" ") || prenom, prenom: parts.length ? prenom : "", code: m.code_praticien || "", etablissement: m.structure_nom || "", type: m.type_praticien || "", service: m.service || "" };
 }
 state.medecins = [];
 state.catalogue = [];
@@ -281,7 +281,7 @@ async function setControles(actif) {
     applyControlsUi();                               // l'interrupteur et le bandeau suffisent : pas de message en plus
     if (currentViewName === "journalisation") renderJournalisation();
   } catch (err) {
-    showInfoModal("Interrupteur non modifié", "<p>" + escapeHtml(err.message) + "</p>");
+    toast({ kind: "urgent", title: "Interrupteur non modifié", text: err.message, ms: 6000 });
   } finally { btn.disabled = false; }
 }
 function toggleControles() {
@@ -600,12 +600,12 @@ async function switchProfil(profilApi) {
   try {
     // rien de non enregistré ne doit se perdre dans le changement
     try { await persistFeuilles(); } catch (err) {
-      showInfoModal("Changement de profil impossible", "<p>" + escapeHtml(err.message) + "</p><p class=\"hint\">Des modifications ne sont pas encore enregistrées : elles restent affichées.</p>");
+      toast({ kind: "urgent", title: "Changement de profil impossible", text: err.message + " — modifications non enregistrées, elles restent affichées.", ms: 6500 });
       return;
     }
     let user;
     try { user = mapBackendUser((await apiSwitchProfil(profilApi)).user); } catch (err) {
-      showInfoModal("Changement de profil impossible", "<p>" + escapeHtml(err.message) + "</p>");
+      toast({ kind: "urgent", title: "Changement de profil impossible", text: err.message, ms: 6000 });
       return;
     }
     // Comme une connexion : les données sont rechargées avec les droits du nouveau profil, puis on ouvre son interface.
@@ -915,8 +915,8 @@ document.getElementById("profilForm").addEventListener("submit", e => {
   if (ancien || nouveau) {
     apiChangePassword(ancien, nouveau).then(() => {
       document.getElementById("profilModal").hidden = true;
-      showInfoModal("Mot de passe modifié", "<p>Votre mot de passe a été mis à jour.</p>");
-    }).catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
+      toast({ kind: "success", title: "Mot de passe modifié", text: "Votre mot de passe a été mis à jour.", ms: 4000 });
+    }).catch(err => toast({ kind: "urgent", title: "Erreur", text: err.message, ms: 6000 }));
     return;
   }
   document.getElementById("profilModal").hidden = true;
@@ -924,8 +924,7 @@ document.getElementById("profilForm").addEventListener("submit", e => {
 
 document.getElementById("userMenuParams").addEventListener("click", () => {
   setUserMenuOpen(false);
-  showInfoModal("Paramètres", "<p>Vos données sont enregistrées dans la base de la CNAMGS : rien n'est conservé dans ce navigateur, hormis la session de cet onglet.</p>" +
-    "<p>Pour changer votre mot de passe, ouvrez « Mon compte ».</p>");
+  toast({ kind: "info", title: "Paramètres", text: "Vos données sont enregistrées dans la base de la CNAMGS : rien n'est conservé dans ce navigateur, hormis la session de cet onglet. Pour changer votre mot de passe, ouvrez « Mon compte ».", ms: 7000 });
 });
 document.getElementById("userMenuNotifs").addEventListener("click", () => {
   setUserMenuOpen(false);
@@ -933,7 +932,7 @@ document.getElementById("userMenuNotifs").addEventListener("click", () => {
 });
 document.getElementById("userMenuHelp").addEventListener("click", () => {
   setUserMenuOpen(false);
-  showInfoModal("Aide / Support", "<p>Pour toute question, contactez votre administrateur CNAMGS. Une page d'aide dédiée sera ajoutée prochainement.</p>");
+  toast({ kind: "info", title: "Aide / Support", text: "Pour toute question, contactez votre administrateur CNAMGS. Une page d'aide dédiée sera ajoutée prochainement.", ms: 6000 });
 });
 document.getElementById("userMenuLogout").addEventListener("click", () => {
   setUserMenuOpen(false);
@@ -2077,6 +2076,9 @@ document.querySelectorAll("#tmChoices .chip").forEach(chip => {
 document.getElementById("medecinSelect").addEventListener("change", e => {
   const id = parseInt(e.target.value, 10);
   state.currentMedecin = state.medecins.find(m => m.id === id) || null;
+  // Pré-rempli avec le service du médecin choisi (évite qu'accueil et compte médecin se désaccordent
+  // et que la feuille disparaisse de la file de ce médecin) ; reste modifiable si besoin.
+  if (state.currentMedecin && state.currentMedecin.service) document.getElementById("pec-service").value = state.currentMedecin.service;
   updateActionButtons();
 });
 
@@ -2173,7 +2175,7 @@ function reloadDossier() {
     state.dossierConsultations = res[0] || [];
     state.dossierExamens = res[1] || [];
     renderDossierTimeline();
-  }).catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
+  }).catch(err => toast({ kind: "urgent", title: "Erreur", text: err.message, ms: 6000 }));
 }
 
 // Feuilles locales du patient ouvert (par matricule), toutes étapes confondues.
@@ -2361,6 +2363,10 @@ function previewConsultation(c) {
 // Si l'utilisateur connecté est lui-même un médecin, on le retrouve dans l'annuaire des médecins (API) par son
 // identifiant. Sans correspondance (autre rôle, annuaire indisponible) : null, donc pas de filtre « Mes patients ».
 function isMyPatient(h, me) { return h.medecinId != null ? h.medecinId === me.id : (!!h.medecinCode && h.medecinCode === me.code); }
+// Un médecin dont le compte précise un service (Cardiologie, Pédiatrie…) ne voit que les patients orientés
+// vers ce même service ; sans service sur le compte OU sans service sur la feuille (champ facultatif à
+// l'accueil), aucun filtre — pour ne jamais faire disparaître une feuille par défaut de saisie.
+function matchesMyService(h, me) { return !me.service || !h.service || h.service === me.service; }
 function matchCurrentUserToMedecin() {
   const u = state.currentUser;
   if (!u || u.role !== "Médecin") return null;
@@ -2451,7 +2457,7 @@ const TM_IDS = { "Plein": "tm-plein", "Plein (ALD)": "tm-ald", "Exonéré": "tm-
 
 const PRESTA_FIELD_IDS = ["presta-date", "presta-code", "presta-domicile-oui", "presta-domicile-non", "totalMontant", "totalTm", "totalPart"];
 const EXAM_FIELD_IDS = [
-  "exam-presta-date", "exam-etablissement", "exam-code-praticien", "exam-code-etablissement", "exam-motif",
+  "exam-presta-date", "exam-motif",
   "exam-nature-radiologie", "exam-nature-biologie", "exam-nature-autre",
   "exam-situation-hospitalise", "exam-situation-externe",
   "exam-pub-signature", "exam-specialiste-signature"
@@ -2524,6 +2530,7 @@ function openSoinsForValidation(entryId, opts) {
   // Praticien : pré-rempli à l'accueil, verrouillé — seule la signature revient au médecin.
   document.getElementById("pr-nom").value = entry.medecin || "";
   document.getElementById("pr-etab").value = entry.medecinEtab || "";
+  document.getElementById("pr-service").value = entry.medecinService || "";
   document.getElementById("pr-code").value = entry.medecinCode || "";
   document.getElementById("pr-signature").value = entry.signature || "";
   document.getElementById("pr-signature").disabled = !editable;
@@ -2748,7 +2755,7 @@ async function commitVisitValidation() {
     // le serveur a refusé (droits, assuré suspendu, feuille déjà validée…) ou ne répond pas : rien n'est validé
     pending.forEach(e => { e.statut = "En attente"; });
     closeVisitModal(true);
-    showInfoModal("Validation impossible", "<p>" + escapeHtml(err.message) + "</p><p class=\"hint\">La feuille reste en attente : vous pouvez réessayer.</p>");
+    toast({ kind: "urgent", title: "Validation impossible", text: err.message + " — la feuille reste en attente, vous pouvez réessayer.", ms: 6500 });
     if (!err.isNetworkError) pullFeuilles(true).catch(() => {});
     return;
   }
@@ -2765,13 +2772,15 @@ async function commitVisitValidation() {
   goToView("medecin");
   const consult = pending.find(e => e.type === "Consultation");
   const pharmacyNote = !consult ? "" : (isSentToPharmacy(consult)
-    ? "<p>L'ordonnance est envoyée à la pharmacie.</p>"
-    : "<p>Sans médicaments prescrits : la feuille n'est <b>pas</b> envoyée à la pharmacie.</p>");
-  showInfoModal(
-    pending.length > 1 ? "Feuilles validées" : "Feuille validée",
-    "<p>" + pending.length + " feuille" + (pending.length > 1 ? "s validées" : " validée") + " pour <b>" + escapeHtml(current.patientNom || "") +
-    "</b> — le dossier du patient est mis à jour.</p>" + pharmacyNote
-  );
+    ? " L'ordonnance est envoyée à la pharmacie."
+    : " Sans médicaments prescrits : la feuille n'est pas envoyée à la pharmacie.");
+  toast({
+    kind: "success",
+    title: pending.length > 1 ? "Feuilles validées" : "Feuille validée",
+    text: pending.length + " feuille" + (pending.length > 1 ? "s validées" : " validée") + " pour " + (current.patientNom || "") +
+      " — le dossier du patient est mis à jour." + pharmacyNote,
+    ms: 5000
+  });
 }
 
 // « Historique des visites » (header de la feuille de soins) : ouvre le dossier de
@@ -2786,12 +2795,12 @@ async function openHistoryFromSheet() {
   try {
     const patient = await findPatientByMatricule(entry.matricule);
     if (!patient) {
-      showInfoModal("Dossier introuvable", "<p>Aucun assuré en base pour le matricule <b>" + escapeHtml(formatNag(entry.matricule)) + "</b>.</p>");
+      toast({ kind: "warn", title: "Dossier introuvable", text: "Aucun assuré en base pour le matricule " + formatNag(entry.matricule) + ".", ms: 5000 });
       return;
     }
     openDossierPatient(patient, { fromSheet: true, focusId: head.id });
   } catch (err) {
-    showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>");
+    toast({ kind: "urgent", title: "Erreur API", text: err.message, ms: 6000 });
   }
 }
 document.getElementById("topbarHistoryBtn").addEventListener("click", openHistoryFromSheet);
@@ -2838,6 +2847,7 @@ document.getElementById("enregistrerPecBtn").addEventListener("click", async () 
     medecinCode: medecin.code,
     medecinId: medecin.id,
     medecinType: medecin.type,
+    medecinService: medecin.service,
     quartier: document.getElementById("pec-quartier").value.trim(),
     telephone: document.getElementById("pec-telephone").value.trim(),
     service: document.getElementById("pec-service").value,
@@ -2872,13 +2882,14 @@ document.getElementById("enregistrerPecBtn").addEventListener("click", async () 
     state.historique = state.historique.filter(h => h.id !== entry.id);
     feuilleSnapshot.delete(entry.id);
     updateActionButtons();
-    showInfoModal("Enregistrement impossible", "<p>" + escapeHtml(err.message) + "</p>");
+    toast({ kind: "urgent", title: "Enregistrement impossible", text: err.message, ms: 6000 });
     return;
   }
   state.historiquePage = 1;
   refreshPendingBadge();
   audit("pec.creer", { nag: entry.matricule, ressourceType: "Feuille de soins", ressourceId: entry.id, ressourceLibelle: entry.numero, apres: { ticketModerateur: entry.ticketModerateur, medecin: entry.medecin, statut: entry.statut } });
-  showInfoModal("Prise en charge enregistrée", "<p>La feuille a été envoyée en attente de validation par le médecin.</p>", () => resetSearch());
+  toast({ kind: "success", title: "Prise en charge enregistrée", text: "La feuille a été envoyée en attente de validation par le médecin.", ms: 4500 });
+  resetSearch();
 });
 
 // « Nouvelle consultation » (visible uniquement si le patient a déjà plus
@@ -2908,6 +2919,7 @@ document.getElementById("nouvellePecConsultationBtn").addEventListener("click", 
     medecinCode: medecin.code,
     medecinId: medecin.id,
     medecinType: medecin.type,
+    medecinService: medecin.service,
     quartier: document.getElementById("pec-quartier").value.trim(),
     telephone: document.getElementById("pec-telephone").value.trim(),
     service: document.getElementById("pec-service").value,
@@ -2942,12 +2954,13 @@ document.getElementById("nouvellePecConsultationBtn").addEventListener("click", 
     state.historique = state.historique.filter(h => h.id !== entry.id);
     feuilleSnapshot.delete(entry.id);
     updateActionButtons();
-    showInfoModal("Enregistrement impossible", "<p>" + escapeHtml(err.message) + "</p>");
+    toast({ kind: "urgent", title: "Enregistrement impossible", text: err.message, ms: 6000 });
     return;
   }
   state.historiquePage = 1;
   refreshPendingBadge();
-  showInfoModal("Nouvelle consultation enregistrée", "<p>La feuille a été envoyée en attente de validation par le médecin.</p>", () => resetSearch());
+  toast({ kind: "success", title: "Nouvelle consultation enregistrée", text: "La feuille a été envoyée en attente de validation par le médecin.", ms: 4500 });
+  resetSearch();
 });
 
 /* ---- Bascule animée Consultation ⇄ Examen (feuille d'examen liée) -------- */
@@ -3051,7 +3064,7 @@ async function createLinkedExamAndFlip(consultId) {
     state.historique = state.historique.filter(h => h.id !== examEntry.id);
     feuilleSnapshot.delete(examEntry.id);
     consultEntry.linkedExamenIds = previousLinks;
-    showInfoModal("Feuille d'examen non créée", "<p>" + escapeHtml(err.message) + "</p>");
+    toast({ kind: "urgent", title: "Feuille d'examen non créée", text: err.message, ms: 6000 });
     return;
   } finally { creatingLinkedExam = false; }
   refreshPendingBadge();
@@ -3197,6 +3210,7 @@ function examEntryFromConsultation(consultEntry, signature) {
     medecinId: consultEntry.medecinId,
     medecinCode: consultEntry.medecinCode,
     medecinType: consultEntry.medecinType,
+    medecinService: consultEntry.medecinService,
     quartier: consultEntry.quartier,
     telephone: consultEntry.telephone,
     service: consultEntry.service,
@@ -3288,7 +3302,7 @@ function frDateToISO(s) {
 function myPendingEntries() {
   const pending = state.historique.filter(h => h.statut === "En attente");
   const me = matchCurrentUserToMedecin();
-  return me ? pending.filter(h => isMyPatient(h, me)) : pending;
+  return me ? pending.filter(h => isMyPatient(h, me) && matchesMyService(h, me)) : pending;
 }
 function pendingCount() { return waitingVisits(myPendingEntries()).length; }
 
@@ -3374,7 +3388,11 @@ function waitingVisits(pendingEntries) {
 }
 
 function queueScope() {
-  return matchCurrentUserToMedecin() ? (state.queueScope || "mine") : "all";
+  const me = matchCurrentUserToMedecin();
+  if (!me) return "all";
+  // Un médecin dont le compte précise un service voit par défaut tout son service (pas que « ses »
+  // patients au sens strict) : c'est le service qui route les patients, pas l'identité précise du médecin.
+  return state.queueScope || (me.service ? "all" : "mine");
 }
 
 function renderMedecinQueue() {
@@ -3386,14 +3404,22 @@ function renderMedecinQueue() {
   toggle.hidden = !me;
   toggle.querySelectorAll(".chip").forEach(c => c.classList.toggle("active", c.dataset.scope === scope));
 
-  const all = waitingVisits(state.historique.filter(h => h.statut === "En attente"));
+  const serviceLine = document.getElementById("medecinServiceLine");
+  const nomMedecin = (state.currentUser && (state.currentUser.prenom || state.currentUser.nom))
+    ? ((state.currentUser.prenom || "") + " " + (state.currentUser.nom || "")).trim() : "";
+  serviceLine.hidden = !(me && me.service);
+  if (me && me.service) serviceLine.textContent = "Bienvenue Dr " + nomMedecin + " — Service : " + me.service;
+
+  const all = waitingVisits(state.historique.filter(h => h.statut === "En attente" && (!me || matchesMyService(h, me))));
   const visits = me && scope === "mine" ? all.filter(v => isMyPatient(v.head, me)) : all;
 
   body.innerHTML = "";
   empty.hidden = visits.length > 0;
   empty.textContent = me && scope === "mine" && all.length
     ? "Aucun patient en attente pour vous — " + all.length + " chez d'autres médecins (« Tous les médecins »)."
-    : "Aucun patient en attente.";
+    : me && me.service
+      ? "Aucun patient en attente pour le service " + me.service + "."
+      : "Aucun patient en attente.";
   const count = document.getElementById("medecinQueueCount");
   count.textContent = visits.length + " en attente";
   count.hidden = visits.length === 0;
@@ -3485,7 +3511,8 @@ function renderHistorique() {
       "<td>" + formatNag(h.matricule) + "</td>" +
       '<td><span class="pill ' + pillClass + '">' + h.type + "</span></td>" +
       '<td><span class="pill ' + statutClass + '">' + (h.statut || "Validée") + "</span></td>" +
-      "<td>" + h.totalMontant + "</td>" +
+      "<td>" + escapeHtml(h.medecin || "—") + "</td>" +
+      "<td>" + escapeHtml(h.service || "—") + "</td>" +
       '<td class="row-actions">' +
         '<button class="icon-btn" data-action="preview" data-id="' + h.id + '" title="Aperçu">' + iconEye() + "</button>" +
         '<button class="icon-btn danger" data-action="delete-hist" data-id="' + h.id + '" title="Supprimer">' + iconTrash() + "</button>" +
@@ -3506,7 +3533,7 @@ function renderHistorique() {
           renderDashboardStats();
           refreshPendingBadge();
         }).catch(err => {
-          showInfoModal("Suppression impossible", "<p>" + escapeHtml(err.message) + "</p>");
+          toast({ kind: "urgent", title: "Suppression impossible", text: err.message, ms: 6000 });
           pullFeuilles(true).then(() => { renderHistorique(); renderDashboardStats(); refreshPendingBadge(); }).catch(() => {});
         });
       }, { title: "Supprimer cette prise en charge ?" });
@@ -3753,7 +3780,7 @@ function renderUsersTable(list) {
     btn.addEventListener("click", () => {
       const id = parseInt(btn.dataset.id, 10);
       apiGetUtilisateur(id).then(u => openUserModalForEdit(u))
-        .catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
+        .catch(err => toast({ kind: "urgent", title: "Erreur", text: err.message, ms: 6000 }));
     });
   });
   body.querySelectorAll('[data-action="profils"]').forEach(btn => {
@@ -3773,7 +3800,7 @@ function renderUsersTable(list) {
       apiSetUtilisateurActif(id, u.statut !== "Actif").then(() => {
         audit(u.statut !== "Actif" ? "utilisateur.activer" : "utilisateur.desactiver", { ressourceType: "Utilisateur", ressourceId: id, ressourceLibelle: fullName(u), avant: { statut: u.statut } });
         renderUsers();
-      }).catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
+      }).catch(err => toast({ kind: "urgent", title: "Erreur", text: err.message, ms: 6000 }));
     });
   });
   body.querySelectorAll('[data-action="delete"]').forEach(btn => {
@@ -3784,7 +3811,7 @@ function renderUsersTable(list) {
         apiDeleteUtilisateur(id).then(() => {
           audit("utilisateur.supprimer", { ressourceType: "Utilisateur", ressourceId: id, ressourceLibelle: u ? fullName(u) : "#" + id });
           renderUsers();
-        }).catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
+        }).catch(err => toast({ kind: "urgent", title: "Erreur", text: err.message, ms: 6000 }));
       }, { title: "Supprimer cet utilisateur ?" });
     });
   });
@@ -3911,7 +3938,7 @@ function paintStructures() {
         renderStructuresPage();
         afterStructuresChange();
         toast({ kind: "success", title: "Structure supprimée", text: st ? st.raison_sociale : "", ms: 3200 });
-      }).catch(err => showInfoModal("Suppression impossible", "<p>" + escapeHtml(err.message) + "</p>"));
+      }).catch(err => toast({ kind: "urgent", title: "Suppression impossible", text: err.message, ms: 6000 }));
     }, { title: "Supprimer cette structure ?" });
   }));
 }
@@ -3956,7 +3983,7 @@ document.getElementById("structureForm").addEventListener("submit", e => {
     renderStructuresPage(id);
     afterStructuresChange();
     toast({ kind: "success", title: creating ? "Structure ajoutée" : "Structure modifiée", text: payload.raison_sociale + " — " + STRUCTURE_TYPE_LABEL[payload.type_structure], ms: 3600 });
-  }).catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
+  }).catch(err => toast({ kind: "urgent", title: "Erreur", text: err.message, ms: 6000 }));
 });
 
 const userModal = document.getElementById("userModal");
@@ -4005,6 +4032,7 @@ function syncPraticienFields() {
   const medecin = wantsPraticienFields();
   document.getElementById("u-code-field").hidden = !medecin;
   document.getElementById("u-type-field").hidden = !medecin;
+  document.getElementById("u-service-field").hidden = !medecin;
 }
 
 // Cases des profils supplémentaires (création) : le profil principal choisi n'y figure pas.
@@ -4054,6 +4082,7 @@ function openUserModalForEdit(u) {
   document.getElementById("u-date-creation").value = apiFormatDate(u.date_creation);
   document.getElementById("u-code").value = u.code_praticien || "";
   document.getElementById("u-type").value = u.type_praticien || "Généraliste";
+  document.getElementById("u-service").value = u.service || "";
   setUserModalMode(true);
   syncPraticienFields();
   userModal.hidden = false;
@@ -4077,6 +4106,7 @@ document.getElementById("userForm").addEventListener("submit", e => {
   const isMedecin = wantsPraticienFields();
   const codePraticien = isMedecin ? document.getElementById("u-code").value.trim() : "";
   const typePraticien = isMedecin ? document.getElementById("u-type").value : "";
+  const service = isMedecin ? document.getElementById("u-service").value : "";
   const email = document.getElementById("u-email").value.trim();
   const username = document.getElementById("u-username").value.trim().toLowerCase() || (email.split("@")[0] || "").toLowerCase();
   const role = document.getElementById("u-role").value;
@@ -4091,18 +4121,19 @@ document.getElementById("userForm").addEventListener("submit", e => {
       role: FRONT_ROLE_TO_API_ROLE[role] || role,
       id_structure: parseInt(document.getElementById("u-structure").value, 10) || undefined,
       code_praticien: codePraticien,
-      type_praticien: typePraticien
+      type_praticien: typePraticien,
+      service: service
     }).then(() => {
       audit("utilisateur.modifier", { ressourceType: "Utilisateur", ressourceId: editingUserId, ressourceLibelle: nomComplet, avant: { role: editingUserRole }, apres: { role: role, roleModifie: role !== editingUserRole } });
       closeUserModal();
       renderUsers();
-    }).catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
+    }).catch(err => toast({ kind: "urgent", title: "Erreur", text: err.message, ms: 6000 }));
     return;
   }
 
   // POST /api/auth/register : le compte est créé dans la base, rattaché à la structure choisie.
   const idStructure = parseInt(document.getElementById("u-structure").value, 10);
-  if (!idStructure) { showInfoModal("Structure obligatoire", "<p>Choisissez la structure de rattachement du compte.</p>"); return; }
+  if (!idStructure) { toast({ kind: "warn", title: "Structure obligatoire", text: "Choisissez la structure de rattachement du compte.", ms: 5000 }); return; }
   apiRegister({
     username: username,
     mot_de_passe: document.getElementById("u-pass").value,
@@ -4111,6 +4142,7 @@ document.getElementById("userForm").addEventListener("submit", e => {
     email: email,
     code_praticien: codePraticien,
     type_praticien: typePraticien,
+    service: service,
     telephone: "",
     role: FRONT_ROLE_TO_API_ROLE[role] || role,
     profils: Array.from(document.querySelectorAll("#u-extra-profils input:checked")).map(i => i.value),   // profils supplémentaires
@@ -4120,9 +4152,8 @@ document.getElementById("userForm").addEventListener("submit", e => {
     document.getElementById("userForm").reset();
     userModal.hidden = true;
     renderUsers();
-    showInfoModal("Compte créé", "<p>Le compte de <b>" + escapeHtml(nomComplet) + "</b> (identifiant <b>" + escapeHtml(username) + "</b>) est enregistré.</p>" +
-      "<p>Le mot de passe saisi est <b>temporaire</b> : à sa première connexion, le titulaire devra en choisir un nouveau avant d'accéder à l'application.</p>");
-  }).catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
+    toast({ kind: "success", title: "Compte créé", text: "Le compte de " + nomComplet + " (identifiant " + username + ") est enregistré. Le mot de passe saisi est temporaire : à sa première connexion, le titulaire devra en choisir un nouveau.", sticky: true });
+  }).catch(err => toast({ kind: "urgent", title: "Erreur", text: err.message, ms: 6000 }));
 });
 
 /* ---- Réinitialisation du mot de passe (admin) : POST /api/auth/reset-password ---- */
@@ -4148,8 +4179,8 @@ document.getElementById("resetPasswordForm").addEventListener("submit", e => {
     audit("utilisateur.mdp.reinitialiser", { ressourceType: "Utilisateur", ressourceId: resetPasswordTargetId });
     closeResetPasswordModal();
     renderUsers();
-    showInfoModal("Mot de passe réinitialisé", "<p>Le nouveau mot de passe a été enregistré. Il est <b>temporaire</b> : l'utilisateur devra en choisir un nouveau à sa prochaine connexion. Ses sessions ouvertes sont fermées.</p>");
-  }).catch(err => showInfoModal("Erreur", "<p>" + escapeHtml(err.message) + "</p>"));
+    toast({ kind: "success", title: "Mot de passe réinitialisé", text: "Le nouveau mot de passe a été enregistré. Il est temporaire : l'utilisateur devra en choisir un nouveau à sa prochaine connexion. Ses sessions ouvertes sont fermées.", sticky: true });
+  }).catch(err => toast({ kind: "urgent", title: "Erreur", text: err.message, ms: 6000 }));
 });
 
 /* ---- Profils d'un utilisateur : ajouter / retirer / définir le principal (Gestion des utilisateurs) ----
@@ -5423,7 +5454,7 @@ async function serveLines(entry, items) {
   try {
     saved = await apiServirLignes(entry.serverId, pharmaLines(entry).length, items.map(x => ({ idx: x.idx, quantite: x.a.qte, prixUnitaire: x.a.prix })));
   } catch (err) {
-    showInfoModal("Délivrance non enregistrée", "<p>" + escapeHtml(err.message) + "</p><p class=\"hint\">Rien n'a été servi pour ces lignes : l'écran est rechargé depuis la base.</p>");
+    toast({ kind: "urgent", title: "Délivrance non enregistrée", text: err.message + " — rien n'a été servi pour ces lignes, l'écran est rechargé depuis la base.", ms: 6500 });
     try { await refreshFeuillesByNag(entry.matricule); } catch (e) { /* on garde l'affichage */ }
     runPharmaSearch(state.pharma.nag, true);
     return;
@@ -6553,9 +6584,9 @@ function buildHistoriqueReportHtml() {
   const rowsHtml = list.length
     ? list.map(h =>
         "<tr><td>" + h.numero + "</td><td>" + h.date + "</td><td>" + (h.patientNom || h.patient || "") + "</td><td>" +
-        formatNag(h.matricule) + "</td><td>" + h.type + "</td><td>" + (h.statut || "Validée") + "</td><td>" + fmt(num(h.totalMontant)) + "</td></tr>"
+        formatNag(h.matricule) + "</td><td>" + h.type + "</td><td>" + (h.statut || "Validée") + "</td><td>" + (h.medecin || "—") + "</td><td>" + (h.service || "—") + "</td></tr>"
       ).join("")
-    : '<tr><td colspan="7" style="text-align:center">Aucune prise en charge pour ces filtres.</td></tr>';
+    : '<tr><td colspan="8" style="text-align:center">Aucune prise en charge pour ces filtres.</td></tr>';
 
   return '<div class="report-doc">' +
     '<div class="report-head">' +
@@ -6571,7 +6602,7 @@ function buildHistoriqueReportHtml() {
       "<div><b>" + fmtFCFA(totals.montant) + "</b><span>Montant total</span></div>" +
       "<div><b>" + fmtFCFA(totals.part) + "</b><span>Part CNAMGS</span></div>" +
     "</div>" +
-    '<table class="report-table"><thead><tr><th>N° feuille</th><th>Date</th><th>Patient</th><th>Matricule</th><th>Type</th><th>Statut</th><th>Montant total</th></tr></thead><tbody>' + rowsHtml + "</tbody></table>" +
+    '<table class="report-table"><thead><tr><th>N° feuille</th><th>Date</th><th>Patient</th><th>Matricule</th><th>Type</th><th>Statut</th><th>Médecin</th><th>Service</th></tr></thead><tbody>' + rowsHtml + "</tbody></table>" +
     '<div class="report-footer">CNAMGS — Plateforme de gestion du circuit de l’assuré · Rapport généré automatiquement (prototype front-end)</div>' +
   "</div>";
 }
@@ -6656,7 +6687,7 @@ function renderApiPermissionsTable() {
         .catch(err => {
           cb.checked = !wasChecked;
           cb.disabled = false;
-          showInfoModal("Erreur API", "<p>" + escapeHtml(err.message) + "</p>");
+          toast({ kind: "urgent", title: "Erreur API", text: err.message, ms: 6000 });
         });
     });
   });

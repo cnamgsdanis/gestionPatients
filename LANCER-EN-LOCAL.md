@@ -75,7 +75,7 @@ Ouvrez **http://localhost:5500** (pas le fichier `index.html` en double-cliquant
 | `Échec de la connexion TCP/IP … port 1433` | L'API utilise l'URL par défaut : `backend/db/local.properties` est absent (copiez le modèle). |
 | `Login failed for user 'sa'` | Mauvais mot de passe dans `local.properties`. |
 | Le site affiche « Serveur injoignable » | L'API n'est pas démarrée, ou son port ne correspond pas à `frontend/config.js`. |
-| Le site affiche « … non disponible côté serveur », ou « nom de colonne non valide » dans la console de l'API | La base n'a pas reçu toutes les migrations : `migration_v5_integration_front.sql`, puis `migration_v6_livraison_partielle_controles.sql`, puis `migration_v7_profils_et_mdp_initial.sql` (section 6). |
+| Le site affiche « … non disponible côté serveur », ou « nom de colonne non valide » dans la console de l'API | La base n'a pas reçu toutes les migrations : `migration_v5_integration_front.sql`, puis `migration_v6_livraison_partielle_controles.sql`, puis `migration_v7_profils_et_mdp_initial.sql`, puis `migration_v8_service_medecin.sql` (section 6). |
 | `'compile.bat' n'est pas reconnu` (PowerShell) | Écrire `.\compile.bat`. |
 | Page blanche / rien ne se charge | Ouvrir le site via `http://localhost:5500`, pas via le fichier. |
 
@@ -87,6 +87,7 @@ sqlcmd -S localhost\SQLEXPRESS -E -C -I -f 65001 -b -i backend\MPD\gestionpatien
 sqlcmd -S localhost\SQLEXPRESS -E -C -I -f 65001 -b -i backend\MPD\migration_v5_integration_front.sql
 sqlcmd -S localhost\SQLEXPRESS -E -C -I -f 65001 -b -i backend\MPD\migration_v6_livraison_partielle_controles.sql   # livraison partielle + interrupteur des contrôles
 sqlcmd -S localhost\SQLEXPRESS -E -C -I -f 65001 -b -i backend\MPD\migration_v7_profils_et_mdp_initial.sql          # profils multiples + mot de passe temporaire
+sqlcmd -S localhost\SQLEXPRESS -E -C -I -f 65001 -b -i backend\MPD\migration_v8_service_medecin.sql                 # service médical du médecin
 sqlcmd -S localhost\SQLEXPRESS -E -C -I -f 65001 -b -i backend\MPD\donnees_demo.sql        # facultatif : 3 assurés de démonstration
 
 # 2. Réglages locaux

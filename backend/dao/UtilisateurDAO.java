@@ -47,8 +47,8 @@ public class UtilisateurDAO {
     // ------------------------------------------------------------
     public int insert(Utilisateur u) throws SQLException {
         String sql = "INSERT INTO Utilisateur " +
-                     "(username, mot_de_passe, prenom, nom, email, telephone, role, id_structure, code_praticien, type_praticien, doit_changer_mdp) " +
-                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                     "(username, mot_de_passe, prenom, nom, email, telephone, role, id_structure, code_praticien, type_praticien, service, doit_changer_mdp) " +
+                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         try (Connection c = Database.getConnection()) {
             c.setAutoCommit(false);
             try {
@@ -63,7 +63,8 @@ public class UtilisateurDAO {
                     ps.setInt   (8, u.id_structure);
                     ps.setString(9, blankToNull(u.code_praticien));
                     ps.setString(10, blankToNull(u.type_praticien));
-                    ps.setBoolean(11, u.doit_changer_mdp);
+                    ps.setString(11, blankToNull(u.service));
+                    ps.setBoolean(12, u.doit_changer_mdp);
                     ps.executeUpdate();
                     try (ResultSet keys = ps.getGeneratedKeys()) {
                         if (keys.next()) u.id_utilisateur = keys.getInt(1);
@@ -170,7 +171,7 @@ public class UtilisateurDAO {
     // ------------------------------------------------------------
     public boolean update(Utilisateur u) throws SQLException {
         String sql = "UPDATE Utilisateur SET prenom = ?, nom = ?, email = ?, telephone = ?, role = ?, id_structure = ?, " +
-                     "code_praticien = ?, type_praticien = ?, actif = ? WHERE id_utilisateur = ?";
+                     "code_praticien = ?, type_praticien = ?, service = ?, actif = ? WHERE id_utilisateur = ?";
         try (Connection c = Database.getConnection();
              PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setString (1, blankToNull(u.prenom));
@@ -181,8 +182,9 @@ public class UtilisateurDAO {
             ps.setInt    (6, u.id_structure);
             ps.setString (7, blankToNull(u.code_praticien));
             ps.setString (8, blankToNull(u.type_praticien));
-            ps.setBoolean(9, u.actif);
-            ps.setInt    (10, u.id_utilisateur);
+            ps.setString (9, blankToNull(u.service));
+            ps.setBoolean(10, u.actif);
+            ps.setInt    (11, u.id_utilisateur);
             return ps.executeUpdate() > 0;
         }
     }
@@ -357,6 +359,7 @@ public class UtilisateurDAO {
         u.structure_nom      = rs.getString("structure_nom");
         u.code_praticien     = rs.getString("code_praticien");
         u.type_praticien     = rs.getString("type_praticien");
+        u.service            = rs.getString("service");
         u.actif              = rs.getBoolean("actif");
         u.doit_changer_mdp   = rs.getBoolean("doit_changer_mdp");
         u.date_creation      = iso(rs, "date_creation");

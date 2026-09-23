@@ -7,6 +7,9 @@
 
 ---
 
+> **Mise à jour — 23/09/2026 :** [05-integration-front.md](./05-integration-front.md) §16 : **service médical du médecin** (Cardiologie, Pédiatrie…) sur le compte, filtrage
+> de la file d'attente de l'Espace Médecin par service, pré-remplissage à la création d'une prise en charge (migration `migration_v8_…` à exécuter).
+>
 > **Mise à jour — 20/09/2026 :** [05-integration-front.md](./05-integration-front.md) §13 à §15 : **livraison partielle** en pharmacie (plusieurs pharmacies pour une même ordonnance),
 > **interrupteur des contrôles anti-fraude** du Super Admin, **profils multiples** par utilisateur (ajout / retrait) et **mot de passe temporaire** à changer à la première connexion
 > (migrations `migration_v6_…` et `migration_v7_…` à exécuter).

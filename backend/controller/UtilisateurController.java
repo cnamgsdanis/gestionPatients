@@ -130,6 +130,7 @@ public class UtilisateurController {
         if (u.id_structure <= 0 || structureDao.findById(u.id_structure) == null) { Http.error(ex, 400, "id_structure obligatoire et existante"); return; }
         if (!typeValide(u.type_praticien)) { Http.error(ex, 400, "type_praticien : Généraliste, Spécialiste ou Autre"); return; }
         if (dao.findByUsername(u.username) != null) { Http.error(ex, 409, "Cet username est deja pris"); return; }
+        if (!"medecin".equals(u.role)) u.service = null;
 
         u.mot_de_passe = service.hash(u.mot_de_passe);
         u.doit_changer_mdp = true;
@@ -166,12 +167,14 @@ public class UtilisateurController {
         if (b.has("id_structure"))   m.id_structure = b.get("id_structure").getAsInt();
         if (b.has("code_praticien")) m.code_praticien = texte(b, "code_praticien");
         if (b.has("type_praticien")) m.type_praticien = texte(b, "type_praticien");
+        if (b.has("service"))        m.service = texte(b, "service");
         if (b.has("actif"))          m.actif = b.get("actif").getAsBoolean();
 
         if (m.nom == null || m.nom.isBlank()) { Http.error(ex, 400, "nom obligatoire"); return; }
         if (!Utilisateur.roleValide(m.role)) { Http.error(ex, 400, "role invalide"); return; }
         if (structureDao.findById(m.id_structure) == null) { Http.error(ex, 400, "Structure introuvable"); return; }
         if (!typeValide(m.type_praticien)) { Http.error(ex, 400, "type_praticien : Généraliste, Spécialiste ou Autre"); return; }
+        if (!"medecin".equals(m.role)) m.service = null;
 
         boolean roleChange = !existant.role.equals(m.role);
         // profils après modification : le principal est remplacé, les autres sont conservés

@@ -1,6 +1,6 @@
 # 05 — Intégration du front-end : tout ce qui a été modifié côté back-end
 
-**Date : 19/09/2026 — mis à jour le 20/09/2026 (sections 13 à 15) — base : SQL Server `gestionpatient` — Java 21, `com.sun.net.httpserver`.**
+**Date : 19/09/2026 — mis à jour le 20/09/2026 (sections 13 à 15), le 23/09/2026 (section 16) — base : SQL Server `gestionpatient` — Java 21, `com.sun.net.httpserver`.**
 Ce document décrit **chaque modification** faite au back-end et à la base pour que le front (`frontend/`)
 fonctionne avec de vraies données : ce qui a été ajouté, corrigé, la manière de démarrer et de tester,
 les règles appliquées par le serveur et les limites connues.
@@ -9,7 +9,7 @@ Sommaire : [1. Résumé](#1-résumé) · [2. Démarrer](#2-démarrer-et-configur
 · [4. Sécurité](#4-sécurité-et-session) · [5. Nouvelles routes](#5-nouvelles-routes) · [6. Routes modifiées](#6-routes-existantes-modifiées)
 · [7. Bugs corrigés](#7-bugs-corrigés) · [8. Règles métier](#8-règles-métier-appliquées-par-le-serveur)
 · [9. Journal d'audit](#9-journal-daudit) · [10. Fichiers](#10-fichiers-ajoutés-et-modifiés) · [11. Tests](#11-tests) · [12. Limites et recommandations](#12-limites-connues-et-recommandations)
-· **[13. Livraison partielle et contrôles anti-fraude](#13-livraison-partielle-et-interrupteur-des-contrôles-anti-fraude)** · **[14. Profils multiples](#14-profils-multiples-par-utilisateur)** · **[15. Mot de passe temporaire](#15-mot-de-passe-temporaire-à-la-première-connexion)**
+· **[13. Livraison partielle et contrôles anti-fraude](#13-livraison-partielle-et-interrupteur-des-contrôles-anti-fraude)** · **[14. Profils multiples](#14-profils-multiples-par-utilisateur)** · **[15. Mot de passe temporaire](#15-mot-de-passe-temporaire-à-la-première-connexion)** · **[16. Service médical du médecin](#16-service-médical-du-médecin)**
 
 ---
 
@@ -83,6 +83,7 @@ sqlcmd -S localhost\SQLEXPRESS -E -C -I -f 65001 -b -i backend\MPD\gestionpatien
 sqlcmd -S localhost\SQLEXPRESS -E -C -I -f 65001 -b -i backend\MPD\migration_v5_integration_front.sql   (NOUVEAU — idempotent)
 sqlcmd -S localhost\SQLEXPRESS -E -C -I -f 65001 -b -i backend\MPD\migration_v6_livraison_partielle_controles.sql   (livraison partielle + interrupteur des contrôles — idempotent)
 sqlcmd -S localhost\SQLEXPRESS -E -C -I -f 65001 -b -i backend\MPD\migration_v7_profils_et_mdp_initial.sql          (profils multiples + mot de passe temporaire — idempotent)
+sqlcmd -S localhost\SQLEXPRESS -E -C -I -f 65001 -b -i backend\MPD\migration_v8_service_medecin.sql                 (service médical du médecin — idempotent)
 sqlcmd -S localhost\SQLEXPRESS -E -C -I -f 65001 -b -i backend\MPD\donnees_demo.sql             (facultatif : 3 assurés de démonstration)
 ```
 
@@ -258,7 +259,7 @@ Le prix vient de la saisie du pharmacien, **jamais** du stock (`Medicaments`). L
 
 | Route | Droit | Description |
 |---|---|---|
-| `GET /api/medecins` | `feuille.lire` | médecins actifs : `id_utilisateur`, `nom` (« prénom nom »), `code_praticien`, `type_praticien`, `id_structure`, `structure_nom` |
+| `GET /api/medecins` | `feuille.lire` | médecins actifs : `id_utilisateur`, `nom` (« prénom nom »), `code_praticien`, `type_praticien`, `service`, `id_structure`, `structure_nom` |
 | `GET /api/catalogue/medicaments` | `feuille.lire` | `[{ id_catalogue, designation, prix_reference }]` (catalogue + désignations du stock des pharmacies) |
 | `POST` / `PUT /{id}` / `DELETE /{id}` `/api/catalogue/medicaments` | `structure.gerer` | ajouter, modifier, retirer (`actif = 0`) ; doublon → 409 |
 
@@ -299,7 +300,7 @@ Les alertes de sécurité (§9) sont créées par le serveur (catégorie `securi
 | Route | Modification |
 |---|---|
 | `/api/patients` | NAG en **texte** (10 chiffres) partout ; `POST` : NAG fourni (déjà attribué → 409) ou généré (max + 1, à partir de 1 000 000 000) ; **`nature` et `statut`** lus et écrits (`nature` : texte ou code 1/2/3 ; `statut` : `actif`/`suspendu`) ; un assuré créé **sans statut est actif** ; `PUT` **partiel** (les champs absents ne changent pas — avant, ils étaient effacés) ; contact vide → `NULL` ; suppression liée à des données → 409 ; création / modification / suspension / suppression journalisées |
-| `/api/utilisateurs` | **profils** (§14 : `profils[]`, `POST/DELETE /{id}/profils`, `PUT /{id}/profils/principal`), création avec mot de passe **temporaire** (§15) ; `prenom`, `code_praticien`, `type_praticien` ; **`PUT` partiel** (avant, `{nom,email,role}` **désactivait le compte** car `actif` absent valait `false`) ; `id_structure` modifiable ; garde-fous (§4) ; suppression d'un compte lié à des données → 409 (« désactivez-le ») ; dates en ISO UTC ; toutes les opérations journalisées |
+| `/api/utilisateurs` | **profils** (§14 : `profils[]`, `POST/DELETE /{id}/profils`, `PUT /{id}/profils/principal`), création avec mot de passe **temporaire** (§15) ; `prenom`, `code_praticien`, `type_praticien`, `service` (§16) ; **`PUT` partiel** (avant, `{nom,email,role}` **désactivait le compte** car `actif` absent valait `false`) ; `id_structure` modifiable ; garde-fous (§4) ; suppression d'un compte lié à des données → 409 (« désactivez-le ») ; dates en ISO UTC ; toutes les opérations journalisées |
 | `/api/structures` | type `administration` accepté (POST et PUT, avec validation du type) ; création / modification / suppression journalisées |
 | `/api/permissions` | rôle validé ; chaque octroi / retrait journalisé (`permissions.modifier`) |
 | `/api/prestations` (POST) | **409 si l'assuré est suspendu** ; taux de couverture selon le **type** de prestation |
@@ -369,7 +370,9 @@ Un seul serveur doit écrire dans le journal.
 
 ## 10. Fichiers ajoutés et modifiés
 
-**Base (`MPD/`)** : `gestionpatient.sql` (v4.2, voir §3.0), `migration_v5_integration_front.sql`, `migration_v6_livraison_partielle_controles.sql`, `migration_v7_profils_et_mdp_initial.sql` (nouveaux), `donnees_demo.sql` (facultatif), `migrate_nag_int.sql` (marqué obsolète).
+**Base (`MPD/`)** : `gestionpatient.sql` (v4.2, voir §3.0), `migration_v5_integration_front.sql`, `migration_v6_livraison_partielle_controles.sql`, `migration_v7_profils_et_mdp_initial.sql`, `migration_v8_service_medecin.sql` (nouveaux), `donnees_demo.sql` (facultatif), `migrate_nag_int.sql` (marqué obsolète).
+
+**23/09/2026 — service médical du médecin (§16)** : `MPD/migration_v8_service_medecin.sql` · `model/Utilisateur.java`, `dao/UtilisateurDAO.java`, `controller/UtilisateurController.java`, `controller/AuthController.java`, `controller/AnnuaireController.java` (colonne/champ `service`) · front : `index.html` (champ « Service médical » dans *Gestion des utilisateurs*, champ `pr-service` dans la feuille de soins), `app.js` (pré-remplissage, filtrage de la file par service, bannière Espace Médecin), `api.js` (`mapBackendUser`).
 
 **Lancement** : `lancer-local.bat`, `LANCER-EN-LOCAL.md` (racine), `backend/db/local.properties.example`, `frontend/config.js`.
 
@@ -572,3 +575,22 @@ vont à tout compte qui porte le profil administrateur ; le décompte du « dern
 
 **Front** : après une connexion réussie d'un compte à mot de passe temporaire, la fenêtre « Choisissez votre mot de passe » (mot de passe temporaire déjà repris, nouveau mot de passe, confirmation) s'ouvre **avant** l'application ; « Annuler la connexion » révoque le jeton restreint.
 La liste des utilisateurs signale les comptes « Mot de passe à changer ».
+
+---
+
+## 16. Service médical du médecin
+
+*(Migration `migration_v8_service_medecin.sql`.)*
+
+**Colonne** : `Utilisateur.service NVARCHAR(50) NULL` — texte libre côté base, mais restreint côté front à la même liste fermée que le champ « Service » du formulaire *Nouvelle prise en charge* (Médecine générale, Pédiatrie, Gynécologie-Obstétrique, Cardiologie, Chirurgie générale, Dermatologie, ORL, Ophtalmologie, Radiologie, Laboratoire d'analyses, Autre). Pertinent uniquement pour un compte `medecin` : le serveur remet `service` à `null` si le rôle envoyé n'est pas `medecin`, aussi bien à la création (`POST /api/auth/register`) qu'à la modification (`PUT /api/utilisateurs/{id}`).
+
+**Propagation** : `Utilisateur.sansMotDePasse()` / `pourSession()` renvoient `service` ; `GET /api/medecins` (`AnnuaireController`) l'expose aussi (voir §5.3), c'est cette route qui alimente l'annuaire `state.medecins` du front.
+
+**Front** :
+
+* *Gestion des utilisateurs* : champ « Service médical » (même liste que `#pec-service`), affiché/masqué avec les autres champs propres au médecin (`code_praticien`, `type_praticien`) selon le rôle/profil choisi.
+* *Nouvelle prise en charge* : le service du médecin sélectionné pré-remplit automatiquement le champ « Service » de la feuille (reste modifiable) — évite qu'accueil et compte médecin se désaccordent.
+* Feuille de soins : la section « Praticien » affiche désormais aussi le service du médecin (`pr-service`, verrouillé, à côté du nom de l'établissement).
+* *Espace Médecin* : un médecin dont le compte porte un service ne voit dans sa file d'attente que les patients orientés vers ce service (`h.service === me.service`) ; une feuille **sans** service renseigné reste visible de tous (ne disparaît jamais par défaut de saisie). La portée par défaut de la file passe à « Tous les médecins [de mon service] » plutôt que « Mes patients » dès qu'un service est renseigné sur le compte — c'est le service qui route les patients, pas l'identité précise du médecin. Bannière « Bienvenue Dr X — Service : Y » en tête de l'Espace Médecin quand le compte a un service.
+
+**Sans service renseigné sur le compte** : comportement inchangé, aucun filtre (rétrocompatible avec les comptes médecin existants).

@@ -186,9 +186,10 @@ gestionPatients/
 ### Création de la base
 
 Exécute le script SQL dans `MPD/gestionpatient.sql` via SSMS (le plus simple), **puis les migrations, dans l'ordre** :
-`MPD/migration_v5_integration_front.sql`, `MPD/migration_v6_livraison_partielle_controles.sql` (livraison partielle, interrupteur des contrôles anti-fraude) et
-`MPD/migration_v7_profils_et_mdp_initial.sql` (profils multiples, mot de passe temporaire). Tous sont idempotents ; le détail est dans `docs/05-integration-front.md`
-(sections 2, 3 et 13 à 15). Sans elles, le serveur échoue à la connexion (« nom de colonne non valide »).
+`MPD/migration_v5_integration_front.sql`, `MPD/migration_v6_livraison_partielle_controles.sql` (livraison partielle, interrupteur des contrôles anti-fraude),
+`MPD/migration_v7_profils_et_mdp_initial.sql` (profils multiples, mot de passe temporaire) et `MPD/migration_v8_service_medecin.sql` (service médical du médecin).
+Tous sont idempotents ; le détail est dans `docs/05-integration-front.md`
+(sections 2, 3 et 13 à 16). Sans elles, le serveur échoue à la connexion (« nom de colonne non valide »).
 
 ### Configuration de la connexion
 

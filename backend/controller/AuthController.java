@@ -118,6 +118,7 @@ public class AuthController {
             return;
         }
         if (dao.findByUsername(u.username) != null) { Http.error(ex, 409, "Cet username est deja pris"); return; }
+        if (!"medecin".equals(u.role)) u.service = null;
 
         u.mot_de_passe = service.hash(u.mot_de_passe);
         u.doit_changer_mdp = !premier;

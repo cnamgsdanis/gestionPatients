@@ -27,6 +27,7 @@ public class Utilisateur {
     public String  structure_nom;   // Nom de la structure (rempli par le DAO)
     public String  code_praticien;  // médecins : code sur la feuille de soins
     public String  type_praticien;  // médecins : Généraliste / Spécialiste / Autre
+    public String  service;         // médecins : service médical (Cardiologie, Pédiatrie, ...)
     public boolean actif;
     public boolean doit_changer_mdp;// mot de passe temporaire : à remplacer à la première connexion
     public String  date_creation;
@@ -80,6 +81,7 @@ public class Utilisateur {
         c.structure_nom      = this.structure_nom;
         c.code_praticien     = this.code_praticien;
         c.type_praticien     = this.type_praticien;
+        c.service            = this.service;
         c.actif              = this.actif;
         c.doit_changer_mdp   = this.doit_changer_mdp;
         c.date_creation      = this.date_creation;
